@@ -2,3 +2,4 @@
 {'boxes': [[381.0, 676.0], [398.0, 689.0], [392.0, 697.0], [375.0, 684.0]], 'scores': [0.664463672039322], 'status_code': 0}
 detection_result['boxes'] = [[[int(num) for num in box] for box in inner_list] for inner_list in detection_result['boxes']]
 detection_result['boxes'] = [[[int(round(num)) for num in box] for box in inner_list] for inner_list in detection_result['boxes']]
+TypeError: 'float' object is not iterable
