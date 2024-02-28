@@ -3,3 +3,4 @@
 detection_result['boxes'] = [[[int(num) for num in box] for box in inner_list] for inner_list in detection_result['boxes']]
 detection_result['boxes'] = [[[int(round(num)) for num in box] for box in inner_list] for inner_list in detection_result['boxes']]
 TypeError: 'float' object is not iterable
+detection_result['boxes'] = [[list(map(lambda x: int(round(x)), box)) if isinstance(box, list) else int(round(box)) for box in inner_list] for inner_list in detection_result['boxes']]
