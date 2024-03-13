@@ -69,3 +69,5 @@ class UniversalSentenceEncoder(SentenceEncoder):
     def __setstate__(self, state):
         self.__dict__ = state
         self.model = None
+将这种坐标格式：[[938.0, 691.0], [1205.0, 691.0], [1205.0, 727.0], [938.0, 727.0]]
+转换为这种：[[1865, 1366], [2391, 1439]]
