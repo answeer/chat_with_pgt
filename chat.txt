@@ -133,3 +133,24 @@ def get_eval_results(task, pred_results, gt_results, metrics):
             result = get_results(converted_gt_result, converted_pred_result, metric)
             results[metric].append(result)
     return results
+def get_results(gt_result, pred_result, metric_id):
+header = {"Authorization": TOKEN, "Content-Type": "application/json", "Userid": "1234"}
+payload = {
+"feedback": gt_result,
+"prediction": pred_result,
+"id": metric_id,
+"threshold": 0.5,
+"job_id": 1234
+}
+response = requests.post(BASE_URL, data=json.dumps(payload), headers=header)
+if response.status_code == 200:
+data = response.json()
+if isinstance(data['value'],str):
+data['value'] = 0.0
+return data['value']
+else:
+logger.error(f'Failed to calculate metrics of {metric_id} for this result')
+return 0
+
+reason:
+'Internal Server Error'
