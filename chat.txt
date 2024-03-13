@@ -71,3 +71,4 @@ class UniversalSentenceEncoder(SentenceEncoder):
         self.model = None
 将这种坐标格式：[[938.0, 691.0], [1205.0, 691.0], [1205.0, 727.0], [938.0, 727.0]]
 转换为这种：[[1865, 1366], [2391, 1439]]
+converted_coordinates = [[int(min(p[0], q[0])), int(min(p[1], q[1])), int(max(p[0], q[0])), int(max(p[1], q[1]))] for p, q in zip(coordinates[::2], coordinates[1::2])]
