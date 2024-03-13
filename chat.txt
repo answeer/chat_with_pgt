@@ -154,3 +154,30 @@ return 0
 
 reason:
 'Internal Server Error'
+
+import requests
+import json
+from retrying import retry
+
+# Define retry decorator with exponential backoff
+@retry(wait_exponential_multiplier=1000, wait_exponential_max=10000, stop_max_attempt_number=3)
+def get_results(gt_result, pred_result, metric_id):
+    header = {"Authorization": TOKEN, "Content-Type": "application/json", "Userid": "1234"}
+    payload = {
+        "feedback": gt_result,
+        "prediction": pred_result,
+        "id": metric_id,
+        "threshold": 0.5,
+        "job_id": 1234
+    }
+
+    response = requests.post(BASE_URL, data=json.dumps(payload), headers=header)
+    
+    if response.status_code == 200:
+        data = response.json()
+        if isinstance(data['value'], str):
+            data['value'] = 0.0
+        return data['value']
+    else:
+        logger.error(f'Failed to calculate metrics of {metric_id} for this result')
+        response.raise_for_status()  # Raise an exception to trigger retry
