@@ -205,3 +205,59 @@ def get_results(gt_result, pred_result, metric_id):
     except requests.exceptions.HTTPError as err:
         logger.error(err)
         return 0.0
+
+import requests
+import json
+from requests.adapters import HTTPAdapter
+from requests.packages.urllib3.util.retry import Retry
+import logging
+
+# 初始化日志记录器
+logging.basicConfig(level=logging.ERROR)
+logger = logging.getLogger(__name__)
+
+# 设定重试策略
+retry_strategy = Retry(
+    total=3,
+    backoff_factor=1,
+    status_forcelist=[500, 502, 503, 504],
+    method_whitelist=["POST"]
+)
+adapter = HTTPAdapter(max_retries=retry_strategy)
+http = requests.Session()
+http.mount("https://", adapter)
+http.mount("http://", adapter)
+
+# 定义常量
+BASE_URL = "https://example.com/api"
+TOKEN = "your_token_here"
+
+def get_results(gt_result, pred_result, metric_id):
+    header = {"Authorization": TOKEN, "Content-Type": "application/json", "Userid": "1234"}
+    payload = {
+        "feedback": gt_result,
+        "prediction": pred_result,
+        "id": metric_id,
+        "threshold": 0.5,
+        "job_id": 1234
+    }
+    
+    try:
+        response = http.post(BASE_URL, data=json.dumps(payload), headers=header)
+        response.raise_for_status()  # 如果请求失败，会引发适当的异常
+        data = response.json()
+        if isinstance(data['value'], str):
+            data['value'] = 0.0
+        return data['value']
+    
+    except requests.exceptions.HTTPError as err:
+        logger.error(f"HTTP error occurred: {err}")
+        return 0.0
+    
+    except Exception as e:
+        logger.error(f"An unexpected error occurred: {e}")
+        return 0.0
+
+# 使用示例
+result = get_results(gt_result, pred_result, metric_id)
+print(result)
