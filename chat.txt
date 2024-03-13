@@ -105,3 +105,31 @@ for pred_result in pred_results:
 return results
 
 在选择convert函数的时，不想根据task选择，而是根据metrics，其中"average_iou", "image_map", "image_recall", "image_precision", "image_f1_score"对应convert_data_format_det，"cum_cer", "cum_wer"对应convert_data_format_rec，"multi_class_precision","multi_class_recall","multi_class_f1_score","multi_class_accuracy"对应convert_data_format_cls，帮我修改代码
+METRIC_TO_CONVERT_FUNC = {
+    "average_iou": convert_data_format_det,
+    "image_map": convert_data_format_det,
+    "image_recall": convert_data_format_det,
+    "image_precision": convert_data_format_det,
+    "image_f1_score": convert_data_format_det,
+    "cum_cer": convert_data_format_rec,
+    "cum_wer": convert_data_format_rec,
+    "multi_class_precision": convert_data_format_cls,
+    "multi_class_recall": convert_data_format_cls,
+    "multi_class_f1_score": convert_data_format_cls,
+    "multi_class_accuracy": convert_data_format_cls,
+}
+
+def get_eval_results(task, pred_results, gt_results, metrics):
+    results = {metric: [] for metric in metrics}
+
+    # Convert gt_results only once
+    convert_func = METRIC_TO_CONVERT_FUNC[metrics[0]]
+    converted_gt_result = convert_func(gt_results)
+
+    for pred_result in pred_results:
+        converted_pred_result = convert_func(pred_result)
+        for metric in metrics:
+            convert_func = METRIC_TO_CONVERT_FUNC[metric]
+            result = get_results(converted_gt_result, converted_pred_result, metric)
+            results[metric].append(result)
+    return results
