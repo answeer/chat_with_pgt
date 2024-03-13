@@ -75,3 +75,33 @@ converted_coordinates = [[int(min(p[0], q[0])), int(min(p[1], q[1])), int(max(p[
 [[[938.0, 691.0], [1205.0, 691.0], [1205.0, 727.0], [938.0, 727.0]], [[394.0, 682.0], [611.0, 682.0], [611.0, 719.0], [394.0, 719.0]], [[396.0, 617.0], [582.0, 617.0], [582.0, 659.0], [396.0, 659.0]], [[386.0, 551.0], [738.0, 554.0], [738.0, 592.0], [386.0, 589.0]], [[58.0, 552.0], [111.0, 548.0], [115.0, 593.0], [61.0, 598.0]], [[393.0, 487.0], [540.0, 498.0], [537.0, 541.0], [390.0, 529.0]], [[831.0, 451.0], [925.0, 446.0], [928.0, 490.0], [834.0, 495.0]], [[389.0, 438.0], [669.0, 441.0], [669.0, 482.0], [388.0, 479.0]], [[384.0, 390.0], [723.0, 390.0], [723.0, 426.0], [384.0, 426.0]], [[383.0, 293.0], [767.0, 297.0], [767.0, 335.0], [383.0, 330.0]], [[145.0, 190.0], [479.0, 193.0], [478.0, 239.0], [145.0, 236.0]], [[140.0, 136.0], [325.0, 136.0], [325.0, 187.0], [140.0, 187.0]]]
 [[[1865, 1366], [2391, 1439]], [[781, 1352], [1216, 1432]], [[234, 1251], [262, 1282]], [[789, 1226], [1157, 1309]], [[768, 1103], [1466, 1175]], [[127, 1095], [228, 1189]], [[777, 969], [1068, 1072]], [[777, 881], [1325, 953]], [[762, 776], [1437, 848]], [[756, 582], [1527, 664]], [[293, 387], [944, 468]], [[280, 274], [643, 369]]]
  [[[min(p[0] for p in c), min(p[1] for p in c), max(p[0] for p in c), max(p[1] for p in c)] for c in group] for group in coordinates]
+TASK_TO_METRICS = {
+"text_xtract": ["average_iou", "image_map", "image_recall", "image_precision", "image_f1_score", "cum_cer", "cum_wer"],
+"detection": ["average_iou", "image_map", "image_recall", "image_precision", "image_f1_score"],
+"recognition": ["cum_cer", "cum_wer"],
+"classification": ["multi_class_precision","multi_class_recall","multi_class_f1_score","multi_class_accuracy"],
+}
+
+TASK_TO_CONVERT_FUNC = {
+"text_xtract": convert_data_format_det,
+"detection": convert_data_format_det,
+"recognition": convert_data_format_rec,
+"classification": convert_data_format_cls,
+}
+
+def get_eval_results(task, pred_results, gt_results):
+metrics = TASK_TO_METRICS[task]
+convert_func = TASK_TO_CONVERT_FUNC[task]
+results = {metric: [] for metric in metrics}
+
+# Convert gt_results only once
+converted_gt_result = convert_func(gt_results)
+
+for pred_result in pred_results:
+    converted_pred_result = convert_func(pred_result)
+    for metric_id in metrics:
+        result = get_results(converted_gt_result, converted_pred_result, metric_id)
+        results[metric_id].append(result)
+return results
+
+在选择convert函数的时，不想根据task选择，而是根据metrics，其中"average_iou", "image_map", "image_recall", "image_precision", "image_f1_score"对应convert_data_format_det，"cum_cer", "cum_wer"对应convert_data_format_rec，"multi_class_precision","multi_class_recall","multi_class_f1_score","multi_class_accuracy"对应convert_data_format_cls，帮我修改代码
