@@ -496,3 +496,26 @@ class NERModelWrapper(ModelWrapper):
             tokenizer,
             postprocess_func=postprocess_ner_output,
             name=model_name)
+from flask import Flask, request, jsonify
+from transformers import AutoTokenizer, AutoModelForTokenClassification
+
+app = Flask(__name__)
+
+class NERModelWrapper:
+    # 添加你的 NERModelWrapper 类的代码
+    # ...
+
+model_wrapper = NERModelWrapper(
+    # 添加你的模型、令牌器和后处理函数
+    # ...
+)
+
+@app.route("/ner", methods=["POST"])
+def predict_ner():
+    text = request.json["text"]
+    model_wrapper.move_model_to_device()
+    output = model_wrapper(text)
+    return jsonify({"ner_tags": output})
+
+if __name__ == "__main__":
+    app.run(host="127.0.0.1", port=8000)
