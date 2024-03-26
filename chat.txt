@@ -1,131 +1,3 @@
-ermissionError: [WinError 32] The process cannot access the file because it is being used by another process: 'C:/Users/1657820/.cache/huggingface/datasets/json/default-b4deb088dabddd70/0.0.0/ab573428e7a11a7e23eebd41a2a71665ac3789ce311cbad7049572034a9bda05.incomplete\\json-train-00000-00000-of-NNNNN.arrow'
-[[8.938632011413574, -2.9970667362213135, -1.8055795431137085, -2.2802176475524902, -1.4145159721374512, -1.4072095155715942, -0.8801094889640808, -1.5305393934249878, 1.6506060361862183], [-0.2527661621570587, -2.1962473392486572, -2.4040989875793457, -2.0498294830322266, 0.13107672333717346, -2.1757054328918457, 0.34667882323265076, -2.0347440242767334, 7.829591274261475], [1.1752033233642578, -2.09086012840271, -2.108443021774292, -2.712803840637207, -0.2458740919828415, -1.5400837659835815, 1.0535638332366943, -2.54783296585083, 5.4141764640808105], [-0.16632390022277832, -2.2124757766723633, -2.144209146499634, -2.582825183868408, 0.5167609453201294, -2.244075059890747, 0.3716689944267273, -1.9556632041931152, 6.924350261688232], [0.057721324265003204, -2.3824312686920166, -1.9498738050460815, -2.384097099304199, -0.11418114602565765, -2.163801908493042, 1.0127061605453491, -1.8180506229400635, 6.776247978210449], [11.376226425170898, -2.2307627201080322, -1.1244755983352661, -2.6254894733428955, -1.3747072219848633, -1.8966319561004639, -0.1534753441810608, -1.8653111457824707, -0.03654588386416435], [-0.1423606276512146, -2.066579580307007, -0.9025039076805115, -2.0670487880706787, -1.2256622314453125, -2.0319736003875732, -1.076456069946289, -1.3727266788482666, 9.25314998626709], [-0.5193701386451721, -1.7798103094100952, -1.165885329246521, -2.119475841522217, -1.2007923126220703, -2.1517274379730225, -0.9542227983474731, -1.7798409461975098, 8.963491439819336], [-1.23519766330719, -2.0108487606048584, -1.2656809091567993, -1.9549256563186646, -1.238282322883606, -1.8181167840957642, -1.1835075616836548, -1.2725169658660889, 9.558713912963867], [11.820870399475098, -2.124523401260376, -0.8080593943595886, -2.5659847259521484, -1.2340409755706787, -1.9231401681900024, -0.2149590700864792, -1.8814265727996826, -0.5539520382881165], [11.556585311889648, -2.151397943496704, -0.9346510767936707, -2.550917625427246, -1.1034119129180908, -1.90390145778656, -0.2142125517129898, -1.9102320671081543, -0.5018600821495056], [11.731802940368652, -2.0557801723480225, -0.7922492623329163, -2.3530454635620117, -1.2689663171768188, -1.9908705949783325, -0.3979688286781311, -1.7195520401000977, -0.5771030187606812], [11.556242942810059, -2.094060182571411, -0.9888619184494019, -2.5078186988830566, -1.1050866842269897, -2.0060904026031494, -0.3487417995929718, -1.914268970489502, -0.47873419523239136], [11.741302490234375, -2.054029703140259, -0.876503586769104, -2.4415202140808105, -1.324271321296692, -1.9125174283981323, -0.45288264751434326, -1.8504388332366943, -0.6471089720726013], [8.93863296508789, -2.997068166732788, -1.805579662322998, -2.280219078063965, -1.4145150184631348, -1.4072102308273315, -0.8801084756851196, -1.5305404663085938, 1.65060555934906]]
-[    [8.94, -3.00, -1.81, -2.28, -1.41, -1.41, -0.88, -1.53, 1.65],
-    [-0.25, -2.20, -2.40, -2.05, 0.13, -2.18, 0.35, -2.03, 7.83],
-    [1.18, -2.09, -2.11, -2.71, -0.25, -1.54, 1.05, -2.55, 5.41],
-    [-0.17, -2.21, -2.14, -2.58, 0.52, -2.24, 0.37, -1.96, 6.92],
-    [0.06, -2.38, -1.95, -2.38, -0.11, -2.16, 1.01, -1.82, 6.78],
-    [11.38, -2.23, -1.12, -2.63, -1.37, -1.90, -0.15, -1.87, -0.04],
-    [-0.14, -2.07, -0.90, -2.07, -1.23, -2.03, -1.08, -1.37, 9.25],
-    [-0.52, -1.78, -1.17, -2.12, -1.20, -2.15, -0.95, -1.78, 8.96],
-    [-1.24, -2.01, -1.27, -1.95, -1.24, -1.82, -1.18, -1.27, 9.56],
-    [11.82, -2.12, -0.81, -2.57, -1.23, -1.92, -0.21, -1.88, -0.55],
-    [11.56, -2.15, -0.93, -2.55, -1.10, -1.90, -0.21, -1.91, -0.50],
-    [11.73, -2.06, -0.79, -2.35, -1.27, -1.99, -0.40, -1.72, -0.58],
-    [11.56, -2.09, -0.99, -2.51, -1.11, -2.01, -0.35, -1.91, -0.48],
-    [11.74, -2.05, -0.88, -2.44, -1.32, -1.91, -0.45, -1.85, -0.65],
-    [8.94, -3.00, -1.81, -2.28, -1.41, -1.41, -0.88, -1.53, 1.65]
-]
-
-import json
-import pytz
-import random
-import pandas as pd
-from faker import Faker
-from datetime import datetime
-from synthetic_data.logger.logger import logger
-
-from synthetic_data.pii_detection.from_data import get_table_info,get_faker_functions
- 
-class DataSynthesizerWithoutModel():
-
-    def __init__(self, pii_file="PII_BOW.xlsx"):
-        self.pii_file=pii_file
-        
-    def generate_data(self,table_info, faker_functions, matched_words_dict, num_rows):
-        """
-        Function to generate synthetic data using the faker library.
-
-        Args:
-            table_info (DataFrame): DataFrame containing table information.
-            faker_functions (dict): A dictionary of faker functions.
-            matched_words_dict (dict): A dictionary of matched words.
-            num_rows (int): The number of rows of data to generate.
-
-        Returns:
-            DataFrame: A DataFrame containing the generated synthetic data.
-        """
-        # Initialize a Faker instance
-        fake = Faker()
-        data = []
-
-        # Define a dictionary to map data types to faker functions
-        faker_map = {
-            'character varying': lambda: fake.pystr(min_chars=1,max_chars=max_length),
-            'text': lambda: fake.text(max_nb_chars=max_length),
-            'timestamp without time zone': lambda: fake.date_time_between(start_date='-10y', end_date='now').strftime('%Y-%m-%d %H:%M:%S'),
-            'timestamp with time zone': lambda: fake.date_time_between(start_date='-10y', end_date='now', tzinfo=pytz.timezone(random.choice(pytz.all_timezones))).strftime('%Y-%m-%d %H:%M:%S %z'),
-            'date': lambda: fake.date(pattern='%d/%m/%Y'),
-            'float64 double precision': lambda: fake.pyfloat(left_digits=2,right_digits=2, positive=True),
-            'bool boolean': lambda: fake.boolean(),
-            'numeric number': lambda: fake.random_number(),
-            'json dictionary': lambda: json.dumps({"error": {"code": random.choice([400, 401, 403, 404, 500, 502, 503]), "message": Faker().sentence()}}),
-            'integer int': lambda: fake.random_int(min=0, max=1000),
-            'BLOB': lambda: bytes(fake.pystr(min_chars=1024, max_chars=1024), 'utf-8'),
-            'CLOB': lambda: fake.text(max_nb_chars=1024),
-            'smallint': lambda: fake.random_int(min=-32768, max=32767)
-        }
-
-        type_map = {
-            'character': str,
-            'text': str,
-            'timestamp': str,  # Assuming that timestamps are represented as strings
-            'date': str,  # Assuming that dates are represented as strings
-            'float': float,
-            'bool': bool,
-            'numeric': int,  # Assuming that numeric values are represented as integers
-            'json': str,  # Assuming that json values are represented as strings
-            'integer': int,
-            'int': int,
-            'BLOB': bytes,
-            'CLOB': str,
-            'double precision':float,
-            'smallint':int
-        }
-
-        for _ in range(num_rows):
-            row = {}
-            for row_new in table_info:
-                column = row_new['column_name']
-                try:
-                    max_length = int(row_new['columnsize'])
-                except Exception as e:
-                    # print('There is no columnsize for this column, set to default 100')
-                    max_length = 100
-                best_match = matched_words_dict.get(column, ['N/A', 'N/A', 0, 'N/A'])
-                faker_function = faker_functions.get(best_match[1], 'N/A')
-
-                # Generate synthetic value based on the data type of the column and the faker function
-                if faker_function != 'N/A':
-                    value = eval(faker_function)
-                    # Check the generated datatype
-                    expected_type = type_map.get(row_new['data_type'], None)
-                    if expected_type is not None and not isinstance(value, expected_type):
-                        value = next((faker_map[key]() for key in faker_map if row_new['data_type'] in key), "Unknown datatype")
-                # Logic to generate synthetic value based on data type
-                # (omitted for brevity)
-                else:
-                    try:
-                        value = next((faker_map[key]() for key in faker_map if row_new['data_type'] in key), "Unknown datatype")
-                    except Exception as e:
-                        print(e)
-                        value = ""
-                # Ensure the generated data does not exceed max_length
-                if isinstance(value, str) and len(value) > max_length:
-                    value = value[:max_length]
-                row[column] = value
-            data.append(row)
-        data_df = pd.DataFrame(data)
-        return data_df
-    
-    def __call__(self,column_info,num_rows):
-
-        table_info,matched_words_dict = get_table_info(column_info,self.pii_file)
-        # print(matched_words_dict)
-        faker_functions = get_faker_functions(self.pii_file) 
-        synthetic_data = self.generate_data(table_info,faker_functions, matched_words_dict, num_rows)
-        return synthetic_data
-
 import json
 import pytz
 import random
@@ -138,12 +10,31 @@ from synthetic_data.pii_detection.from_data import get_table_info, get_faker_fun
 
 
 class DataSynthesizerWithoutModel:
+    """
+    Class to generate synthetic data without using a pre-trained model.
+    """
+
     def __init__(self, pii_file="PII_BOW.xlsx"):
+        """
+        Initialize the DataSynthesizerWithoutModel instance.
+
+        Args:
+            pii_file (str): Path to the PII (Personally Identifiable Information) file.
+        """
         self.pii_file = pii_file
 
     def generate_data(self, table_info, faker_functions, matched_words_dict, num_rows):
         """
         Generate synthetic data based on table information, faker functions, and matched words dictionary.
+
+        Args:
+            table_info (DataFrame): DataFrame containing table information.
+            faker_functions (dict): A dictionary of faker functions.
+            matched_words_dict (dict): A dictionary of matched words.
+            num_rows (int): The number of rows of data to generate.
+
+        Returns:
+            DataFrame: A DataFrame containing the generated synthetic data.
         """
         fake = Faker()
         data = []
@@ -172,6 +63,14 @@ class DataSynthesizerWithoutModel:
     def generate_value(self, faker_function, data_type, max_length):
         """
         Generate a synthetic value based on the faker function, data type, and maximum length.
+
+        Args:
+            faker_function (callable): The faker function to use for generating the value.
+            data_type (str): The data type of the column.
+            max_length (int): The maximum length allowed for the value.
+
+        Returns:
+            Any: The generated synthetic value.
         """
         fake = Faker()
         if data_type == 'timestamp without time zone':
@@ -188,6 +87,12 @@ class DataSynthesizerWithoutModel:
     def generate_default_value(self, data_type):
         """
         Generate a default synthetic value based on the data type.
+
+        Args:
+            data_type (str): The data type of the column.
+
+        Returns:
+            Any: The generated synthetic value.
         """
         fake = Faker()
         if 'int' in data_type:
@@ -206,8 +111,19 @@ class DataSynthesizerWithoutModel:
             return ""
 
     def __call__(self, column_info, num_rows):
+        """
+        Generate synthetic data.
+
+        Args:
+            column_info (DataFrame): DataFrame containing column information.
+            num_rows (int): The number of rows of data to generate.
+
+        Returns:
+            DataFrame: A DataFrame containing the generated synthetic data.
+        """
         table_info, matched_words_dict = get_table_info(column_info, self.pii_file)
         faker_functions = get_faker_functions(self.pii_file)
         synthetic_data = self.generate_data(table_info, faker_functions, matched_words_dict, num_rows)
         return synthetic_data
+
 
