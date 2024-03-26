@@ -16,3 +16,112 @@ ermissionError: [WinError 32] The process cannot access the file because it is b
     [11.74, -2.05, -0.88, -2.44, -1.32, -1.91, -0.45, -1.85, -0.65],
     [8.94, -3.00, -1.81, -2.28, -1.41, -1.41, -0.88, -1.53, 1.65]
 ]
+
+import json
+import pytz
+import random
+import pandas as pd
+from faker import Faker
+from datetime import datetime
+from synthetic_data.logger.logger import logger
+
+from synthetic_data.pii_detection.from_data import get_table_info,get_faker_functions
+ 
+class DataSynthesizerWithoutModel():
+
+    def __init__(self, pii_file="PII_BOW.xlsx"):
+        self.pii_file=pii_file
+        
+    def generate_data(self,table_info, faker_functions, matched_words_dict, num_rows):
+        """
+        Function to generate synthetic data using the faker library.
+
+        Args:
+            table_info (DataFrame): DataFrame containing table information.
+            faker_functions (dict): A dictionary of faker functions.
+            matched_words_dict (dict): A dictionary of matched words.
+            num_rows (int): The number of rows of data to generate.
+
+        Returns:
+            DataFrame: A DataFrame containing the generated synthetic data.
+        """
+        # Initialize a Faker instance
+        fake = Faker()
+        data = []
+
+        # Define a dictionary to map data types to faker functions
+        faker_map = {
+            'character varying': lambda: fake.pystr(min_chars=1,max_chars=max_length),
+            'text': lambda: fake.text(max_nb_chars=max_length),
+            'timestamp without time zone': lambda: fake.date_time_between(start_date='-10y', end_date='now').strftime('%Y-%m-%d %H:%M:%S'),
+            'timestamp with time zone': lambda: fake.date_time_between(start_date='-10y', end_date='now', tzinfo=pytz.timezone(random.choice(pytz.all_timezones))).strftime('%Y-%m-%d %H:%M:%S %z'),
+            'date': lambda: fake.date(pattern='%d/%m/%Y'),
+            'float64 double precision': lambda: fake.pyfloat(left_digits=2,right_digits=2, positive=True),
+            'bool boolean': lambda: fake.boolean(),
+            'numeric number': lambda: fake.random_number(),
+            'json dictionary': lambda: json.dumps({"error": {"code": random.choice([400, 401, 403, 404, 500, 502, 503]), "message": Faker().sentence()}}),
+            'integer int': lambda: fake.random_int(min=0, max=1000),
+            'BLOB': lambda: bytes(fake.pystr(min_chars=1024, max_chars=1024), 'utf-8'),
+            'CLOB': lambda: fake.text(max_nb_chars=1024),
+            'smallint': lambda: fake.random_int(min=-32768, max=32767)
+        }
+
+        type_map = {
+            'character': str,
+            'text': str,
+            'timestamp': str,  # Assuming that timestamps are represented as strings
+            'date': str,  # Assuming that dates are represented as strings
+            'float': float,
+            'bool': bool,
+            'numeric': int,  # Assuming that numeric values are represented as integers
+            'json': str,  # Assuming that json values are represented as strings
+            'integer': int,
+            'int': int,
+            'BLOB': bytes,
+            'CLOB': str,
+            'double precision':float,
+            'smallint':int
+        }
+
+        for _ in range(num_rows):
+            row = {}
+            for row_new in table_info:
+                column = row_new['column_name']
+                try:
+                    max_length = int(row_new['columnsize'])
+                except Exception as e:
+                    # print('There is no columnsize for this column, set to default 100')
+                    max_length = 100
+                best_match = matched_words_dict.get(column, ['N/A', 'N/A', 0, 'N/A'])
+                faker_function = faker_functions.get(best_match[1], 'N/A')
+
+                # Generate synthetic value based on the data type of the column and the faker function
+                if faker_function != 'N/A':
+                    value = eval(faker_function)
+                    # Check the generated datatype
+                    expected_type = type_map.get(row_new['data_type'], None)
+                    if expected_type is not None and not isinstance(value, expected_type):
+                        value = next((faker_map[key]() for key in faker_map if row_new['data_type'] in key), "Unknown datatype")
+                # Logic to generate synthetic value based on data type
+                # (omitted for brevity)
+                else:
+                    try:
+                        value = next((faker_map[key]() for key in faker_map if row_new['data_type'] in key), "Unknown datatype")
+                    except Exception as e:
+                        print(e)
+                        value = ""
+                # Ensure the generated data does not exceed max_length
+                if isinstance(value, str) and len(value) > max_length:
+                    value = value[:max_length]
+                row[column] = value
+            data.append(row)
+        data_df = pd.DataFrame(data)
+        return data_df
+    
+    def __call__(self,column_info,num_rows):
+
+        table_info,matched_words_dict = get_table_info(column_info,self.pii_file)
+        # print(matched_words_dict)
+        faker_functions = get_faker_functions(self.pii_file) 
+        synthetic_data = self.generate_data(table_info,faker_functions, matched_words_dict, num_rows)
+        return synthetic_data
