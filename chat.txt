@@ -1,3 +1,33 @@
+import fitz
+
+def get_used_fonts(doc):
+    used_fonts = set()
+    for page in doc:
+        font_info = page.get_font_info()
+        for font in font_info:
+            used_fonts.add(font["name"])
+    return used_fonts
+
+def subset_fonts(doc, used_fonts):
+    for font in doc.fonts:
+        if font not in used_fonts:
+            continue
+        doc.subset_fonts([font])
+
+# 打开 PDF 文档
+doc = fitz.open("your_pdf_file.pdf")
+
+# 获取文档中使用的字体信息
+used_fonts = get_used_fonts(doc)
+
+# 选择性子集化字体
+subset_fonts(doc, used_fonts)
+
+# 保存子集化后的文档
+doc.save("subsetted_pdf_file.pdf")
+
+# 关闭文档
+doc.close()
 
 import fitz
 import os
