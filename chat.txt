@@ -8,6 +8,41 @@ from django.conf import settings
 from ml.src.parsable_pdf.match_extraction import MatchExtraction
 # from ml.src.text_overlay.footer_audit import AuditFooter
 
+def compress_images(doc, max_resolution=150):
+    for page in doc:
+        images = page.get_images(full=True)
+        for img in images:
+            xref = img[0]
+            base_image = doc.extract_image(xref)
+            image_bytes = base_image["image"]
+
+            # 使用Pillow压缩图像
+            from PIL import Image
+            import io
+
+            image = Image.open(io.BytesIO(image_bytes))
+            image = image.convert("RGB")
+            image.thumbnail((max_resolution, max_resolution), Image.ANTIALIAS)
+
+            img_byte_arr = io.BytesIO()
+            image.save(img_byte_arr, format="JPEG", quality=85)
+
+            # 更新PDF中的图像
+            img_byte_arr = img_byte_arr.getvalue()
+            doc.update_image(xref, stream=img_byte_arr)
+
+# 压缩图像
+compress_images(doc)
+def remove_unused_objects_and_metadata(doc):
+    # 移除未使用的对象
+    doc.clean()
+
+    # 移除元数据
+    doc.set_metadata({})
+
+# 移除未使用的对象和元数据
+remove_unused_objects_and_metadata(doc)
+
 def fit_text_inbox(page, rect, origin, text, size, color, font):
         """
         Fine the optimal size of the text so that it fits in the bounding box
