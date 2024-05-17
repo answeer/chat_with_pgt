@@ -1,7 +1,353 @@
-red_herring = 'DEADBEEF'
-id = 'YW1pYWx3YXlzZ2VuZXJhdGluZ3BheWxvYWRzd2hlbmltaHVuZ3J5b3JhbWlhbHdheXNodW5ncnk'
-base64_secret = 'c2VjcmV0IG1lc3NhZ2Ugc28geW91J2xsIG5ldmVyIGd1ZXNzIG15IHBhc3N3b3Jk'
-hex_secret = '8b1118b376c313ed420e5133ba91307817ed52c2'
-basic_auth = 'http://username:whywouldyouusehttpforpasswords@example.com'
-aws_access_key = 'AKIAIOSFODNN7EXAMPLE'
-aws_secret_access_key = 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY'
+
+import fitz
+import os
+import pandas as pd
+import json
+from os.path import join as path_join
+from django.conf import settings
+from ml.src.parsable_pdf.match_extraction import MatchExtraction
+# from ml.src.text_overlay.footer_audit import AuditFooter
+
+def fit_text_inbox(page, rect, origin, text, size, color, font):
+        """
+        Fine the optimal size of the text so that it fits in the bounding box
+
+        :param page: pdf document page
+        :type page: fitz.page
+        :param rect: bounding box coordinates
+        :type rect: tuple
+        :param text: text for which the optimal font size has to be calculated
+        :type text: string
+        :param size: font size to start the iteration
+        :type size: int
+        :param color: colour of the font in RGB format
+        :type color: tuple
+        :param font: font name
+        :type font: string
+        :return: return code, for fit it should be less than 0
+        :rtype: int
+        """
+        # size = rect.width / 1.3
+
+        # rc = page.insert_textbox(rect, f"{text}", fontname=font, fontsize=size, color=color)
+        rc = page.insert_text(origin, f"{text}", fontname=font, fontsize=size, color=color, rotate=page.rotation)
+        # Iteratively select font size untill fit
+        while rc < 0:
+            reduce_fact = size * 0.05
+            size = size - reduce_fact
+
+            # rc = page.insert_textbox(rect, f"{text}", fontname=font, fontsize=size, color=color)
+            rc = page.insert_text(origin, f"{text}", fontname=font, fontsize=size, color=color, rotate=page.rotation)
+
+        return rc
+
+def load_fonts(page):
+        """
+        The function `load_fonts` loads fonts from a specified directory and inserts them into a page
+        object while creating a mapping of font names to font identifiers.
+
+        :param page: The `page` parameter is an object representing a page in a document where fonts need
+        to be loaded
+        :return: Returns the updated `page` object with inserted fonts and a `font_mapping` dictionary that
+        maps font file names to their corresponding font names in the page.
+        """
+
+        font_mapping = {}
+
+        font_path = r"C:\Users\1657820\Desktop\parsing_pdf\51433-swoosh-image-synthesizer\specs\fonts\pdf_fonts"
+
+        for ix, each_font in enumerate(os.listdir(font_path)):
+            font_file_path = path_join(font_path, each_font)
+
+            font = "EXT_" + str(ix)
+            page.insert_font(fontname=font, fontfile=font_file_path)
+
+            font_mapping[each_font.split(".")[0]] = font
+
+        return page, font_mapping
+
+def convert_color(color):
+        """
+        convert the colors from numnerc format to RBG format
+
+        :param color: colour in numeric format
+        :type color: int
+        :return: RGB format colours
+        :rtype: typle
+        """
+
+        color = hex(color).replace("0x", "")
+        color = "0" * (6 - len(color)) + str(color)
+        color = tuple(int(color[i : i + 2], 16) for i in (0, 2, 4))
+        color = tuple(c / 255 for c in color)
+
+        return color
+
+
+def read_data(path):
+    """
+    Read excel files
+
+    :param path: path for the textXtract excel file
+    :type path: str
+    :return: Extraction table
+    :rtype: pandas dataframe
+    """
+
+    extn = path.split(".")[-1].lower()
+    if extn == "csv":
+        data = pd.read_csv(path)
+    else:
+        data = pd.read_excel(path)
+
+    data = data.loc[:, ~data.columns.str.contains('^Unnamed')]
+
+    return data
+
+def scrape(page):
+        """
+        scrape the text informations form the parsable PDF
+
+        :param page: FITZ page object
+        :type page: fitz.page
+        :return: scraped dataframe
+        :rtype: dataframe
+        """
+
+        scraped_df = pd.DataFrame(
+            columns=[
+                "size",
+                "flags",
+                "font",
+                "color",
+                "ascender",
+                "descender",
+                "text",
+                "origin",
+                "bbox",
+                "number",
+            ]
+        )
+
+        # text_dict = page.get_text("dict")
+        text_dict = page.get_displaylist().get_textpage().extractDICT()
+        blocks = text_dict["blocks"]
+
+        for block in blocks:
+            number = block["number"]
+            if "lines" in block.keys():
+                spans = block["lines"]
+                for span in spans:
+                    scraped_data = span["spans"]
+                    try: # pragma: no cover
+                        scraped_data[0]["number"] = number # pragma: no cover
+                    except: # pragma: no cover
+                        continue # pragma: no cover
+                    scraped_data = pd.DataFrame(scraped_data)
+                    scraped_df = pd.concat([scraped_df, scraped_data])
+        return scraped_df
+
+image_path = r"C:\Users\1657820\Desktop\parsing_pdf\51433-swoosh-image-synthesizer\tests\test_files\ts.png_page1_2_skew_corrected.png"
+extraction_excel_path =r"C:\Users\1657820\Desktop\parsing_pdf\51433-swoosh-image-synthesizer\tests\test_files\ts.png_page1_extracted_data.csv"
+json_path = r"./tests/test_files/ts.png_page1_feature_extraction.xlsx.json"
+texture_path = r"./tests/test_files/ts.png_page1.png"
+font_face = r"./tests/test_files/comic.ttf"
+invalid_image_path = r"./tests/test_files/invoice7_page_0.png_page1_2_skew_corrected_1.pngs"
+image_landscape_path = r"./tests/test_files/landscape.png"
+extraction_csv_path = (
+    r"./tests/test_files/ts.png_page1_extracted_data.csv"
+)
+pii_extraction_data = r"./tests/test_files/ts.png_page1_PII_extraction.csv"
+op_path = "./output"
+default_font = "arial.ttf"
+in_pdf_path = "Parsable_PDF_1pg_test.pdf"
+save_path = r"C:\Users\1657820\Desktop\parsing_pdf\51433-swoosh-image-synthesizer\save_results"
+xtraction_excel_folder = r"C:\Users\1657820\Desktop\parsing_pdf\51433-swoosh-image-synthesizer\tests\test_files\seige_wrapper\parsable"
+with open(r"C:\Users\1657820\Desktop\parsing_pdf\51433-swoosh-image-synthesizer\swoosh-image-synthesizer.json") as c:  # for local test
+    config = json.load(c)
+config["pipeline_config"]["input"] = {}
+config["pipeline_config"]["output"] = {}
+config["pipeline_config"]["input"]["doc_name"] = "ts.png"
+config["pipeline_config"]["input"]["save_path"] = op_path
+config["pipeline_config"]["input"]["source_channel"] = "o"
+config["pipeline_config"]["input"]["generation"] = "g" + str(1)
+
+
+
+
+generation = config["pipeline_config"]["input"]["generation"]
+# audit_footer_obj = AuditFooter(config)
+
+GRAY_COLOR = (0.45, 0.45, 0.45)
+
+file_name = os.path.split(in_pdf_path)[-1]
+match_ext_obj = MatchExtraction()
+
+doc = fitz.open(in_pdf_path)
+
+for page_idx, page in enumerate(doc):
+    if page_idx != 0:
+        continue
+
+    # _ = self.export_font(doc, page)
+
+    pdf_path = path_join(save_path, file_name + "_page{}_synth.pdf".format(page_idx))
+
+    empty_doc = fitz.open()
+
+    # Get Page Data
+    current_rot = page.rotation
+    if current_rot == 90:
+        page.setRotation(360)  # for Redaction
+        scraped_df = scrape(page)
+        norm_bbox = scraped_df["bbox"]
+        norm_origin = scraped_df["origin"]
+        scraped_df.to_excel(
+            path_join(save_path, config["pipeline_config"]["input"]["doc_name"] + "_fitz_data_360.xlsx")
+        )
+
+        # reset rotation
+        page.setRotation(90)
+
+        page.setRotation(-270)
+        scraped_df = scrape(page)
+        scraped_df["norm_bbox"] = norm_bbox
+        scraped_df["norm_origin"] = norm_origin
+        scraped_df.to_excel(
+            path_join(save_path, config["pipeline_config"]["input"]["doc_name"] + "_fitz_data_-270.xlsx")
+        )
+
+    else:
+        scraped_df = scrape(page)
+        scraped_df.to_excel(
+            path_join(save_path, config["pipeline_config"]["input"]["doc_name"] + "_fitz_data.xlsx")
+        )
+        scraped_df["norm_bbox"] = scraped_df["bbox"]
+        scraped_df["norm_origin"] = scraped_df["origin"]
+
+    # Read fet file
+    impute_excel_path = file_name + "_page" + str(page_idx + 1) + "_" + str(generation) + "_impute.xlsx"
+    fet_path = path_join(xtraction_excel_folder, "TextImputed", impute_excel_path)
+
+    if not os.path.exists(fet_path):
+        impute_excel_path = file_name + "_page" + str(page_idx + 1) + "_impute.csv"
+        fet_path = path_join(xtraction_excel_folder, "TextImputed", impute_excel_path)
+
+    fet_file_df = read_data(fet_path)
+
+    scraped_df = match_ext_obj.run(scraped_df, fet_file_df)
+    scraped_df.to_excel(
+        path_join(save_path, config["pipeline_config"]["input"]["doc_name"] + "_fitz_data_matched.xlsx")
+    )
+
+    scraped_df = scraped_df.loc[scraped_df["pii_flag"] == True]
+    scraped_df["masked_text"] = scraped_df["masked_text"].astype(str)
+
+    for _, row in scraped_df.iterrows():
+        text = row["masked_text"].strip()
+        bbox = row["norm_bbox"][0][0]
+        origin = row["norm_origin"][0][0]
+        bounded_rect = fitz.Rect(bbox)
+        origin_point = fitz.Point(origin)
+
+        color = convert_color(row["color"])
+        style = row["style"]
+        pred_font = row["font"].lower().replace("-","")
+        font_size = row["size"]
+
+
+        # Remove text form the page
+        if current_rot == 0:
+            bbox = tuple([row["x_min"], row["y_min"], row["x_max"], row["y_max"]])
+            bounded_rect_no_orient = fitz.Rect(bbox)
+            h = (bounded_rect_no_orient.y0 + bounded_rect_no_orient.y1) / 2
+            d = bounded_rect_no_orient.height * 0.1
+            bounded_rect_no_orient.y0 = h - d
+            bounded_rect_no_orient.y1 = h + d
+
+            page.add_redact_annot(bounded_rect_no_orient)
+            page.apply_redactions()
+        else:
+            h = (bounded_rect.y0 + bounded_rect.y1) / 2
+            d = bounded_rect.height * 0.1
+            bounded_rect.y0 = h - d
+            bounded_rect.y1 = h + d
+
+            page.add_redact_annot(bounded_rect)
+            page.apply_redactions()
+
+
+        #  Load index
+        page, font_mapping = load_fonts(page)
+
+        # Insert the font
+        font = font_mapping.get(pred_font, "helv")
+        size = font_size
+
+        # Calculate Font size based on the font and recalculate the bounding rect
+        fontfactor = 1 / 1.45
+
+        if font == "helv":# or pred_font == "couriernewpsboldmt" or pred_font == "couriernewpsmt":
+            if current_rot == 90:
+                size = bounded_rect.width * fontfactor
+            else:
+                size = bounded_rect.height * fontfactor
+
+
+        textwidth = fitz.get_text_length(text, fontsize=size)
+
+        rect = fitz.Rect(
+            bounded_rect.x0,
+            bounded_rect.y0,
+            max(bounded_rect.x1, bounded_rect.x0 + textwidth) + 5.0,
+            bounded_rect.y1,
+        )
+
+
+        # Fit text
+        # page.insert_text(origin_point, text, fontname="F0", fontsize=size)
+        fit_text_inbox(page, rect, origin_point, text, size, color, font)
+
+
+    # Add footer Audit note
+    # audit_text = audit_footer_obj.get_footer_text(page_idx + 1)
+    fontsize_to_use = 6
+    # textwidth = fitz.get_text_length(audit_text, fontsize=fontsize_to_use)
+
+    if current_rot == 90:
+        # page_width = page.rect.height
+        # page_height = page.rect.width
+        page_width = page.rect.width
+        page_height = page.rect.height
+
+        rect_x1 = round(page_height * 0.98)
+        rect_y1 = round((page_width / 2) - (textwidth / 2))
+        rect_x2 = rect_y1 + fontsize_to_use + 4  # needs margin
+        rect_y2 = rect_x1 + textwidth + 4  # needs margin
+
+    else:
+        page_width = page.rect.width
+        page_height = page.rect.height
+
+        rect_x1 = round((page_width / 2) - (textwidth / 2))
+        rect_y1 = round(page_height * 0.98)
+        rect_x2 = rect_x1 + textwidth + 4  # needs margin
+        rect_y2 = rect_y1 + fontsize_to_use + 4  # needs margin
+
+    origin = (rect_x1, rect_y1 + (rect_y2 - rect_y1) / 2)
+    origin_point = fitz.Point(origin)
+
+    rect = fitz.Rect(rect_x1, rect_y1, rect_x2, rect_y2)
+
+    fit_text_inbox(page, rect, origin_point, "audit_text", fontsize_to_use, GRAY_COLOR, "helv")
+
+    break
+
+# Save document
+empty_doc.insert_pdf(doc, from_page=page_idx, to_page=page_idx, start_at=0)
+# self.pdf_path = self.pdf_path + "_page{}.pdf".format(page_idx+1)
+empty_doc.save(pdf_path)
+
+empty_doc.close()
+doc.close()
+
