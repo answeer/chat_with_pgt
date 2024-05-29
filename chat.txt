@@ -1,29 +1,131 @@
-URL: http://swoosh-dev-text-extract-lishener.apps.swoosh-np.ocp.dev.net/api/v1/textxtractrequest
+from flask import Flask, request, jsonify
+import os
+import json
+import base64
+import cv2
+import numpy as np
+import requests
+from utils.signature_det import get_signature_num
+from utils.logger import logger
+from metrics import get_eval_results
 
+app = Flask(__name__)
 
-{
-        "job_params": {
-            "jobid": "111-33-333-latest_test_htr5-1816apr12"
-        },
-        "service_params": {
-           "ocrlanguage": [
-                "eng"
-            ],
-            "output_folder": "/data/textxtract_v3/test_v3/output",
-            "doc_input_path_list": [
-            {
-               "doc_path": "/data/Product_Enablement/HTR/JID/input/htr_sample.png",
-                "doc_type": "pdf",
-                "doc_output_path": "/data/Product_Enablement/HTR/JID/output/htr_sample.png"
-            }
-            ],
-            "properties": {
-            "deskew": "True",
-            "priority_queue_required": "False",
-            "priority_page_count_threshold": "0"
-            },
-            "call_back_url": "",
-            "version": "v.30",
-            "priority": "10"
-        }
-       }
+# 定义回调函数的存储路径
+CALLBACK_RESULT_PATH = "./callback_results"
+
+if not os.path.exists(CALLBACK_RESULT_PATH):
+    os.makedirs(CALLBACK_RESULT_PATH)
+
+def base64_to_img(base64_code):
+    image_data = base64.b64decode(base64_code)
+    nparr = np.fromstring(image_data, np.uint8)
+    img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    return img
+
+def save_callback_result(job_id, data):
+    with open(os.path.join(CALLBACK_RESULT_PATH, f"{job_id}.json"), 'w') as f:
+        json.dump(data, f, ensure_ascii=False, indent=4)
+
+@app.route('/inference', methods=['POST'])
+def inference():
+    data = request.json
+    attack_name_values = data['attack_name_values']
+    task = data['task']
+    attack_path = data['attack_path']
+    img_name = data['img_name']
+    save_path = data['save_path']
+    textxtract_output = os.path.join(save_path, 'textxtract_output', img_name)
+    URL = data['URL']
+    TOKEN = data['TOKEN']
+    payload = data['payload']
+    substring = data['substring']
+
+    pred_results = []
+    gt_result = []
+
+    def access_textract(input_path, output_path):
+        header = {"Authorization": TOKEN, "Content-Type": "application/json", "Userid": "1234"}
+        payload['service_params']['output_folder'] = save_path
+        payload['service_params']['doc_path'] = input_path
+        payload['service_params']['doc_output_path'] = output_path
+        
+        response = requests.post(URL, data=json.dumps(payload), headers=header)
+        return response
+
+    for folder_path in os.listdir(os.path.join(attack_path, attack_name_values)):
+        if task == 'text_xtract':
+            attacked_image = os.path.join(attack_path, attack_name_values, folder_path, img_name + "_" + folder_path + '.png')
+            output_path = os.path.join(textxtract_output, attack_name_values, folder_path, img_name + "_" + folder_path + '.png')
+            response = access_textract(attacked_image, output_path)
+            job_id = response.json().get('job_id')
+
+            if job_id:
+                save_callback_result(job_id, {
+                    'attack_name_values': attack_name_values,
+                    'folder_path': folder_path,
+                    'attacked_image': attacked_image,
+                    'output_path': output_path,
+                    'task': task,
+                    'substring': substring,
+                    'gt_result': gt_result,
+                    'pred_results': pred_results
+                })
+            else:
+                logger.error('Failed to get job_id from Textract API')
+
+        # Add other tasks processing here...
+
+    return jsonify({'status': 'processing', 'message': 'Inference job submitted successfully.'})
+
+@app.route('/callback', methods=['POST'])
+def callback():
+    data = request.json
+    job_id = data['job_id']
+    result = data['result']
+
+    callback_file = os.path.join(CALLBACK_RESULT_PATH, f"{job_id}.json")
+    if not os.path.exists(callback_file):
+        return jsonify({'error': 'Invalid job_id or job result not found'}), 404
+
+    with open(callback_file, 'r') as f:
+        job_data = json.load(f)
+
+    attack_name_values = job_data['attack_name_values']
+    folder_path = job_data['folder_path']
+    attacked_image = job_data['attacked_image']
+    output_path = job_data['output_path']
+    task = job_data['task']
+    substring = job_data['substring']
+    gt_result = job_data['gt_result']
+    pred_results = job_data['pred_results']
+
+    # Process the Textract result here
+    extracted_data = {
+        'boxes': [],
+        'scores': [],
+        'text': []
+    }
+    for step in result['GraphJSON']['1'].values():
+        extracted_data['boxes'].append([[int(step['x_min']), int(step['y_min'])], [int(step['x_max']), int(step['y_max'])]])
+        extracted_data['scores'].append(float(step['conf']))
+        extracted_data['text'].append(step['text'])
+
+    pred_results.append(extracted_data)
+    if folder_path in substring:
+        gt_result = extracted_data
+
+    results = get_eval_results(task, pred_results, gt_result)
+
+    robustness_result = {}
+    robustness_result[attack_name_values] = {'results': results}
+
+    # Save the final result
+    final_result_path = os.path.join(output_path, 'final_result.json')
+    with open(final_result_path, 'w') as f:
+        json.dump(robustness_result, f, ensure_ascii=False, indent=4)
+
+    return jsonify({'status': 'completed', 'message': 'Inference result processed successfully.'})
+
+if __name__ == '__main__':
+    app.run(debug=True, port=5000)
