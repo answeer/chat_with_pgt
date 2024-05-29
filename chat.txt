@@ -1,143 +1,65 @@
-# views.py
+from flask import Flask, request, jsonify
 
-from django.http import JsonResponse
-from django.views import View
-import os
-import json
-import base64
-import numpy as np
-import cv2
-import requests
-from .utils import get_eval_results, perform_attack, get_signature_num
-from .logger import logger
+app = Flask(__name__)
 
-class InferenceView(View):
-    def post(self, request):
-        try:
-            data = json.loads(request.body)
-            config = data.get('config')
-            attack_name_values = data.get('attack_name_values')
+@app.route('/callback', methods=['POST'])
+def callback():
+    data = request.json
+    # 处理回调数据
+    task_id = data.get('task_id')
+    status = data.get('status')
+    result = data.get('result')
+    print(f"任务ID: {task_id}, 状态: {status}, 结果: {result}")
+    # 在这里可以添加处理结果的逻辑
+    return jsonify({"message": "回调接收成功"}), 200
 
-            robustness_result = {}
-            pred_results = []
-            gt_result = []
+if __name__ == '__main__':
+    app.run(port=5000)
 
-            attack_path = os.path.join(config['save_path'], 'attacked_results', config['image_path'].split("\\")[-1].split('.')[0])
-            textxtract_output = os.path.join(config['save_path'], 'textxtract_output', config['image_path'].split("\\")[-1].split('.')[0])
-            substring = ["Brightness_0", "Colorspace_4", "Flip_diaFlip", "Rotation_10", "Shear_-0.1"]
-
-            for folder_path in os.listdir(os.path.join(attack_path, attack_name_values)):
-                if config['task'] == 'text_xtract':
-                    attacked_image = os.path.join(attack_path, attack_name_values, folder_path, config['image_path'].split("\\")[-1].split('.')[0] + "_" + folder_path + '.png')
-                    output_path = os.path.join(textxtract_output, attack_name_values, folder_path, config['image_path'].split("\\")[-1].split('.')[0] + "_" + folder_path + '.png')
-                    response = self.access_textract(attacked_image, output_path, config)
-                    if response.status_code == 200:
-                        textxtract_output_path = os.path.join(output_path, config['image_path'].split("\\")[-1].split('.')[0] + '.json')
-                        with open(textxtract_output_path) as json_file:
-                            js_data = json.load(json_file)
-                        extracted_data = {
-                            'boxes': [[[int(step['x_min']), int(step['y_min'])], [int(step['x_max']), int(step['y_max'])]] for step in js_data['GraphJSON']['1'].values()],
-                            'scores': [float(step['conf']) for step in js_data['GraphJSON']['1'].values()],
-                            'text': [step['text'] for step in js_data['GraphJSON']['1'].values()]
-                        }
-                        pred_results.append(extracted_data)
-                        if folder_path in substring:
-                            gt_result = extracted_data
-                    else:
-                        logger.info(f'The access for API is failed, status code is {response.status_code}')
-                elif config['task'] == 'signature_det':
-                    image_path = os.path.join(attack_path, attack_name_values, folder_path, config['image_path'].split("\\")[-1].split('.')[0] + '_' + folder_path + '.png')
-                    signature_num = get_signature_num(config['URL'], image_path)
-                    pred_results.append(signature_num)
-                else:
-                    image_path = os.path.join(attack_path, attack_name_values, folder_path, config['image_path'].split("\\")[-1].split('.')[0] + '_' + folder_path + '.png')
-                    with open(image_path, "rb") as f:
-                        base64_data = base64.b64encode(f.read()).decode()
-                        headers = {'Content-Type': 'application/json'}
-                        input_info = {"imageBase64": str(base64_data)}
-                        result = requests.post(config['URL'], headers=headers, data=json.dumps(input_info))
-                        model_output = json.loads(result.content)
-                        if config['task'] == 'text_detection':
-                            model_output['boxes'] = [[[int(min(xs)), int(min(ys))], [int(max(xs)), int(max(ys))]] for coords in ([model_output['boxes']] if isinstance(model_output['boxes'][0][0], float) else model_output['boxes']) for xs, ys in [zip(*coords)]]
-                        elif config['task'] == 'text_recognition':
-                            model_output = {'text': [model_output['text']], 'score': [model_output['score']], 'status_code': model_output['status_code']}
-                        elif config['task'] == 'text_classification':
-                            model_output = {'cls': [model_output['cls']], 'score': [model_output['score']], 'status_code': model_output['status_code']}
-                        if folder_path in substring:
-                            gt_result = model_output
-                        pred_results.append(model_output)
-
-            results = get_eval_results(config['task'], pred_results, gt_result)
-            robustness_result[attack_name_values] = {'results': results}
-
-            return JsonResponse(robustness_result)
-        except Exception as e:
-            logger.error(e)
-            return JsonResponse({'error': str(e)}, status=500)
-
-    def access_textract(self, input_path, output_path, config):
-        input_path = input_path.replace("/swoosh/", "/data/")
-        output_path = output_path.replace("/swoosh/", "/data/")
-        header = {"Authorization": config['TOKEN'], "Content-Type": "application/json", "Userid": "1234"}
-        payload = config['payload']
-        payload['service_params']['output_folder'] = config['save_path']
-        payload['service_params']['doc_path'] = input_path
-        payload['service_params']['doc_output_path'] = output_path
-        response = requests.post(config['URL'], data=json.dumps(payload), headers=header)
-        return response
-
-
-# urls.py
-
-from django.urls import path
-from .views import InferenceView
-
-urlpatterns = [
-    path('inference/', InferenceView.as_view(), name='inference'),
-]
-
-
-# robustness_project/urls.py
-
-from django.contrib import admin
-from django.urls import path, include
-
-urlpatterns = [
-    path('admin/', admin.site.urls),
-    path('robustness_app/', include('robustness_app.urls')),
-]
-
-
-# settings.py
-
-MEDIA_URL = '/media/'
-MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
-
-
-
-# urls.py
-
-from django.conf import settings
-from django.conf.urls.static import static
-
-urlpatterns = [
-    path('admin/', admin.site.urls),
-    path('robustness_app/', include('robustness_app.urls')),
-] + static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
-
-
-
-# 发送 POST 请求到 Django 服务器
 
 import requests
 import json
 
-url = 'http://localhost:8000/robustness_app/attack_and_inference/'
-headers = {'Content-Type': 'application/json'}
-data = {
-    "attack_name_values": "example_attack"
+# 提交任务的URL
+submit_url = "http://swoosh-dev-text-extract-lishener.apps.swoosh-np.ocp.dev.net/api/v1/textxtractrequest"
+payload = {
+    "job_params": {
+        "jobid": "111-33-333-latest_test_htr5-1816apr12"
+    },
+    "service_params": {
+        "ocrlanguage": ["eng"],
+        "output_folder": "/data/textxtract_v3/test_v3/output",
+        "doc_input_path_list": [
+            {
+                "doc_path": "/data/Product_Enablement/HTR/JID/input/htr_sample.png",
+                "doc_type": "pdf",
+                "doc_output_path": "/data/Product_Enablement/HTR/JID/output/htr_sample.png"
+            }
+        ],
+        "properties": {
+            "deskew": "True",
+            "priority_queue_required": "False",
+            "priority_page_count_threshold": "0"
+        },
+        "call_back_url": "http://your-server-domain.com/callback",
+        "version": "v.30",
+        "priority": "10"
+    }
 }
 
-response = requests.post(url, headers=headers, data=json.dumps(data))
-print(response.json())
+headers = {
+    'Content-Type': 'application/json'
+}
+
+# 发送POST请求提交任务
+response = requests.post(submit_url, headers=headers, data=json.dumps(payload))
+
+# 检查响应状态码
+if response.status_code == 200:
+    response_data = response.json()
+    task_id = response_data.get("task_id")  # 假设响应中包含task_id
+    print("任务提交成功，任务ID:", task_id)
+else:
+    print("任务提交失败，状态码：", response.status_code)
+    print("响应内容：", response.text)
 
