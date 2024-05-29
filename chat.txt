@@ -124,3 +124,20 @@ urlpatterns = [
     path('admin/', admin.site.urls),
     path('robustness_app/', include('robustness_app.urls')),
 ] + static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
+
+
+
+# 发送 POST 请求到 Django 服务器
+
+import requests
+import json
+
+url = 'http://localhost:8000/robustness_app/attack_and_inference/'
+headers = {'Content-Type': 'application/json'}
+data = {
+    "attack_name_values": "example_attack"
+}
+
+response = requests.post(url, headers=headers, data=json.dumps(data))
+print(response.json())
+
