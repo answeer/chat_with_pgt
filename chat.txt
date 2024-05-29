@@ -1,79 +1,29 @@
-from django.db import models
-
-class InferenceTask(models.Model):
-    STATUS_CHOICES = [
-        ('PENDING', 'Pending'),
-        ('PROCESSING', 'Processing'),
-        ('COMPLETED', 'Completed'),
-        ('FAILED', 'Failed'),
-    ]
-    image_path = models.CharField(max_length=255)
-    attack_name_values = models.CharField(max_length=255)
-    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='PENDING')
-    result = models.JSONField(null=True, blank=True)
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
+URL: http://swoosh-dev-text-extract-lishener.apps.swoosh-np.ocp.dev.net/api/v1/textxtractrequest
 
 
-import os
-import json
-import requests
-from django.http import JsonResponse
-from django.views.decorators.csrf import csrf_exempt
-from django.views import View
-from .models import InferenceTask
-from .robustness_core import process_inference, save_results  # 你需要实现的函数
-
-class StartInferenceView(View):
-    def post(self, request):
-        data = json.loads(request.body)
-        image_path = data.get('image_path')
-        attack_name_values = data.get('attack_name_values')
-
-        # 创建任务
-        task = InferenceTask.objects.create(image_path=image_path, attack_name_values=attack_name_values)
-
-        # 开始处理任务（异步调用）
-        process_inference(task.id)
-
-        return JsonResponse({'task_id': task.id, 'status': task.status})
-
-@csrf_exempt
-class InferenceCallbackView(View):
-    def post(self, request):
-        data = json.loads(request.body)
-        task_id = data.get('task_id')
-        result = data.get('result')
-
-        # 更新任务状态和结果
-        save_results(task_id, result)
-
-        return JsonResponse({'status': 'success'})
-
-
-
-from django.urls import path
-from .views import StartInferenceView, InferenceCallbackView
-
-urlpatterns = [
-    path('start-inference/', StartInferenceView.as_view(), name='start-inference'),
-    path('inference-callback/', InferenceCallbackView.as_view(), name='inference-callback'),
-]
-
-
-
-from django.contrib import admin
-from django.urls import path, include
-
-urlpatterns = [
-    path('admin/', admin.site.urls),
-    path('robustness/', include('robustness.urls')),
-]
-
-
-
-TEXTRACT_URL = 'your_textract_service_url'
-TOKEN = 'your_token'
-SAVE_PATH = 'your_save_path'
-OUTPUT_PATH = 'your_output_path'
-CALLBACK_BASE_URL = 'your_callback_base_url'
+{
+        "job_params": {
+            "jobid": "111-33-333-latest_test_htr5-1816apr12"
+        },
+        "service_params": {
+           "ocrlanguage": [
+                "eng"
+            ],
+            "output_folder": "/data/textxtract_v3/test_v3/output",
+            "doc_input_path_list": [
+            {
+               "doc_path": "/data/Product_Enablement/HTR/JID/input/htr_sample.png",
+                "doc_type": "pdf",
+                "doc_output_path": "/data/Product_Enablement/HTR/JID/output/htr_sample.png"
+            }
+            ],
+            "properties": {
+            "deskew": "True",
+            "priority_queue_required": "False",
+            "priority_page_count_threshold": "0"
+            },
+            "call_back_url": "",
+            "version": "v.30",
+            "priority": "10"
+        }
+       }
