@@ -1,131 +1,148 @@
-from flask import Flask, request, jsonify
-import os
-import json
-import base64
-import cv2
 import numpy as np
+import cv2
+import base64
+import pybase64
+import os
+import sys
+import json
+import yaml
 import requests
+current_path = os.path.dirname(os.path.abspath(__file__))
+base_path = os.path.join(current_path, "../")
+sys.path.append(current_path)
+from metrics import get_eval_results
+from attack_image import perform_attack
 from utils.signature_det import get_signature_num
 from utils.logger import logger
-from metrics import get_eval_results
+import warnings
+warnings.filterwarnings('ignore')
+class Robustness():
+    def __init__(self, config):
+        self.config = config
+        self.error_code = ""
+        self.error_message = ""
+        self.robustness_result = {}
+        self.task = self.config['task']
+        self.save_path = self.config['save_path']
+        self.img_name = self.config['image_path'].split("\\")[-1].split('.')[0]
+        self.attack_path = os.path.join(self.save_path,'attacked_results',self.img_name)
+        self.textxtract_output = os.path.join(self.save_path,'textxtract_output',self.img_name)
+        os.makedirs(self.attack_path,exist_ok=True)
+        self.substring = ["Brightness_0","Colorspace_4","Flip_diaFlip","Rotation_10","Shear_-0.1"]
 
-app = Flask(__name__)
+    def base64_to_img(self,base64_code):
+        image_data = pybase64.b64decode(base64_code)
+        nparr = np.fromstring(image_data, np.uint8)
+        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        return img
 
-# 定义回调函数的存储路径
-CALLBACK_RESULT_PATH = "./callback_results"
-
-if not os.path.exists(CALLBACK_RESULT_PATH):
-    os.makedirs(CALLBACK_RESULT_PATH)
-
-def base64_to_img(base64_code):
-    image_data = base64.b64decode(base64_code)
-    nparr = np.fromstring(image_data, np.uint8)
-    img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-    return img
-
-def save_callback_result(job_id, data):
-    with open(os.path.join(CALLBACK_RESULT_PATH, f"{job_id}.json"), 'w') as f:
-        json.dump(data, f, ensure_ascii=False, indent=4)
-
-@app.route('/inference', methods=['POST'])
-def inference():
-    data = request.json
-    attack_name_values = data['attack_name_values']
-    task = data['task']
-    attack_path = data['attack_path']
-    img_name = data['img_name']
-    save_path = data['save_path']
-    textxtract_output = os.path.join(save_path, 'textxtract_output', img_name)
-    URL = data['URL']
-    TOKEN = data['TOKEN']
-    payload = data['payload']
-    substring = data['substring']
-
-    pred_results = []
-    gt_result = []
-
-    def access_textract(input_path, output_path):
-        header = {"Authorization": TOKEN, "Content-Type": "application/json", "Userid": "1234"}
-        payload['service_params']['output_folder'] = save_path
+    def access_textract(self,input_path,output_path):
+        input_path = input_path.replace("/swoosh/", "/data/")
+        output_path = output_path.replace("/swoosh/", "/data/")
+        header = {"Authorization": self.config['TOKEN'], "Content-Type": "application/json", "Userid": "1234"}
+        payload = self.config['payload']
+        payload['service_params']['output_folder'] = self.save_path
         payload['service_params']['doc_path'] = input_path
         payload['service_params']['doc_output_path'] = output_path
         
-        response = requests.post(URL, data=json.dumps(payload), headers=header)
+        response = requests.post(self.config['URL'], data=json.dumps(payload),headers=header)
         return response
 
-    for folder_path in os.listdir(os.path.join(attack_path, attack_name_values)):
-        if task == 'text_xtract':
-            attacked_image = os.path.join(attack_path, attack_name_values, folder_path, img_name + "_" + folder_path + '.png')
-            output_path = os.path.join(textxtract_output, attack_name_values, folder_path, img_name + "_" + folder_path + '.png')
-            response = access_textract(attacked_image, output_path)
-            job_id = response.json().get('job_id')
+    def inference(self, attack_name_values):
+        pred_results = []
+        gt_result = []
+        robustness_result = self.robustness_result
+        try:
+            for folder_path in os.listdir(os.path.join(self.attack_path,attack_name_values)):
+                if self.task == 'text_xtract':
+                    attacked_image = os.path.join(self.attack_path,attack_name_values,folder_path,self.img_name+"_"+folder_path+'.png')
+                    output_path = os.path.join(self.textxtract_output,attack_name_values,folder_path,self.img_name+"_"+folder_path+'.png')
+                    response = self.access_textract(attacked_image,output_path)
+                    if response.status_code == 200:
+                        textxtract_output_path = os.path.join(output_path,self.img_name+'.json')
+                        with open(textxtract_output_path) as json_file:
+                            js_data = json.load(json_file)
+                        extracted_data = {}
+                        extracted_data['boxes'] = []
+                        extracted_data['scores'] = []
+                        extracted_data['text'] = []
+                        for step in js_data['GraphJSON']['1'].values():
+                            extracted_data['boxes'].append([[int(step['x_min']),int(step['y_min'])],[int(step['x_max']),int(step['y_max'])]])
+                            extracted_data['scores'].append(float(step['conf']))
+                            extracted_data['text'].append(step['text'])
+                        pred_results.append(extracted_data)
+                        if folder_path in self.substring:
+                            gt_result = extracted_data
+                    else:
+                        logger.info(f'The access for API is failed, statue code is {response.status_code}')
+                elif self.task == 'signature_det':
+                    image_path = os.path.join(self.attack_path,attack_name_values,folder_path,self.img_name+'_'+folder_path+'.png')
+                    signature_num = get_signature_num(self.config['URL'],image_path)
+                    pred_results.append(signature_num)
+                else:
+                    image_path = os.path.join(self.attack_path,attack_name_values,folder_path,self.img_name+'_'+folder_path+'.png')
+                    with open(image_path, "rb") as f:
+                        base64_data = base64.b64encode(f.read()).decode()
+                        headers = {'Content-Type': 'application/json'}
+                        input_info = {"imageBase64": str(base64_data)}
+                        result = requests.post(self.config['URL'], headers=headers, data=json.dumps(input_info))
+                        if self.task == 'text_detection':
+                            model_output = json.loads(result.content)
+                            model_output['boxes'] =  [[[int(min(xs)), int(min(ys))], [int(max(xs)), int(max(ys))]] for coords in ([model_output['boxes']] if isinstance(model_output['boxes'][0][0], float) else model_output['boxes']) for xs, ys in [zip(*coords)]]
+                        elif self.task == 'text_recognition':
+                            model_output = json.loads(result.content)
+                            model_output = {'text': [model_output['text']], 'score': [model_output['score']], 'status_code': model_output['status_code']}
+                        elif self.task == 'text_classification':
+                            model_output = json.loads(result.content)
+                            model_output = {'cls': [model_output['cls']], 'score': [model_output['score']], 'status_code': model_output['status_code']}
+                        if folder_path in self.substring:
+                            gt_result = model_output
+                        pred_results.append(model_output)
+            results = get_eval_results(self.task,pred_results, gt_result)
+            robustness_result[attack_name_values] = {}
+            robustness_result[attack_name_values]['results'] = results
+        except Exception as e:
+            logger.error(e)
+        return robustness_result
 
-            if job_id:
-                save_callback_result(job_id, {
-                    'attack_name_values': attack_name_values,
-                    'folder_path': folder_path,
-                    'attacked_image': attacked_image,
-                    'output_path': output_path,
-                    'task': task,
-                    'substring': substring,
-                    'gt_result': gt_result,
-                    'pred_results': pred_results
-                })
+    def run(self):
+        robustness_result = {}
+        for attack_name_values in self.config['attack_methods']:
+            try:
+                logger.info(f"Attack Started for {attack_name_values}")
+                perform_attack(self.attack_path,attack_name_values,self.config['image_path'])
+                logger.info("Attack Completed!")
+            except Exception as e:
+                self.error_code = "ROBUSTNESS0100"
+                self.error_message = "FAILED: Attack for input image is failed!"
+                logger.error(e,extra={"jobid": self.config['jobid']})
+            if not self.config['attack_only']:
+                try:
+                    logger.info(f"{self.task.capitalize()} inference Started for {attack_name_values}")
+                    robustness_result = self.inference(attack_name_values)
+                except Exception as e:
+                    logger.error(e)
+                    self.error_code = f"ROBUSTNESS0{self.task[:3].upper()}00"
+                    self.error_message = f"FAILED: inference of {self.task} model is failed!"
             else:
-                logger.error('Failed to get job_id from Textract API')
-
-        # Add other tasks processing here...
-
-    return jsonify({'status': 'processing', 'message': 'Inference job submitted successfully.'})
-
-@app.route('/callback', methods=['POST'])
-def callback():
-    data = request.json
-    job_id = data['job_id']
-    result = data['result']
-
-    callback_file = os.path.join(CALLBACK_RESULT_PATH, f"{job_id}.json")
-    if not os.path.exists(callback_file):
-        return jsonify({'error': 'Invalid job_id or job result not found'}), 404
-
-    with open(callback_file, 'r') as f:
-        job_data = json.load(f)
-
-    attack_name_values = job_data['attack_name_values']
-    folder_path = job_data['folder_path']
-    attacked_image = job_data['attacked_image']
-    output_path = job_data['output_path']
-    task = job_data['task']
-    substring = job_data['substring']
-    gt_result = job_data['gt_result']
-    pred_results = job_data['pred_results']
-
-    # Process the Textract result here
-    extracted_data = {
-        'boxes': [],
-        'scores': [],
-        'text': []
-    }
-    for step in result['GraphJSON']['1'].values():
-        extracted_data['boxes'].append([[int(step['x_min']), int(step['y_min'])], [int(step['x_max']), int(step['y_max'])]])
-        extracted_data['scores'].append(float(step['conf']))
-        extracted_data['text'].append(step['text'])
-
-    pred_results.append(extracted_data)
-    if folder_path in substring:
-        gt_result = extracted_data
-
-    results = get_eval_results(task, pred_results, gt_result)
-
-    robustness_result = {}
-    robustness_result[attack_name_values] = {'results': results}
-
-    # Save the final result
-    final_result_path = os.path.join(output_path, 'final_result.json')
-    with open(final_result_path, 'w') as f:
-        json.dump(robustness_result, f, ensure_ascii=False, indent=4)
-
-    return jsonify({'status': 'completed', 'message': 'Inference result processed successfully.'})
+                logger.info(f'Only perfom the attack flow, save the attacked images for {attack_name_values} in the path:{os.path.join(self.save_path,self.img_name,attack_name_values)}')
+        save_path = os.path.join(self.attack_path,self.img_name+'.json')
+        with open(save_path, 'w') as f:
+            json.dump(robustness_result, f, ensure_ascii=False, indent=4)
+        return self.error_code, self.error_message, robustness_result
 
 if __name__ == '__main__':
-    app.run(debug=True, port=5000)
+    
+    config_file = r'img_robustness\config.yaml'
+    with open(config_file, 'r', encoding='utf-8') as config_file:
+        config = yaml.safe_load(config_file)
+        
+
+    robustness_engine = Robustness(config)
+    error_code,error_message,robustness_result = robustness_engine.run()
+    for category, category_data in robustness_result.items():
+        print(f"Attack name: {category}")
+        results = category_data['results']
+        for metric, values in results.items():
+            print(f"  {metric}: {values}")
+        print()
