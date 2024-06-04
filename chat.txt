@@ -15,3 +15,22 @@
 4                 risk_level  character varying                      15.0
 5              employee_flag  character varying                       5.0
 6           acquisition_date               date                       NaN
+
+import pandas as pd
+
+# Read the Excel file
+df = pd.read_excel('example.xlsx')
+
+# Get the column names
+column_names = df.columns.tolist()
+
+# Create a list of dictionaries to represent the columns
+columns = []
+for i in range(len(column_names)):
+    columns.append({
+        'column_name': column_names[i],
+        'data_type': df.iloc[0, i] if pd.notna(df.iloc[0, i]) else None,
+        'character_maximum_length': df.iloc[1, i] if pd.notna(df.iloc[1, i]) else None
+    })
+
+print(columns)
