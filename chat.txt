@@ -6,42 +6,12 @@
     {'column_name':'apply_dp', 'data_type':'boolean','character_maximum_length': None},
     {'column_name':'local_batch', 'data_type':'smallint','character_maximum_length': None}
 ]
-import pandas as pd
 
-# 替换 'your_file.xlsx' 为你的 Excel 文件的路径
-excel_file = 'your_file.xlsx'
-
-# 使用 pandas 读取 Excel 文件
-df = pd.read_excel(excel_file, engine='openpyxl')
-
-# 定义数据类型的映射
-data_type_mapping = {
-    'object': 'character varying',
-    'int64': 'int',
-    'bool': 'boolean',
-    'float64': 'float',
-}
-
-column_info = []
-
-# 遍历每一列
-for column_name in df.columns:
-    column_data = df[column_name]
-    data_type = data_type_mapping.get(str(column_data.dtype), 'unknown')
-
-    # 根据数据类型计算最大长度
-    if data_type == 'character varying':
-        character_maximum_length = column_data.astype(str).str.len().max()
-    else:
-        character_maximum_length = None
-
-    # 添加到 column_info
-    column_info.append({
-        'column_name': column_name,
-        'descriptions': f"Description for '{column_name}'" ,  # 你可以在这里添加每一列的描述信息
-        'data_type': data_type,
-        'character_maximum_length': character_maximum_length,
-    })
-
-# 在控制台中显示 column_info
-print(column_info)
+                 column_name          data_type  character_maximum_length
+0                  party_key             bigint                       NaN
+1  individual_corporate_type  character varying                      10.0
+2                status_code  character varying                       5.0
+3                 risk_score   double precision                       NaN
+4                 risk_level  character varying                      15.0
+5              employee_flag  character varying                       5.0
+6           acquisition_date               date                       NaN
