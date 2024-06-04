@@ -1,65 +1,8 @@
-from flask import Flask, request, jsonify
-
-app = Flask(__name__)
-
-@app.route('/callback', methods=['POST'])
-def callback():
-    data = request.json
-    # 处理回调数据
-    task_id = data.get('task_id')
-    status = data.get('status')
-    result = data.get('result')
-    print(f"任务ID: {task_id}, 状态: {status}, 结果: {result}")
-    # 在这里可以添加处理结果的逻辑
-    return jsonify({"message": "回调接收成功"}), 200
-
-if __name__ == '__main__':
-    app.run(port=5000)
-
-
-import requests
-import json
-
-# 提交任务的URL
-submit_url = "http://swoosh-dev-text-extract-lishener.apps.swoosh-np.ocp.dev.net/api/v1/textxtractrequest"
-payload = {
-    "job_params": {
-        "jobid": "111-33-333-latest_test_htr5-1816apr12"
-    },
-    "service_params": {
-        "ocrlanguage": ["eng"],
-        "output_folder": "/data/textxtract_v3/test_v3/output",
-        "doc_input_path_list": [
-            {
-                "doc_path": "/data/Product_Enablement/HTR/JID/input/htr_sample.png",
-                "doc_type": "pdf",
-                "doc_output_path": "/data/Product_Enablement/HTR/JID/output/htr_sample.png"
-            }
-        ],
-        "properties": {
-            "deskew": "True",
-            "priority_queue_required": "False",
-            "priority_page_count_threshold": "0"
-        },
-        "call_back_url": "http://your-server-domain.com/callback",
-        "version": "v.30",
-        "priority": "10"
-    }
-}
-
-headers = {
-    'Content-Type': 'application/json'
-}
-
-# 发送POST请求提交任务
-response = requests.post(submit_url, headers=headers, data=json.dumps(payload))
-
-# 检查响应状态码
-if response.status_code == 200:
-    response_data = response.json()
-    task_id = response_data.get("task_id")  # 假设响应中包含task_id
-    print("任务提交成功，任务ID:", task_id)
-else:
-    print("任务提交失败，状态码：", response.status_code)
-    print("响应内容：", response.text)
-
+    column_info = [
+    {'column_name':'ACQUISITION_DATE', 'descriptions':'Customer Acquisition date','data_type':'character varying','character_maximum_length': 50},
+    {'column_name':'ACCOUNT_KEY','descriptions':'Unique key associated with account', 'data_type':'character varying','character_maximum_length': 50},
+    {'column_name':'sex', 'data_type':'character varying','character_maximum_length': 30},
+    {'column_name':'age', 'data_type':'int','character_maximum_length': 30},
+    {'column_name':'apply_dp', 'data_type':'boolean','character_maximum_length': None},
+    {'column_name':'local_batch', 'data_type':'smallint','character_maximum_length': None}
+]
