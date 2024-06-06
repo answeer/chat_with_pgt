@@ -1,36 +1,8 @@
-    column_info = [
-    {'column_name':'ACQUISITION_DATE', 'descriptions':'Customer Acquisition date','data_type':'character varying','character_maximum_length': 50},
-    {'column_name':'ACCOUNT_KEY','descriptions':'Unique key associated with account', 'data_type':'character varying','character_maximum_length': 50},
-    {'column_name':'sex', 'data_type':'character varying','character_maximum_length': 30},
-    {'column_name':'age', 'data_type':'int','character_maximum_length': 30},
-    {'column_name':'apply_dp', 'data_type':'boolean','character_maximum_length': None},
-    {'column_name':'local_batch', 'data_type':'smallint','character_maximum_length': None}
-]
 
-                 column_name          data_type  character_maximum_length
-0                  party_key             bigint                       NaN
-1  individual_corporate_type  character varying                      10.0
-2                status_code  character varying                       5.0
-3                 risk_score   double precision                       NaN
-4                 risk_level  character varying                      15.0
-5              employee_flag  character varying                       5.0
-6           acquisition_date               date                       NaN
+Training data
 
-import pandas as pd
+Models with a "-c" in the name are trained on two types of fully commercially-friendly data:
 
-# Read the Excel file
-df = pd.read_excel('example.xlsx')
-
-# Get the column names
-column_names = df.columns.tolist()
-
-# Create a list of dictionaries to represent the columns
-columns = []
-for i in range(len(column_names)):
-    columns.append({
-        'column_name': column_names[i],
-        'data_type': df.iloc[0, i] if pd.notna(df.iloc[0, i]) else None,
-        'character_maximum_length': df.iloc[1, i] if pd.notna(df.iloc[1, i]) else None
-    })
-
-print(columns)
+Synthetic data generated with Mixtral-8x7B-Instruct-v0.1. I first created a list of 500+ diverse text classification tasks for 25 professions in conversations with Mistral-large. The data was manually curated. I then used this as seed data to generate several hundred thousand texts for these tasks with Mixtral-8x7B-Instruct-v0.1. The final dataset used is available in the synthetic_zeroshot_mixtral_v0.1 dataset in the subset mixtral_written_text_for_tasks_v4. Data curation was done in multiple iterations and will be improved in future iterations.
+Two commercially-friendly NLI datasets: (MNLI, FEVER-NLI). These datasets were added to increase generalization.
+Models without a "-c" in the name also included a broader mix of training data with a broader mix of licenses: ANLI, WANLI, LingNLI, and all datasets in this list where used_in_v1.1==True.
