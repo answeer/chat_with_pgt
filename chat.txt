@@ -179,3 +179,5 @@ output = output.transpose(1, 2, 0)
 output = output.astype(np.uint8)
 output = Image.fromarray(output)
 output
+
+!pip3 install omegaconf webdataset pytorch_lightning pytorch_lightning kornia==0.5.0 onnx onnxruntime
