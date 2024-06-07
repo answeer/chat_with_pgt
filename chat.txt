@@ -18,3 +18,15 @@ CC0 1.0 Universal: 1 dataset
 No License (public domain): 6 datasets
 Apache License 2.0: 5 datasets (alespalla/chatbot_instruction_prompts, HuggingFaceH4/grok-conversation-harmless, Harelix/Prompt-Injection-Mixed-Techniques-2024, OpenSafetyLab/Salad-Data, jackhhao/jailbreak-classification)
 CC-BY-4.0: 1 dataset (natolambert/xstest-v2-copy:1_full_compliance)
+
+Size: 13.6m text tokens in ~209k examples with 649k PII tokens (see summary.json)
+4 languages, more to come!
+English
+French
+German
+Italian
+Synthetic data generated using proprietary algorithms
+No privacy violations!
+Human-in-the-loop validated high quality dataset
+
+
