@@ -6,3 +6,8 @@ Models with a "-c" in the name are trained on two types of fully commercially-fr
 Synthetic data generated with Mixtral-8x7B-Instruct-v0.1. I first created a list of 500+ diverse text classification tasks for 25 professions in conversations with Mistral-large. The data was manually curated. I then used this as seed data to generate several hundred thousand texts for these tasks with Mixtral-8x7B-Instruct-v0.1. The final dataset used is available in the synthetic_zeroshot_mixtral_v0.1 dataset in the subset mixtral_written_text_for_tasks_v4. Data curation was done in multiple iterations and will be improved in future iterations.
 Two commercially-friendly NLI datasets: (MNLI, FEVER-NLI). These datasets were added to increase generalization.
 Models without a "-c" in the name also included a broader mix of training data with a broader mix of licenses: ANLI, WANLI, LingNLI, and all datasets in this list where used_in_v1.1==True.
+
+
+Corporate Reports 10-K & 10-Q: 2.5B tokens
+Earnings Call Transcripts: 1.3B tokens
+Analyst Reports: 1.1B tokens
