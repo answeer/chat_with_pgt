@@ -1,32 +1,181 @@
 
-Training data
+import torch
+from omegaconf import OmegaConf
+from yaml import safe_load
 
-Models with a "-c" in the name are trained on two types of fully commercially-friendly data:
-
-Synthetic data generated with Mixtral-8x7B-Instruct-v0.1. I first created a list of 500+ diverse text classification tasks for 25 professions in conversations with Mistral-large. The data was manually curated. I then used this as seed data to generate several hundred thousand texts for these tasks with Mixtral-8x7B-Instruct-v0.1. The final dataset used is available in the synthetic_zeroshot_mixtral_v0.1 dataset in the subset mixtral_written_text_for_tasks_v4. Data curation was done in multiple iterations and will be improved in future iterations.
-Two commercially-friendly NLI datasets: (MNLI, FEVER-NLI). These datasets were added to increase generalization.
-Models without a "-c" in the name also included a broader mix of training data with a broader mix of licenses: ANLI, WANLI, LingNLI, and all datasets in this list where used_in_v1.1==True.
-
-
-Corporate Reports 10-K & 10-Q: 2.5B tokens
-Earnings Call Transcripts: 1.3B tokens
-Analyst Reports: 1.1B tokens
-
-CC-BY-3.0: 1 dataset (VMware/open-instruct)
-MIT License: 8 datasets
-CC0 1.0 Universal: 1 dataset
-No License (public domain): 6 datasets
-Apache License 2.0: 5 datasets (alespalla/chatbot_instruction_prompts, HuggingFaceH4/grok-conversation-harmless, Harelix/Prompt-Injection-Mixed-Techniques-2024, OpenSafetyLab/Salad-Data, jackhhao/jailbreak-classification)
-CC-BY-4.0: 1 dataset (natolambert/xstest-v2-copy:1_full_compliance)
-
-Size: 13.6m text tokens in ~209k examples with 649k PII tokens (see summary.json)
-4 languages, more to come!
-English
-French
-German
-Italian
-Synthetic data generated using proprietary algorithms
-No privacy violations!
-Human-in-the-loop validated high quality dataset
+from saicinpainting.training.trainers.default import (
+    DefaultInpaintingTrainingModule,
+)
 
 
+class ExportLama(torch.nn.Module):
+    def forward(self, image: torch.Tensor, mask: torch.Tensor):
+        masked_img = image * (1 - mask)
+
+        if self.model.concat_mask:
+            masked_img = torch.cat([masked_img, mask], dim=1)
+
+        predicted_image = self.model.generator(masked_img)
+        inpainted = mask * predicted_image + (1 - mask) * image
+        return torch.clamp(inpainted * 255, min=0, max=255)
+
+
+# Load the configuration file
+config = OmegaConf.create(safe_load(open("/content/lama/big-lama/config.yaml")))
+
+# Extract and modify training model configuration
+kwargs = dict(config.training_model)
+kwargs.pop("kind")
+kwargs["use_ddp"] = True
+
+# Enable JIT version of FourierUnit, required for export
+config.generator.resnet_conv_kwargs.use_jit = True
+
+# Fix the configuration by setting the weight to zero
+config.losses.resnet_pl.weight = 0
+
+# Load the model state
+state = torch.load("/content/lama/big-lama/models/best.ckpt", map_location="cpu")
+lama_dilated_model = DefaultInpaintingTrainingModule(config, **kwargs)
+lama_dilated_model.load_state_dict(state["state_dict"], strict=False)
+lama_dilated_model.on_load_checkpoint(state)
+lama_dilated_model.freeze()
+lama_dilated_model.eval()
+
+# Export the model
+exported_model = ExportLama()
+exported_model.register_module("model", lama_dilated_model)
+exported_model.eval()
+exported_model.to("cpu")
+
+# Export to ONNX format
+torch.onnx.export(
+    exported_model,
+    (
+        torch.rand(1, 3, 512, 512).type(torch.float32).to("cpu"),  # Change resolution here! If you get a tensor size mismatch, you need to specify correct padding (see FourierUnitJIT)
+        torch.rand(1, 1, 512, 512).type(torch.float32).to("cpu")
+    ),
+    "/content/lama_fp32.onnx",
+    input_names=["image", "mask"],
+    output_names=["output"],
+    dynamic_axes={
+        "image": {0: "batch"},
+        "mask": {0: "batch"},
+        "output": {0: "batch"}
+    },  # TODO: Adapt FourierUnit to support dynamic axes (see irfttn and rfft for correct padding)
+    export_params=True,
+    do_constant_folding=True,
+    opset_version=17,
+    verbose=False,
+)
+
+print("Lama Model exported to /content/lama_fp32.onnx (open file explorer to download)")
+
+
+import cv2
+import numpy as np
+import onnxruntime
+import torch
+import io
+import requests
+from PIL import Image
+
+def get_image(image):
+    if isinstance(image, Image.Image):
+        img = np.array(image)
+    elif isinstance(image, np.ndarray):
+        img = image.copy()
+    else:
+        raise Exception("Input image should be either PIL Image or numpy array!")
+
+    if img.ndim == 3:
+        img = np.transpose(img, (2, 0, 1))  # chw
+    elif img.ndim == 2:
+        img = img[np.newaxis, ...]
+
+    assert img.ndim == 3
+
+    img = img.astype(np.float32) / 255
+    return img
+
+
+def ceil_modulo(x, mod):
+    if x % mod == 0:
+        return x
+    return (x // mod + 1) * mod
+
+
+def scale_image(img, factor, interpolation=cv2.INTER_AREA):
+    if img.shape[0] == 1:
+        img = img[0]
+    else:
+        img = np.transpose(img, (1, 2, 0))
+
+    img = cv2.resize(img, dsize=None, fx=factor, fy=factor, interpolation=interpolation)
+
+    if img.ndim == 2:
+        img = img[None, ...]
+    else:
+        img = np.transpose(img, (2, 0, 1))
+    return img
+
+
+def pad_img_to_modulo(img, mod):
+    channels, height, width = img.shape
+    out_height = ceil_modulo(height, mod)
+    out_width = ceil_modulo(width, mod)
+    return np.pad(
+        img,
+        ((0, 0), (0, out_height - height), (0, out_width - width)),
+        mode="symmetric",
+    )
+
+
+def prepare_img_and_mask(image, mask, device, pad_out_to_modulo=8, scale_factor=None):
+    out_image = get_image(image)
+    out_mask = get_image(mask)
+
+    if scale_factor is not None:
+        out_image = scale_image(out_image, scale_factor)
+        out_mask = scale_image(out_mask, scale_factor, interpolation=cv2.INTER_NEAREST)
+
+    if pad_out_to_modulo is not None and pad_out_to_modulo > 1:
+        out_image = pad_img_to_modulo(out_image, pad_out_to_modulo)
+        out_mask = pad_img_to_modulo(out_mask, pad_out_to_modulo)
+
+    out_image = torch.from_numpy(out_image).unsqueeze(0).to(device)
+    out_mask = torch.from_numpy(out_mask).unsqueeze(0).to(device)
+
+    out_mask = (out_mask > 0) * 1
+
+    return out_image, out_mask
+
+def open_image(image):
+    if isinstance(image, str):
+      if image.startswith("http://") or image.startswith("https://"):
+        image = Image.open(io.BytesIO(requests.get(image).content))
+      else:
+        image = Image.open(image)
+    return image
+
+
+
+#@title predict with onnx model
+image_url = "https://huggingface.co/Carve/LaMa-ONNX/resolve/main/image.jpg" # @param {type:"string"}
+mask_url = "https://huggingface.co/Carve/LaMa-ONNX/resolve/main/mask.png" # @param {type:"string"}
+
+image = open_image(image_url).resize((512, 512))
+mask = open_image(mask_url).convert("L").resize((512, 512))
+
+image, mask = prepare_img_and_mask(image, mask, 'cpu')
+# Run the model
+outputs = model.run(None,
+                    {'image': image.numpy().astype(np.float32),
+                     'mask': mask.numpy().astype(np.float32)})
+
+output = outputs[0][0]
+# Postprocess the outputs
+output = output.transpose(1, 2, 0)
+output = output.astype(np.uint8)
+output = Image.fromarray(output)
+output
