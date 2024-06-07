@@ -181,3 +181,25 @@ output = Image.fromarray(output)
 output
 
 !pip3 install omegaconf webdataset pytorch_lightning pytorch_lightning kornia==0.5.0 onnx onnxruntime
+
+
+import os
+
+def delete_prefixed_files(directory, prefix="._"):
+    # 获取目录中的所有文件和文件夹
+    for root, dirs, files in os.walk(directory):
+        for file in files:
+            # 检查文件名前缀
+            if file.startswith(prefix):
+                file_path = os.path.join(root, file)
+                try:
+                    os.remove(file_path)
+                    print(f"Deleted: {file_path}")
+                except Exception as e:
+                    print(f"Failed to delete {file_path}: {e}")
+
+# 指定目标文件夹
+target_directory = "/path/to/your/folder"
+
+# 执行删除操作
+delete_prefixed_files(target_directory)
