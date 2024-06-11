@@ -1,205 +1,76 @@
+from abc import ABC, abstractmethod
+from guardrails.hub import CorrectLanguage
+from guardrails import Guard
 
-import torch
-from omegaconf import OmegaConf
-from yaml import safe_load
+class AbstractGuard(ABC):
+    @abstractmethod
+    def validate(self, text: str) -> bool:
+        pass
 
-from saicinpainting.training.trainers.default import (
-    DefaultInpaintingTrainingModule,
-)
+    @abstractmethod
+    def fix(self, text: str) -> str:
+        pass
 
+    @abstractmethod
+    def predict_model(self, input_text: str) -> str:
+        pass
 
-class ExportLama(torch.nn.Module):
-    def forward(self, image: torch.Tensor, mask: torch.Tensor):
-        masked_img = image * (1 - mask)
+    @abstractmethod
+    def create_response(self, prediction: str) -> str:
+        pass
 
-        if self.model.concat_mask:
-            masked_img = torch.cat([masked_img, mask], dim=1)
+class LanguageGuard(AbstractGuard):
+    def __init__(self, expected_language: str, threshold: float):
+        self.guard = Guard().use(
+            CorrectLanguage(expected_language_iso=expected_language, threshold=threshold, on_fail="fix")
+        )
 
-        predicted_image = self.model.generator(masked_img)
-        inpainted = mask * predicted_image + (1 - mask) * image
-        return torch.clamp(inpainted * 255, min=0, max=255)
+    def validate(self, text: str) -> bool:
+        try:
+            self.guard.validate(text)
+            return True
+        except Exception:
+            return False
 
+    def fix(self, text: str) -> str:
+        try:
+            fixed_output = self.guard.parse(llm_output=text)
+            return fixed_output
+        except Exception:
+            return text
 
-# Load the configuration file
-config = OmegaConf.create(safe_load(open("/content/lama/big-lama/config.yaml")))
+    def predict_model(self, input_text: str) -> str:
+        # 这里是一个模拟模型预测的示例
+        return f"Predicted output for: {input_text}"
 
-# Extract and modify training model configuration
-kwargs = dict(config.training_model)
-kwargs.pop("kind")
-kwargs["use_ddp"] = True
+    def create_response(self, prediction: str) -> str:
+        # 根据预测创建响应
+        return f"Response: {prediction}"
 
-# Enable JIT version of FourierUnit, required for export
-config.generator.resnet_conv_kwargs.use_jit = True
+class TextProcessor:
+    def __init__(self, guard: AbstractGuard):
+        self.guard = guard
 
-# Fix the configuration by setting the weight to zero
-config.losses.resnet_pl.weight = 0
+    def process_text(self, text: str) -> str:
+        if self.guard.validate(text):
+            prediction = self.guard.predict_model(text)
+            return self.guard.create_response(prediction)
+        else:
+            fixed_text = self.guard.fix(text)
+            prediction = self.guard.predict_model(fixed_text)
+            return self.guard.create_response(prediction)
 
-# Load the model state
-state = torch.load("/content/lama/big-lama/models/best.ckpt", map_location="cpu")
-lama_dilated_model = DefaultInpaintingTrainingModule(config, **kwargs)
-lama_dilated_model.load_state_dict(state["state_dict"], strict=False)
-lama_dilated_model.on_load_checkpoint(state)
-lama_dilated_model.freeze()
-lama_dilated_model.eval()
+# 使用ABC类的示例
+language_guard = LanguageGuard(expected_language="en", threshold=0.75)
+text_processor = TextProcessor(language_guard)
 
-# Export the model
-exported_model = ExportLama()
-exported_model.register_module("model", lama_dilated_model)
-exported_model.eval()
-exported_model.to("cpu")
+# Validate text
+print("Validation for 'Thank you':", text_processor.process_text("Thank you"))  # Validator passes
+print("Validation for 'Danke':", text_processor.process_text("Danke"))  # Validator fails and fixes
 
-# Export to ONNX format
-torch.onnx.export(
-    exported_model,
-    (
-        torch.rand(1, 3, 512, 512).type(torch.float32).to("cpu"),  # Change resolution here! If you get a tensor size mismatch, you need to specify correct padding (see FourierUnitJIT)
-        torch.rand(1, 1, 512, 512).type(torch.float32).to("cpu")
-    ),
-    "/content/lama_fp32.onnx",
-    input_names=["image", "mask"],
-    output_names=["output"],
-    dynamic_axes={
-        "image": {0: "batch"},
-        "mask": {0: "batch"},
-        "output": {0: "batch"}
-    },  # TODO: Adapt FourierUnit to support dynamic axes (see irfttn and rfft for correct padding)
-    export_params=True,
-    do_constant_folding=True,
-    opset_version=17,
-    verbose=False,
-)
+# Parse the text
+text = "我的邮箱地址"
+output = text_processor.process_text(text)
 
-print("Lama Model exported to /content/lama_fp32.onnx (open file explorer to download)")
-
-
-import cv2
-import numpy as np
-import onnxruntime
-import torch
-import io
-import requests
-from PIL import Image
-
-def get_image(image):
-    if isinstance(image, Image.Image):
-        img = np.array(image)
-    elif isinstance(image, np.ndarray):
-        img = image.copy()
-    else:
-        raise Exception("Input image should be either PIL Image or numpy array!")
-
-    if img.ndim == 3:
-        img = np.transpose(img, (2, 0, 1))  # chw
-    elif img.ndim == 2:
-        img = img[np.newaxis, ...]
-
-    assert img.ndim == 3
-
-    img = img.astype(np.float32) / 255
-    return img
-
-
-def ceil_modulo(x, mod):
-    if x % mod == 0:
-        return x
-    return (x // mod + 1) * mod
-
-
-def scale_image(img, factor, interpolation=cv2.INTER_AREA):
-    if img.shape[0] == 1:
-        img = img[0]
-    else:
-        img = np.transpose(img, (1, 2, 0))
-
-    img = cv2.resize(img, dsize=None, fx=factor, fy=factor, interpolation=interpolation)
-
-    if img.ndim == 2:
-        img = img[None, ...]
-    else:
-        img = np.transpose(img, (2, 0, 1))
-    return img
-
-
-def pad_img_to_modulo(img, mod):
-    channels, height, width = img.shape
-    out_height = ceil_modulo(height, mod)
-    out_width = ceil_modulo(width, mod)
-    return np.pad(
-        img,
-        ((0, 0), (0, out_height - height), (0, out_width - width)),
-        mode="symmetric",
-    )
-
-
-def prepare_img_and_mask(image, mask, device, pad_out_to_modulo=8, scale_factor=None):
-    out_image = get_image(image)
-    out_mask = get_image(mask)
-
-    if scale_factor is not None:
-        out_image = scale_image(out_image, scale_factor)
-        out_mask = scale_image(out_mask, scale_factor, interpolation=cv2.INTER_NEAREST)
-
-    if pad_out_to_modulo is not None and pad_out_to_modulo > 1:
-        out_image = pad_img_to_modulo(out_image, pad_out_to_modulo)
-        out_mask = pad_img_to_modulo(out_mask, pad_out_to_modulo)
-
-    out_image = torch.from_numpy(out_image).unsqueeze(0).to(device)
-    out_mask = torch.from_numpy(out_mask).unsqueeze(0).to(device)
-
-    out_mask = (out_mask > 0) * 1
-
-    return out_image, out_mask
-
-def open_image(image):
-    if isinstance(image, str):
-      if image.startswith("http://") or image.startswith("https://"):
-        image = Image.open(io.BytesIO(requests.get(image).content))
-      else:
-        image = Image.open(image)
-    return image
-
-
-
-#@title predict with onnx model
-image_url = "https://huggingface.co/Carve/LaMa-ONNX/resolve/main/image.jpg" # @param {type:"string"}
-mask_url = "https://huggingface.co/Carve/LaMa-ONNX/resolve/main/mask.png" # @param {type:"string"}
-
-image = open_image(image_url).resize((512, 512))
-mask = open_image(mask_url).convert("L").resize((512, 512))
-
-image, mask = prepare_img_and_mask(image, mask, 'cpu')
-# Run the model
-outputs = model.run(None,
-                    {'image': image.numpy().astype(np.float32),
-                     'mask': mask.numpy().astype(np.float32)})
-
-output = outputs[0][0]
-# Postprocess the outputs
-output = output.transpose(1, 2, 0)
-output = output.astype(np.uint8)
-output = Image.fromarray(output)
-output
-
-!pip3 install omegaconf webdataset pytorch_lightning pytorch_lightning kornia==0.5.0 onnx onnxruntime
-
-
-import os
-
-def delete_prefixed_files(directory, prefix="._"):
-    # 获取目录中的所有文件和文件夹
-    for root, dirs, files in os.walk(directory):
-        for file in files:
-            # 检查文件名前缀
-            if file.startswith(prefix):
-                file_path = os.path.join(root, file)
-                try:
-                    os.remove(file_path)
-                    print(f"Deleted: {file_path}")
-                except Exception as e:
-                    print(f"Failed to delete {file_path}: {e}")
-
-# 指定目标文件夹
-target_directory = "/path/to/your/folder"
-
-# 执行删除操作
-delete_prefixed_files(target_directory)
+# Print the output
+print("Parsed output:", output)
