@@ -1,76 +1,57 @@
-from abc import ABC, abstractmethod
-from guardrails.hub import CorrectLanguage
-from guardrails import Guard
+import torch
+from torchvision import models, datasets, transforms
 
-class AbstractGuard(ABC):
-    @abstractmethod
-    def validate(self, text: str) -> bool:
-        pass
+# 加载预训练的浮点模型
+float_model = models.resnet18(pretrained=True)
+float_model.eval()
 
-    @abstractmethod
-    def fix(self, text: str) -> str:
-        pass
+# 准备训练数据
+transform = transforms.Compose([
+    transforms.Resize(256),
+    transforms.CenterCrop(224),
+    transforms.ToTensor(),
+    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+])
 
-    @abstractmethod
-    def predict_model(self, input_text: str) -> str:
-        pass
+train_dataset = datasets.ImageFolder(root='path_to_train_data', transform=transform)
+train_dataloader = torch.utils.data.DataLoader(train_dataset, batch_size=32, shuffle=True)
 
-    @abstractmethod
-    def create_response(self, prediction: str) -> str:
-        pass
+# 使用部分训练数据进行校准
+calibration_data = []
+for i, (inputs, _) in enumerate(train_dataloader):
+    calibration_data.append(inputs)
+    if i >= 10:  # 使用前10个batch的数据进行校准
+        break
 
-class LanguageGuard(AbstractGuard):
-    def __init__(self, expected_language: str, threshold: float):
-        self.guard = Guard().use(
-            CorrectLanguage(expected_language_iso=expected_language, threshold=threshold, on_fail="fix")
-        )
+# 准备模型量化
+float_model.fuse_model()  # 对ResNet模型进行融合操作
+float_model.qconfig = torch.quantization.get_default_qconfig('fbgemm')
+torch.quantization.prepare(float_model, inplace=True)
 
-    def validate(self, text: str) -> bool:
-        try:
-            self.guard.validate(text)
-            return True
-        except Exception:
-            return False
+# 校准模型
+float_model.eval()
+with torch.no_grad():
+    for input in calibration_data:
+        float_model(input)
 
-    def fix(self, text: str) -> str:
-        try:
-            fixed_output = self.guard.parse(llm_output=text)
-            return fixed_output
-        except Exception:
-            return text
+# 量化模型
+torch.quantization.convert(float_model, inplace=True)
 
-    def predict_model(self, input_text: str) -> str:
-        # 这里是一个模拟模型预测的示例
-        return f"Predicted output for: {input_text}"
+# 保存量化后的模型
+torch.save(float_model.state_dict(), 'quantized_model.pth')
 
-    def create_response(self, prediction: str) -> str:
-        # 根据预测创建响应
-        return f"Response: {prediction}"
+# 检查权重数据类型
+for name, param in float_model.named_parameters():
+    print(f"{name}: {param.dtype}")
 
-class TextProcessor:
-    def __init__(self, guard: AbstractGuard):
-        self.guard = guard
+# 加载量化后的模型
+quantized_model = models.resnet18()  # 使用相同的模型结构
+quantized_model.fuse_model()  # 对ResNet模型进行融合操作
+quantized_model.qconfig = torch.quantization.get_default_qconfig('fbgemm')
+torch.quantization.prepare(quantized_model, inplace=True)
+torch.quantization.convert(quantized_model, inplace=True)
+quantized_model.load_state_dict(torch.load('quantized_model.pth'))
 
-    def process_text(self, text: str) -> str:
-        if self.guard.validate(text):
-            prediction = self.guard.predict_model(text)
-            return self.guard.create_response(prediction)
-        else:
-            fixed_text = self.guard.fix(text)
-            prediction = self.guard.predict_model(fixed_text)
-            return self.guard.create_response(prediction)
-
-# 使用ABC类的示例
-language_guard = LanguageGuard(expected_language="en", threshold=0.75)
-text_processor = TextProcessor(language_guard)
-
-# Validate text
-print("Validation for 'Thank you':", text_processor.process_text("Thank you"))  # Validator passes
-print("Validation for 'Danke':", text_processor.process_text("Danke"))  # Validator fails and fixes
-
-# Parse the text
-text = "我的邮箱地址"
-output = text_processor.process_text(text)
-
-# Print the output
-print("Parsed output:", output)
+# 检查加载后权重数据类型
+for name, param in quantized_model.named_parameters():
+    print(f"{name}: {param.dtype}")
