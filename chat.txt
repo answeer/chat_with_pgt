@@ -55,3 +55,9 @@ quantized_model.load_state_dict(torch.load('quantized_model.pth'))
 # 检查加载后权重数据类型
 for name, param in quantized_model.named_parameters():
     print(f"{name}: {param.dtype}")
+
+
+
+Working with you has been an enriching experience. Your insights and advice have helped me navigate many challenges, and I am deeply appreciative of your guidance. I have learned a great deal from you, and I am thankful for the collaborative spirit you bring to the team. Thank you for being such a supportive and knowledgeable colleague.
+
+
