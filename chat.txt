@@ -1,63 +1,43 @@
-import torch
-from torchvision import models, datasets, transforms
+import os
+from PIL import Image
 
-# 加载预训练的浮点模型
-float_model = models.resnet18(pretrained=True)
-float_model.eval()
+def process_images_in_folder(input_folder, output_folder):
+    # Ensure output folder exists
+    if not os.path.exists(output_folder):
+        os.makedirs(output_folder)
 
-# 准备训练数据
-transform = transforms.Compose([
-    transforms.Resize(256),
-    transforms.CenterCrop(224),
-    transforms.ToTensor(),
-    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-])
+    # Function to process image - replace this with your actual image processing algorithm
+    def dummy_image_processing(img):
+        # For demonstration purposes, this dummy algorithm just splits and merges the image
+        img1 = img.rotate(45)  # Rotate the image by 45 degrees
+        img2 = img.transpose(Image.FLIP_LEFT_RIGHT)  # Flip the image horizontally
+        return [img1, img2]
 
-train_dataset = datasets.ImageFolder(root='path_to_train_data', transform=transform)
-train_dataloader = torch.utils.data.DataLoader(train_dataset, batch_size=32, shuffle=True)
+    # Iterate over all files in the input folder
+    for filename in os.listdir(input_folder):
+        if filename.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp', '.tiff')):
+            file_path = os.path.join(input_folder, filename)
+            with Image.open(file_path) as img:
+                original_mode = img.mode
+                original_size = img.size
 
-# 使用部分训练数据进行校准
-calibration_data = []
-for i, (inputs, _) in enumerate(train_dataloader):
-    calibration_data.append(inputs)
-    if i >= 10:  # 使用前10个batch的数据进行校准
-        break
+                # Convert to RGB if the image is not in RGB mode
+                if original_mode != 'RGB':
+                    img = img.convert('RGB')
 
-# 准备模型量化
-float_model.fuse_model()  # 对ResNet模型进行融合操作
-float_model.qconfig = torch.quantization.get_default_qconfig('fbgemm')
-torch.quantization.prepare(float_model, inplace=True)
+                # Process the image using the provided algorithm
+                processed_images = dummy_image_processing(img)
 
-# 校准模型
-float_model.eval()
-with torch.no_grad():
-    for input in calibration_data:
-        float_model(input)
+                # Convert processed images back to original mode and size
+                processed_images = [im.convert(original_mode).resize(original_size) for im in processed_images]
 
-# 量化模型
-torch.quantization.convert(float_model, inplace=True)
+                # Save the processed images
+                for idx, processed_img in enumerate(processed_images):
+                    output_path = os.path.join(output_folder, f"{os.path.splitext(filename)[0]}_processed_{idx+1}.png")
+                    processed_img.save(output_path)
 
-# 保存量化后的模型
-torch.save(float_model.state_dict(), 'quantized_model.pth')
-
-# 检查权重数据类型
-for name, param in float_model.named_parameters():
-    print(f"{name}: {param.dtype}")
-
-# 加载量化后的模型
-quantized_model = models.resnet18()  # 使用相同的模型结构
-quantized_model.fuse_model()  # 对ResNet模型进行融合操作
-quantized_model.qconfig = torch.quantization.get_default_qconfig('fbgemm')
-torch.quantization.prepare(quantized_model, inplace=True)
-torch.quantization.convert(quantized_model, inplace=True)
-quantized_model.load_state_dict(torch.load('quantized_model.pth'))
-
-# 检查加载后权重数据类型
-for name, param in quantized_model.named_parameters():
-    print(f"{name}: {param.dtype}")
-
-
-
-Working with you has been an enriching experience. Your insights and advice have helped me navigate many challenges, and I am deeply appreciative of your guidance. I have learned a great deal from you, and I am thankful for the collaborative spirit you bring to the team. Thank you for being such a supportive and knowledgeable colleague.
-
+# Example usage
+input_folder = 'path_to_input_folder'
+output_folder = 'path_to_output_folder'
+process_images_in_folder(input_folder, output_folder)
 
