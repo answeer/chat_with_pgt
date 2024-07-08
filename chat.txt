@@ -1,13 +1,29 @@
-\subsection{Training Loss}
-The student is trained with a distillation loss over the soft target probabilities of the teacher:
-\[
-L_{\text{ce}} = \sum_i t_i \log(s_i)
-\]
-where \( t_i \) (resp. \( s_i \)) is a probability estimated by the teacher (resp. the student). This objective results in a rich training signal by leveraging the full teacher distribution. Following Hinton et al. [2015], we used a softmax-temperature:
-\[
-p_i = \frac{\exp(z_i / T)}{\sum_j \exp(z_j / T)}
-\]
-where \( T \) controls the smoothness of the output distribution and \( z_i \) is the model score for the class \( i \). The same temperature \( T \) is applied to the student and the teacher at training time, while at inference, \( T \) is set to 1 to recover a standard softmax.
+\textbf{Language Modeling Loss ($L_{mlm}$)}:
 
-The final training objective is a linear combination of the distillation loss \( L_{\text{ce}} \) with the supervised training loss, in our case the masked language modeling loss \( L_{\text{mlm}} \) [Devlin et al., 2018]. We found it beneficial to add a cosine embedding loss (\( L_{\text{cos}} \)) which will tend to align the directions of the student and teacher hidden states vectors.
-\]
+\[ L_{mlm} = -\sum_{i} \log P_{\text{student}}(w_i | w_{\text{context}}) \]
+
+where \(w_i\) is the masked word, \(w_{\text{context}}\) is its context, and \(P_{\text{student}}\) is the prediction probability by the student model.
+
+\textbf{Distillation Loss ($L_{ce}$)}:
+
+\[ L_{ce} = -\sum_{i} t_i \log(s_i) \]
+
+where \(t_i\) is the soft target probability from the teacher model, and \(s_i\) is the prediction probability by the student model.
+
+To smooth the output distribution, the softened softmax is used:
+
+\[ p_i = \frac{\exp(z_i / T)}{\sum_{j} \exp(z_j / T)} \]
+
+where \(T\) is the temperature parameter and \(z_i\) are the logits from the model.
+
+\textbf{Cosine-Distance Loss ($L_{cos}$)}:
+
+\[ L_{cos} = 1 - \cos(h_{\text{teacher}}, h_{\text{student}}) \]
+
+where \(h_{\text{teacher}}\) and \(h_{\text{student}}\) are the hidden state vectors from the teacher and student models, respectively, and \(\cos\) represents the cosine similarity between the two vectors.
+
+The final training objective is a linear combination of these three loss functions:
+
+\[ L = \alpha L_{mlm} + \beta L_{ce} + \gamma L_{cos} \]
+
+where \(\alpha\), \(\beta\), and \(\gamma\) are weight coefficients used to balance the contributions of the three loss functions in the total loss.
