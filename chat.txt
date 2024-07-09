@@ -1,29 +1,25 @@
-\textbf{Language Modeling Loss ($L_{mlm}$)}:
+Core Components
+Transformer: The transformer architecture is the foundation of BERT. It uses self-attention mechanisms to process and encode input sequences. Transformers are made up of layers that include multi-head self-attention mechanisms and feedforward neural networks.
 
-\[ L_{mlm} = -\sum_{i} \log P_{\text{student}}(w_i | w_{\text{context}}) \]
+Bidirectionality: Unlike traditional language models that process text either from left-to-right or right-to-left, BERT processes text in both directions simultaneously. This bidirectionality allows BERT to understand the context of a word based on its surroundings, improving its comprehension of the text.
 
-where \(w_i\) is the masked word, \(w_{\text{context}}\) is its context, and \(P_{\text{student}}\) is the prediction probability by the student model.
+Encoder-Only: BERT uses only the encoder part of the transformer architecture. While transformers consist of both an encoder and a decoder, BERT focuses solely on the encoder to generate representations of text.
 
-\textbf{Distillation Loss ($L_{ce}$)}:
+Architecture Details
+Input Representation: BERT's input representation is a combination of token embeddings, segment embeddings, and position embeddings.
 
-\[ L_{ce} = -\sum_{i} t_i \log(s_i) \]
+Token Embeddings: These are the embeddings of the individual words or subwords in the input text.
+Segment Embeddings: These help BERT distinguish between different segments in the input text, such as different sentences.
+Position Embeddings: These indicate the position of each token in the input sequence, allowing the model to understand the order of the words.
+Layers: BERT consists of multiple layers of transformers. The base version (BERT-base) has 12 layers, while the larger version (BERT-large) has 24 layers.
 
-where \(t_i\) is the soft target probability from the teacher model, and \(s_i\) is the prediction probability by the student model.
+Self-Attention Mechanism: Each layer includes a multi-head self-attention mechanism that allows the model to focus on different parts of the input sequence simultaneously. This mechanism helps the model understand relationships between words at different positions in the sequence.
 
-To smooth the output distribution, the softened softmax is used:
+Feedforward Neural Networks: Each layer also includes feedforward neural networks that process the output of the self-attention mechanism.
 
-\[ p_i = \frac{\exp(z_i / T)}{\sum_{j} \exp(z_j / T)} \]
+Pre-training Objectives: BERT is pre-trained using two main objectives:
 
-where \(T\) is the temperature parameter and \(z_i\) are the logits from the model.
-
-\textbf{Cosine-Distance Loss ($L_{cos}$)}:
-
-\[ L_{cos} = 1 - \cos(h_{\text{teacher}}, h_{\text{student}}) \]
-
-where \(h_{\text{teacher}}\) and \(h_{\text{student}}\) are the hidden state vectors from the teacher and student models, respectively, and \(\cos\) represents the cosine similarity between the two vectors.
-
-The final training objective is a linear combination of these three loss functions:
-
-\[ L = \alpha L_{mlm} + \beta L_{ce} + \gamma L_{cos} \]
-
-where \(\alpha\), \(\beta\), and \(\gamma\) are weight coefficients used to balance the contributions of the three loss functions in the total loss.
+Masked Language Model (MLM): During training, some percentage of the input tokens are masked, and the model is tasked with predicting the original tokens based on the context provided by the unmasked tokens.
+Next Sentence Prediction (NSP): The model is trained to predict whether two sentences appear consecutively in the original text. This helps BERT understand sentence relationships and coherence.
+Fine-Tuning
+After pre-training, BERT can be fine-tuned for specific downstream tasks, such as question answering, sentiment analysis, and named entity recognition. Fine-tuning involves training the pre-trained BERT model on a smaller dataset specific to the task, adjusting the weights slightly to improve performance on the target task.
