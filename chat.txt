@@ -66,3 +66,5 @@ Versatility:
 
 DistilBERT can be fine-tuned for a wide range of natural language processing tasks, similar to BERT. This includes tasks like text classification, named entity recognition, question answering, and more.
 In summary, DistilBERT offers a compelling trade-off between performance and efficiency, retaining much of BERT's capabilities while being faster and more resource-efficient. This makes it an attractive option for various applications, especially those requiring real-time processing or operating under resource constraints.
+
+In summary, DistilBERT offers a compelling trade-off between performance and efficiency, retaining much of BERT's capabilities while being faster and more resource-efficient. This makes it an attractive option for various applications, especially those requiring real-time processing or operating under resource constraints.
