@@ -9,3 +9,29 @@
                 exif = {TAGS.get(tag,tag): value for tag, value in exif_data.items()}
                 create_date = exif.get("DateTimeOriginal",None)
                 modification_date = exif.get("DateTime",None)
+from datetime import datetime
+
+def calculate_date_interval(date1, date2):
+    """
+    计算两个日期之间的间隔天数。
+
+    参数:
+    date1 (str): 第一个日期，格式为 YYYY-MM-DD。
+    date2 (str): 第二个日期，格式为 YYYY-MM-DD。
+
+    返回:
+    int: 两个日期之间的间隔天数。
+    """
+    # 将字符串日期转换为 datetime 对象
+    date_format = "%Y-%m-%d"
+    d1 = datetime.strptime(date1, date_format)
+    d2 = datetime.strptime(date2, date_format)
+
+    # 计算日期间隔
+    interval = abs((d2 - d1).days)
+    return interval
+
+# 示例用法
+date1 = "2023-07-01"
+date2 = "2023-07-10"
+print(calculate_date_interval(date1, date2))  # 输出: 9
