@@ -1,14 +1,52 @@
-input_validator:
-  payload_check:
-    mandate_keys:
-      - clientData.clientRefNumber:
-        possible_val:
-          - null
-          - 123546
-      - clientData.country:
-        possible_val:
-          - IN
-          - MY
-      - clientData.consumer:
-        possible_val:
-          - cash
+import matplotlib.pyplot as plt
+from transformers import BertTokenizer, BertForSequenceClassification
+from transformers_interpret import SequenceClassificationExplainer
+import torch
+
+# 加载模型和 tokenizer
+model_name = "bert-base-uncased"
+tokenizer = BertTokenizer.from_pretrained(model_name)
+model = BertForSequenceClassification.from_pretrained(model_name)
+
+# 创建 SequenceClassificationExplainer 对象
+cls_explainer = SequenceClassificationExplainer(model, tokenizer)
+
+def get_classification(text):
+    inputs = tokenizer(text, return_tensors="pt")
+    outputs = model(**inputs)
+    logits = outputs.logits
+    predicted_class = torch.argmax(logits, dim=1).item()
+    return predicted_class
+
+# 要分析的文本
+text = "I love using transformers interpret for model explanation."
+
+# 获取初始分类结果
+initial_class = get_classification(text)
+print(f"Initial classification: {initial_class}")
+
+# 获取解释并删除最重要的单词
+while True:
+    word_attributions = cls_explainer(text)
+    print(f"Current text: {text}")
+    print(f"Word attributions: {word_attributions}")
+    
+    # 删除最重要的单词
+    if word_attributions:
+        most_important_word = word_attributions[0][0]
+        text = text.replace(most_important_word, "", 1).strip()
+        print(f"Removing word: {most_important_word}")
+    else:
+        break
+
+    # 获取新的分类结果
+    new_class = get_classification(text)
+    print(f"New classification: {new_class}")
+
+    # 如果分类结果发生改变，则停止
+    if new_class != initial_class:
+        print("Classification changed.")
+        break
+
+# 可视化最终文本的解释结果
+cls_explainer.visualize(text)
