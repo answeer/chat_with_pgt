@@ -1,31 +1,39 @@
-    def predict(self,data):
-        scripts = []
-        scores = []
-        fix_value = data
-        if "HTML" in self.languages['languages']:
-            clean_output = bleach.clean(data,strip=True)
-            if clean_output != data:
-                scripts.append('HTML')
-                scores.append(0)
-                if self._kwargs['sanitize']:
-                    data = clean_output
-        languages = self.transformer_pipe(data)
-        for language in languages:
-            language_name = language["label"]
-            score = round(language["score"], 2)
-            if score < self.score_thresh or language_name not in self.languages['languages']:
-                continue
+import bleach
+import numpy as np
 
-            if self._kwargs['sanitize']:
-                fix_value = self.sanitized_text(data,language_name)
+def predict(self, data):
+    detected_languages = []
+    scores = []
+    sanitized_data = data
+    
+    if "HTML" in self.languages['languages']:
+        cleaned_data = bleach.clean(data, strip=True)
+        if cleaned_data != data:
+            detected_languages.append('HTML')
+            scores.append(0)
+            if self._kwargs.get('sanitize'):
+                data = cleaned_data
+    
+    languages = self.transformer_pipe(data)
+    
+    for language in languages:
+        language_name = language["label"]
+        score = round(language["score"], 2)
+        
+        if score >= self.score_thresh and language_name in self.languages['languages']:
+            if self._kwargs.get('sanitize'):
+                sanitized_data = self.sanitized_text(data, language_name)
             else:
-                fix_value = data
-            scripts.append(language_name)
+                sanitized_data = data
+            
+            detected_languages.append(language_name)
             scores.append(1 - score)
-        if len(scripts) != 0:
-            predict = "Found executavle scripts: {}.".format(', '.join(scripts))
-            predict_score = np.mean(scores)
-        else:
-            predict = "No executable scripts found."
-            predict_score = 1
-        return predict, predict_score, fix_value
+    
+    if detected_languages:
+        prediction = f"Found executable scripts: {', '.join(detected_languages)}."
+        prediction_score = np.mean(scores)
+    else:
+        prediction = "No executable scripts found."
+        prediction_score = 1
+    
+    return prediction, prediction_score, sanitized_data
