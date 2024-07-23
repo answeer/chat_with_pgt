@@ -1,39 +1,68 @@
-import bleach
-import numpy as np
+from transformers import pipeline
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from llm_sanitation.utils.models import *
+from time import time
 
-def predict(self, data):
-    detected_languages = []
-    scores = []
-    sanitized_data = data
+def timer(func):
+    def wrapper(*args, **kwargs):
+        start_time = time()
+        result = func(*args, **kwargs)
+        end_time = time()
+        print(f"Function {func.__name__} took: {end_time - start_time} seconds")
+        return result
+    return wrapper
+
+@dataclass
+class Scanner(ABC):
+    score_thresh = 1
+    scanner_nm = None
+    coll_response = []
+
+    def __init__(self, *args, **kwargs):
+        self._kwargs = kwargs
+
+        # Create response template
+        self.response_template()
+
+        scanner_nm, threshold = args
+        self.scanner_nm = scanner_nm
+        self.score_thresh = threshold
+        self.response["scanner"] = self.scanner_nm
+
+    def response_template(self):
+        self.response = {
+        "scanner" : None,
+        "sanitized_text" : None,
+        "prediction" : {},
+        "score" : None,
+        "kill" : None,
+    }
+
+    def collect_response(self):
+        self.coll_response.append(self.response)
+
+    def score(self):
+        if self.response["score"] is not None and self.response["score"] < self.score_thresh:
+            self.response["kill"] = True
+        else:
+            self.response["kill"] = False
+
+    def format_response(self):
+        raise NotImplementedError("Format Response Not implemented in the scanner")
+
+    def get_args(self):
+        return self._kwargs
+
+    def predict(self, data):
+        transformer_pipe = pipeline(models_path[self.scanner_nm][1], model=models_path[self.scanner_nm][0])
+        pred = transformer_pipe(data, **self._kwargs)
+        return pred
     
-    if "HTML" in self.languages['languages']:
-        cleaned_data = bleach.clean(data, strip=True)
-        if cleaned_data != data:
-            detected_languages.append('HTML')
-            scores.append(0)
-            if self._kwargs.get('sanitize'):
-                data = cleaned_data
-    
-    languages = self.transformer_pipe(data)
-    
-    for language in languages:
-        language_name = language["label"]
-        score = round(language["score"], 2)
-        
-        if score >= self.score_thresh and language_name in self.languages['languages']:
-            if self._kwargs.get('sanitize'):
-                sanitized_data = self.sanitized_text(data, language_name)
-            else:
-                sanitized_data = data
-            
-            detected_languages.append(language_name)
-            scores.append(1 - score)
-    
-    if detected_languages:
-        prediction = f"Found executable scripts: {', '.join(detected_languages)}."
-        prediction_score = np.mean(scores)
-    else:
-        prediction = "No executable scripts found."
-        prediction_score = 1
-    
-    return prediction, prediction_score, sanitized_data
+    @timer
+    def validate(self, data):
+        self.pred = self.predict(data)
+        self.format_response()
+        self.score()
+        self.collect_response()
+        return self.response
