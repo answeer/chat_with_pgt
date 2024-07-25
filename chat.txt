@@ -1,28 +1,19 @@
 import fitz  # PyMuPDF
 
-def check_embedded_files(pdf_path):
-    # 打开PDF文件
+def check_attachments(pdf_path):
     document = fitz.open(pdf_path)
-    
-    # 检查是否存在嵌入文件
-    embedded_files = []
-    for i in range(len(document)):
-        page = document[i]
-        annotations = page.annots()
-        if annotations:
-            for annot in annotations:
-                if annot.type[0] == 21:  # 21 表示文件附件注释
-                    embedded_files.append(annot.file)
-    
-    return embedded_files
+    has_attachments = False
+    for page_num in range(len(document)):
+        page = document[page_num]
+        if page.attachment_count() > 0:
+            has_attachments = True
+            break
+    document.close()
+    return has_attachments
 
-# 指定PDF文件路径
-pdf_path = 'example.pdf'
-
-# 检查PDF文件中是否有嵌入文件
-embedded_files = check_embedded_files(pdf_path)
-
-if embedded_files:
-    print(f"PDF 文件中有嵌入文件: {embedded_files}")
+# 示例用法
+pdf_path = "example.pdf"
+if check_attachments(pdf_path):
+    print("PDF文件中有附件。")
 else:
-    print("PDF 文件中没有嵌入文件")
+    print("PDF文件中没有附件。")
