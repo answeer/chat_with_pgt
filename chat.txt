@@ -1,19 +1,45 @@
-import fitz  # PyMuPDF
+import hashlib
 
-def check_attachments(pdf_path):
-    document = fitz.open(pdf_path)
-    has_attachments = False
-    for page_num in range(len(document)):
-        page = document[page_num]
-        if page.attachment_count() > 0:
-            has_attachments = True
-            break
-    document.close()
-    return has_attachments
+def calculate_file_hash(file_path, hash_type='sha256'):
+    """计算文件的哈希值
 
-# 示例用法
-pdf_path = "example.pdf"
-if check_attachments(pdf_path):
-    print("PDF文件中有附件。")
+    参数:
+    - file_path: 文件路径
+    - hash_type: 哈希算法（'md5', 'sha1', 'sha256'等）
+
+    返回:
+    - 文件的哈希值
+    """
+    hash_func = getattr(hashlib, hash_type)()
+
+    with open(file_path, 'rb') as f:
+        while chunk := f.read(8192):
+            hash_func.update(chunk)
+
+    return hash_func.hexdigest()
+
+# 示例使用
+file_path = 'example.txt'
+expected_hash = 'your_expected_hash_value'
+actual_hash = calculate_file_hash(file_path)
+
+if actual_hash == expected_hash:
+    print("文件完整性检查通过")
 else:
-    print("PDF文件中没有附件。")
+    print("文件可能已被篡改")
+
+
+import filecmp
+
+def compare_files(file_path1, file_path2):
+    """比较两个文件是否相同"""
+    return filecmp.cmp(file_path1, file_path2, shallow=False)
+
+# 示例使用
+file_path1 = 'example.txt'
+file_path2 = 'example_backup.txt'
+
+if compare_files(file_path1, file_path2):
+    print("两个文件相同，文件完整性检查通过")
+else:
+    print("文件可能已被篡改")
