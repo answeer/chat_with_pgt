@@ -18,28 +18,52 @@ def calculate_file_hash(file_path, hash_type='sha256'):
 
     return hash_func.hexdigest()
 
+import hashlib
+import filecmp
+import os
+
+def check_file_integrity(file_path, reference, hash_type='sha256'):
+    """
+    检查文件完整性
+
+    参数:
+    - file_path: 待检查文件的路径
+    - reference: 参考值，可以是哈希值字符串或另一个文件的路径
+    - hash_type: 如果提供的是哈希值，使用的哈希算法（默认 'sha256'）
+
+    返回:
+    - True 如果文件完整性检查通过，否则 False
+    """
+
+    # 如果参考值是一个文件路径
+    if os.path.isfile(reference):
+        # 使用 filecmp 比较两个文件
+        return filecmp.cmp(file_path, reference, shallow=False)
+
+    else:
+        # 否则，假定参考值是一个哈希值，使用 hashlib 计算文件的哈希值
+        actual_hash = calculate_file_hash(file_path, hash_type)
+        return actual_hash == reference
+
+def calculate_file_hash(file_path, hash_type='sha256'):
+    """计算文件的哈希值"""
+    hash_func = getattr(hashlib, hash_type)()
+
+    with open(file_path, 'rb') as f:
+        while chunk := f.read(8192):
+            hash_func.update(chunk)
+
+    return hash_func.hexdigest()
+
 # 示例使用
 file_path = 'example.txt'
-expected_hash = 'your_expected_hash_value'
-actual_hash = calculate_file_hash(file_path)
 
-if actual_hash == expected_hash:
-    print("文件完整性检查通过")
-else:
-    print("文件可能已被篡改")
+# 比较两个文件
+reference_file = 'example_backup.txt'
+result = check_file_integrity(file_path, reference_file)
+print("文件比较结果:", "通过" if result else "不通过")
 
-
-import filecmp
-
-def compare_files(file_path1, file_path2):
-    """比较两个文件是否相同"""
-    return filecmp.cmp(file_path1, file_path2, shallow=False)
-
-# 示例使用
-file_path1 = 'example.txt'
-file_path2 = 'example_backup.txt'
-
-if compare_files(file_path1, file_path2):
-    print("两个文件相同，文件完整性检查通过")
-else:
-    print("文件可能已被篡改")
+# 检查哈希值
+reference_hash = 'your_expected_hash_value'
+result = check_file_integrity(file_path, reference_hash, hash_type='sha256')
+print("哈希值比较结果:", "通过" if result else "不通过")
