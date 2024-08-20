@@ -1,124 +1,82 @@
-class EditDate(Scanner):
-    """
-    A class to check for potential tampering based on the creation and modification dates in document or image metadata.
+# encryption detector
+import os
+import fitz
+import zipfile
+import py7zr
+import msoffcrypto
+from llm_sanitation.scanners.scanner_base import Scanner
 
-    This class extends the `Scanner` base class and provides functionality to analyze the metadata of files (PDFs, images)
-    to determine if the file has been modified beyond a certain date interval from its creation.
 
-    Attributes:
-        date_interval (int): The maximum number of days allowed between the creation and modification dates.
-        
-    Methods:
-        modification_date_checker(created_date, modified_date):
-            Validates the creation and modification dates to check for potential tampering.
-
-        predict(file_path):
-            Analyzes the file to determine if it has been tampered with based on its metadata.
-        
-        format_response():
-            Formats the prediction response to include tampering details and the corresponding score.
-    """
+class EncryptionDetector(Scanner):
 
     def __init__(self, **kwargs):
-        """
-        Initializes the EditDate instance with the specified date interval.
+        super().__init__("encryption_detector", 1)
 
-        Args:
-            **kwargs: Keyword arguments including:
-                - "date_interval" (int): The maximum allowed interval (in days) between creation 
-                  and modification dates to consider a file untampered.
-        """
-        self.date_interval = kwargs["date_interval"]
-        super().__init__("edit_date", 0.5, date_interval=self.date_interval)
+    def get_extn(self, path):
+        return os.path.split(path)[-1].split(".")[-1].lower()
 
-    def modification_date_checker(self, created_date, modified_date):
-        """
-        Validates the creation and modification dates in the file metadata to determine potential tampering.
+    def is_pwd_pdf(self, file_path):
+        try:
+            doc = fitz.open(file_path, filetype="pdf")
+            if doc.needs_pass:
+                return True
+            else:
+                return False
+        except Exception as e:
+            print("Error occured: {}".format(e))
 
-        This method checks if the file has been edited based on the difference between the creation 
-        and modification dates. It flags files as potentially tampered if the modification date 
-        exceeds the allowed interval.
+    def is_pwd_msdoc(self, file_path):
+        try:
+            with open(file_path, "rb") as stream:
+                ms_file = msoffcrypto.OfficeFile(stream)
+                return ms_file.is_encrypted()
+        except Exception as e:
+            print("Error occured: {}".format(e))
 
-        Args:
-            created_date (datetime or None): The creation date of the file.
-            modified_date (datetime or None): The modification date of the file.
+    def is_pwd_7z(self, file_path):
+        with py7zr.SevenZipFile(file_path, "r") as archive:
+            try:
+                archive.extractall()
+                return False
+            except Exception as e:
+                if type(e) == py7zr.exceptions.PasswordRequired:
+                    return True
+                else:
+                    print("Error occured: {}".format(e))
 
-        Returns:
-            tuple: A tuple containing a tampering message and a score (1 for untampered, 0 for tampered).
-        """
-        if created_date is None and modified_date is None:
-            tampered = "Date details are not available for both creation date and modification date."
-            score = 0
-        elif created_date is None and modified_date is not None:
-            tampered = "Date details are not available for creation date."
-            score = 0
-        elif created_date is not None and modified_date is None:
-            tampered = "Date details are not available for modification date."
-            score = 1
-        elif (
-            created_date is not None
-            and modified_date is not None
-            and abs((modified_date - created_date)).days > self.date_interval
-        ):
-            tampered = (
-                f"Potentially tampered since {abs((modified_date - created_date)).days} days "
-                f"have passed since the modification date compared to the creation date, exceeding "
-                f"the maximum limit of {self.date_interval} days."
-            )
-            score = 0
-        else:
-            tampered = "Potentially not tampered."
-            score = 1
-        return tampered, score
+    def is_pwd_zip(self, file_path):
+        try:
+            zf = zipfile.ZipFile(file_path)
+            zf.testzip()
+            return False
+        except RuntimeError as e:
+            if "encrypted" in str(e):
+                return True
+            else:
+                print("Error occured: {}".format(e))
 
     def predict(self, file_path):
-        """
-        Analyzes a file to check for potential tampering based on its creation and modification dates.
 
-        This method reads the metadata from a PDF or image file and uses the creation and modification 
-        dates to determine if the file has been edited within the allowed date interval.
+        extn = self.get_extn(file_path)
+        is_protected = False
 
-        Args:
-            file_path (str): The path to the file to be analyzed.
+        if extn == "pdf":
+            is_protected = self.is_pwd_pdf(file_path)
 
-        Returns:
-            tuple: A tuple containing a tampering message and a score (1 for untampered, 0 for tampered).
-        """
-        software_tampering = None
-        score = 0
-        file_type = file_path.split(".")[-1].lower()
+        elif extn in ["xlsx", "xls", "doc", "docx"]:
+            is_protected = self.is_pwd_msdoc(file_path)
 
-        try:
-            if file_type == "pdf":
-                self.reader = PdfReader(file_path)
-                create_date = self.reader.metadata.creation_date
-                modification_date = self.reader.metadata.modification_date
-            else:
-                image = Image.open(file_path)
-                exif_data = image.getexif()
-                if exif_data is not None:
-                    exif = {TAGS.get(tag, tag): value for tag, value in exif_data.items()}
-                    create_date = exif.get("DateTimeOriginal", None)
-                    modification_date = exif.get("DateTime", None)
-                if create_date is not None:
-                    create_date = datetime.strptime(create_date, "%Y:%m:%d %H:%M:%S")
-                if modification_date is not None:
-                    modification_date = datetime.strptime(
-                        modification_date, "%Y:%m:%d %H:%M:%S"
-                    )
-            software_tampering, score = self.modification_date_checker(
-                create_date, modification_date
-            )
-        except Exception as e:
-            LogUtil.log(LogType.ERROR, LogLevel.ERROR, e)
-        return software_tampering, score
+        elif extn == "7z":
+            is_protected = self.is_pwd_7z(file_path)
+
+        elif extn == "zip":
+            is_protected = self.is_pwd_zip(file_path)
+
+        else:
+            print("Unsupported format {}".format(extn))
+
+        return {"is_protected": is_protected, "score": 0 if is_protected else 1}
 
     def format_response(self):
-        """
-        Formats the prediction response to include tampering details and the corresponding score.
-
-        This method modifies the response dictionary to include details of any detected tampering 
-        under the "edit_date" key and the corresponding score under the "score" key.
-        """
-        self.response["prediction"]["edit_date"] = self.pred[0]
-        self.response["score"] = self.pred[1]
+        self.response["prediction"]["is_protected"] = self.pred["is_protected"]
+        self.response["score"] = self.pred["score"]
