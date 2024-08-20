@@ -18,61 +18,66 @@ from llm_sanitation.scanners.bounding import (
     TokenLimit
 )
 
-# 定义扫描器映射
-def get_scanner_mapping():
-    return {
-        "binning_transformer": BinTransform,
-        "blank_page_check": BlankPageCheck,
-        "blurness_check": BlurnessCheck,
-        "editdate_check": EditDate,
-        "encryption_detector": EncryptionDetector,
-        "executable_scripts": ExecutableScript,
-        "file_format_check": FormatCheck,
-        "file_page_check": PageCount,
-        "image_dpi_check": ImageDPICheck,
-        "image_size_check": ImageSizeCheck,
-        "image_memory_check": ImageMemoryCheck,
-        "pinned_pdf_check": PinnedFile,
-        "profanity_check": ProfanityCheck,
-        "sanctioned_entity": SanctionedEntities,
-        "software_check": SoftwareCheck,
-        "text_length_check": TextLength,
-        "token_limit": TokenLimit
-    }
+class ScannerPipeline:
+    def __init__(self, input_payloads, input_image):
+        self.input_payloads = input_payloads
+        self.input_image = input_image
+        self.scanner_mapping = self.get_scanner_mapping()
+        self.all_responses = {}
 
-# 初始化扫描器对象
-def initialize_scanner(scanner_name, conditions):
-    scanner_mapping = get_scanner_mapping()
-    if scanner_name in scanner_mapping:
-        return scanner_mapping[scanner_name](**conditions)
-    else:
-        raise ValueError(f"Scanner '{scanner_name}' not found in mapping.")
+    def get_scanner_mapping(self):
+        """返回扫描器名称到类的映射"""
+        return {
+            "binning_transformer": BinTransform,
+            "blank_page_check": BlankPageCheck,
+            "blurness_check": BlurnessCheck,
+            "editdate_check": EditDate,
+            "encryption_detector": EncryptionDetector,
+            "executable_scripts": ExecutableScript,
+            "file_format_check": FormatCheck,
+            "file_page_check": PageCount,
+            "image_dpi_check": ImageDPICheck,
+            "image_size_check": ImageSizeCheck,
+            "image_memory_check": ImageMemoryCheck,
+            "pinned_pdf_check": PinnedFile,
+            "profanity_check": ProfanityCheck,
+            "sanctioned_entity": SanctionedEntities,
+            "software_check": SoftwareCheck,
+            "text_length_check": TextLength,
+            "token_limit": TokenLimit
+        }
 
-# 执行扫描操作
-def execute_scanner(scanner_obj, input_image):
-    scanner_obj.validate(input_image)
-    return scanner_obj.response
+    def initialize_scanner(self, scanner_name, conditions):
+        """初始化扫描器对象"""
+        if scanner_name in self.scanner_mapping:
+            return self.scanner_mapping[scanner_name](**conditions)
+        else:
+            raise ValueError(f"Scanner '{scanner_name}' not found in mapping.")
 
-# 主处理流程：串联多个扫描器
-def main_pipeline(input_payloads, input_image):
-    all_responses = {}
+    def execute_scanner(self, scanner_obj):
+        """执行扫描操作并返回响应"""
+        scanner_obj.validate(self.input_image)
+        return scanner_obj.response
 
-    for payload in input_payloads:
-        scanner_name = payload['scanner_nm']
-        conditions = payload['conditions']
+    def run_pipeline(self):
+        """运行整个扫描器管道"""
+        for payload in self.input_payloads:
+            scanner_name = payload['scanner_nm']
+            conditions = payload['conditions']
 
-        # 初始化扫描器
-        scanner_obj = initialize_scanner(scanner_name, conditions)
-        
-        # 执行扫描并获取结果
-        response = execute_scanner(scanner_obj, input_image)
-        
-        # 将结果存储在字典中
-        all_responses[scanner_name] = response
-    
-    # 输出所有扫描器的结果
-    for scanner_name, response in all_responses.items():
-        print(f"Results from {scanner_name}: {response}")
+            # 初始化并执行扫描器
+            scanner_obj = self.initialize_scanner(scanner_name, conditions)
+            response = self.execute_scanner(scanner_obj)
+            
+            # 保存响应
+            self.all_responses[scanner_name] = response
+
+        return self.all_responses
+
+    def print_responses(self):
+        """打印所有扫描器的响应"""
+        for scanner_name, response in self.all_responses.items():
+            print(f"Results from {scanner_name}: {response}")
 
 if __name__ == "__main__":
     # 示例输入：包含多个扫描器
@@ -92,5 +97,7 @@ if __name__ == "__main__":
     ]
     input_image = r"llm_sanitation\scanners\bounding\image_size_check\tests\image_size_check_test.jpg"
     
-    # 运行主处理流程
-    main_pipeline(input_payloads, input_image)
+    # 创建并运行扫描器管道
+    pipeline = ScannerPipeline(input_payloads, input_image)
+    responses = pipeline.run_pipeline()
+    pipeline.print_responses()
