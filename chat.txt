@@ -1,26 +1,67 @@
-from llm_sanitation.scanners.scanner_base import Scanner
-from llm_sanitation.utils.models import *
-from llm_sanitation.utils.common import read_config
-
-
 class BinTransform(Scanner):
+    """
+    A class for performing bin-based categorization of values.
+
+    This class extends the `Scanner` base class to categorize input values based on predefined ranges. 
+    It assigns a category to the value if it falls within any of the specified ranges, and returns 
+    the default category if no match is found.
+
+    Attributes:
+        default_catagory (str): The default category to return if no match is found.
+        catagories (list): A list of dictionaries where each dictionary defines a category with its range.
+
+    Methods:
+        predict(value):
+            Determines the category of the given value based on the predefined ranges.
+        
+        format_response():
+            Updates the response dictionary with the predicted category and sets the score to None.
+    """
 
     def __init__(self, **kwargs):
+        """
+        Initializes the BinTransform instance with specified categories and default category.
+
+        Args:
+            **kwargs: Keyword arguments including:
+                - "default" (str): The default category.
+                - "catagories" (list): A list of category dictionaries, each containing:
+                    - "name" (str): The name of the category.
+                    - "range" (tuple): A tuple specifying the inclusive range of values for the category.
+        """
         self.default_catagory = kwargs["default"]
         self.catagories = kwargs["catagories"]
-        super().__init__("bin_transform", None, catagories= kwargs["catagories"],
-                                                default_catagory=kwargs["default"])
+        super().__init__("bin_transform", None, catagories=kwargs["catagories"],
+                         default_catagory=kwargs["default"])
 
     def predict(self, value):
+        """
+        Predicts the category of the given value based on predefined ranges.
+
+        Args:
+            value (float or int): The value to categorize.
+
+        Returns:
+            str: The name of the category that the value falls into, or the default category if no match is found.
+
+        Raises:
+            Exception: If an error occurs while processing the value.
+        """
         try:
             for catagory in self._kwargs["catagories"]:
                 lower, upper = catagory["range"]
                 if lower <= value <= upper:
                     return catagory["name"]
         except Exception as e:
-            print("Error occured: {}".format(e))
+            print("Error occurred: {}".format(e))
         return self._kwargs["default_catagory"]
 
     def format_response(self):
+        """
+        Updates the response dictionary with the predicted category and sets the score to None.
+
+        This method modifies the response dictionary to include the predicted category under the 
+        "prediction" key and sets the "score" to None.
+        """
         self.response["prediction"]["catagory"] = self.pred
         self.response["score"] = None
