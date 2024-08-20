@@ -1,35 +1,76 @@
-from llm_sanitation.scanners.bounding import *
+from llm_sanitation.scanners.bounding import (
+    BinTransform,
+    BlankPageCheck,
+    BlurnessCheck,
+    EditDate,
+    EncryptionDetector,
+    ExecutableScript,
+    FormatCheck,
+    PageCount,
+    ImageDPICheck,
+    ImageSizeCheck,
+    ImageMemoryCheck,
+    PinnedFile,
+    ProfanityCheck,
+    SanctionedEntities,
+    SoftwareCheck,
+    TextLength,
+    TokenLimit
+)
 
-scanner_mappting = {
-"binning_transformer": BinTransform,
-"blank_page_check" : BlankPageCheck,
-"blurness_check":BlurnessCheck,
-"editdate_check" : EditDate,
-"encryption_detector": EncryptionDetector,
-"executable_scripts": ExecuableScript,
-"file_format_check": FormatCheck,
-"file_page_check": PageCount,
-"image_dpi_check": ImageDPICheck,
-"image_size_check":ImageSizeCheck,
-"image_memory_check": ImageMemoryCheck,
-"pinned_pdf_check": PinnedFile,
-"profanity_check": ProfanityCheck,
-"sanctioned_entity": SanctionedEnitities,
-"software_check": SofwareCheck,
-"text_length_check": TextLength,
-"token_limit": TokonLimit
-}
+# 定义扫描器映射
+def get_scanner_mapping():
+    return {
+        "binning_transformer": BinTransform,
+        "blank_page_check": BlankPageCheck,
+        "blurness_check": BlurnessCheck,
+        "editdate_check": EditDate,
+        "encryption_detector": EncryptionDetector,
+        "executable_scripts": ExecutableScript,
+        "file_format_check": FormatCheck,
+        "file_page_check": PageCount,
+        "image_dpi_check": ImageDPICheck,
+        "image_size_check": ImageSizeCheck,
+        "image_memory_check": ImageMemoryCheck,
+        "pinned_pdf_check": PinnedFile,
+        "profanity_check": ProfanityCheck,
+        "sanctioned_entity": SanctionedEntities,
+        "software_check": SoftwareCheck,
+        "text_length_check": TextLength,
+        "token_limit": TokenLimit
+    }
 
+# 初始化扫描器对象
+def initialize_scanner(scanner_name, conditions):
+    scanner_mapping = get_scanner_mapping()
+    if scanner_name in scanner_mapping:
+        return scanner_mapping[scanner_name](**conditions)
+    else:
+        raise ValueError(f"Scanner '{scanner_name}' not found in mapping.")
 
+# 执行扫描操作
+def execute_scanner(scanner_obj, input_image):
+    scanner_obj.validate(input_image)
+    return scanner_obj.response
 
-input_payload = {
+# 主处理流程
+def main_pipeline(input_payload, input_image):
+    # 初始化扫描器
+    scanner_obj = initialize_scanner(input_payload['scanner_nm'], input_payload['conditions'])
+    
+    # 执行扫描并获取结果
+    response = execute_scanner(scanner_obj, input_image)
+    
+    # 输出结果
+    print(response)
 
-"scanner_nm": "image_size_check",
-
-"conditions" : {'img_size_thresh':(256,256)}
-}
-
-scanner_obj = scanner_mappting[input_payload['scanner_nm']](**input_payload['conditions'])
-input_image = r"llm_sanitation\scanners\bounding\image_size_check\tests\image_size_check_test.jpg"
-scanner_obj.validate(input_image)
-print(scanner_obj.response)
+if __name__ == "__main__":
+    # 示例输入
+    input_payload = {
+        "scanner_nm": "image_size_check",
+        "conditions": {'img_size_thresh': (256, 256)}
+    }
+    input_image = r"llm_sanitation\scanners\bounding\image_size_check\tests\image_size_check_test.jpg"
+    
+    # 运行主处理流程
+    main_pipeline(input_payload, input_image)
