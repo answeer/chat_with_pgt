@@ -1,91 +1,86 @@
-from llm_sanitation.scanners.scanner_base import Scanner
-from llm_sanitation.utils.models import *
-from llm_sanitation.utils.connectors.suitability import brightness_score, contours_estimate
-from llm_sanitation.utils.doc_to_img import doc_to_img
-from llm_sanitation.logging.logging_setup import LogUtil, LogType, LogLevel
-
-# import cv2
-
 class BlankPageCheck(Scanner):
+    """
+    A class to detect blank pages in a document using brightness and contour analysis.
+
+    This class extends the `Scanner` base class to analyze images of document pages and identify 
+    blank pages based on specified brightness and contour thresholds.
+
+    Attributes:
+        brightness_thresh (float): The threshold for determining if a page is blank based on brightness.
+        countour_thresh (int): The threshold for determining if a page is blank based on the number of contours.
+        save_folder (str): The directory to save images extracted from the document.
+
+    Methods:
+        suaitability_placeholder(image_path):
+            Placeholder method for evaluating an image's suitability based on brightness and contour estimates.
+        
+        predict(image_path):
+            Analyzes the document pages to identify blank pages based on brightness and contour thresholds.
+        
+        format_response():
+            Formats the prediction response to include the indices of blank pages and the overall score.
+    """
 
     def __init__(self, **kwargs):
+        """
+        Initializes the BlankPageCheck instance with the specified thresholds and save directory.
+
+        Args:
+            **kwargs: Keyword arguments including:
+                - "brightness_thresh" (float): The brightness threshold for detecting blank pages.
+                - "countour_thresh" (int): The contour threshold for detecting blank pages.
+                - "save_folder" (str): The directory to save images extracted from the document.
+        """
         brightness_thresh = kwargs["brightness_thresh"]
         countour_thresh = kwargs["countour_thresh"]
         save_folder = kwargs['save_folder']
-        super().__init__("blank_page_check", 0.5, brightness_thresh=brightness_thresh, countour_thresh=countour_thresh,save_folder=save_folder)
+        super().__init__("blank_page_check", 0.5, brightness_thresh=brightness_thresh, countour_thresh=countour_thresh, save_folder=save_folder)
 
     def suaitability_placeholder(self, image_path):
-        # results = {
-        #             "data": {
-        #                 "get_img_dimensions": {
-        #                     "Image Memory Size": 303356,
-        #                     "Height": 640,
-        #                     "Width": 640
-        #                 },
-        #                 "blurriness_score": {
-        #                     "Blurriness Score": 0.9098039215686274
-        #                 },
-        #                 "brightness_score": {
-        #                     "Mean Brightness": 241,
-        #                     "RMS Brightness": 246
-        #                 },
-        #                 "contours_estimate": {
-        #                     "Contour Count": 0,
-        #                     "Mean Contour Area": 0
-        #                 },
-        #                 "image_xy_dpi": {
-        #                     "X Dpi": 25.4,
-        #                     "Y Dpi": 25.4
-        #                 }
-        #             },
-        #             "status": {
-        #                 "get_img_dimensions": "success",
-        #                 "blurriness_score": "success",
-        #                 "brightness_score": "success",
-        #                 "contours_estimate": "success",
-        #                 "image_xy_dpi": "success"
-        #             },
-        #             "error_message": "success"
-        #             }
+        """
+        Evaluates an image's suitability for blank page detection.
 
-        # url = "http://127.0.0.1:8000/api/ds_img_fet_ext"
+        This method serves as a placeholder for making API calls or running local calculations to 
+        evaluate an image's brightness and contour characteristics.
 
-        # payload = {
-        #     "job_id":"12345",
-        #     "input_img":image_path,
-        #     "expected_features":["brightness_score", "contours_estimate"]
-        # }
-        # headers = {
-        # 'Content-Type': 'application/json',
-        # 'Authorization': 'django-insecure-1j822l40w003!5q3j^m%#)1*+x5f+kz&njqm#aeu^(o7j1k@uv',
-        # 'Userid': 'io_sanitation',
-        # 'Content-Type': 'application/json'
-        # }
-        # response = requests.request("POST", url, headers=headers, json = payload)
-        # results = response.text.encode('utf8')
-        # return json.loads(results)
+        Args:
+            image_path (str): The file path to the image to be evaluated.
 
-        results = {"data":{}}
+        Returns:
+            dict: A dictionary containing the brightness score and contour estimate.
+        """
+        results = {"data": {}}
         results["data"]["brightness_score"] = brightness_score(image_path)
         results["data"]["contours_estimate"] = contours_estimate(image_path)
 
         return results
 
     def predict(self, image_path):
+        """
+        Analyzes document pages to identify and index blank pages.
+
+        This method processes a document by converting it into images and evaluating each image 
+        to determine if it is blank based on brightness and contour thresholds.
+
+        Args:
+            image_path (str): The file path to the document to be analyzed.
+
+        Returns:
+            tuple: A tuple containing a list of indices for blank pages and a score indicating 
+            the presence of blank pages.
+        """
         try:
-            image_paths = doc_to_img(image_path,self._kwargs['save_folder'])
+            image_paths = doc_to_img(image_path, self._kwargs['save_folder'])
             blank_pg_idx = []
             score = 1
             for ix, image_path in enumerate(image_paths):
                 results = self.suaitability_placeholder(image_path)
 
-                # brightness_score = results['data']['brightness_score']['Mean Brightness']
                 brightness_score = results['data']['brightness_score'][0]['data']['brightness_score']['Mean Brightness']
-                # contour_count = results['data']['contours_estimate']['Contour Count']
                 contour_count = results['data']['contours_estimate'][0]['data']['contours_estimate']['Contour Count']
 
                 if brightness_score > self._kwargs['brightness_thresh'] and contour_count < self._kwargs['countour_thresh']:
-                    blank_pg_idx.append(ix+1)
+                    blank_pg_idx.append(ix + 1)
                     score = 0
         except Exception as e:
             LogUtil.log(LogType.ERROR, LogLevel.ERROR, e)
@@ -94,5 +89,11 @@ class BlankPageCheck(Scanner):
         return blank_pg_idx, score
 
     def format_response(self):
+        """
+        Formats the prediction response to include the indices of blank pages and the overall score.
+
+        This method modifies the response dictionary to include the indices of identified blank pages 
+        under the "blank_page_idx" key and the corresponding score under the "score" key.
+        """
         self.response["prediction"]["blank_page_idx"] = self.pred[0]
         self.response["score"] = self.pred[1]
