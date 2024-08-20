@@ -1,40 +1,70 @@
-from llm_sanitation.scanners.scanner_base import Scanner
-from llm_sanitation.utils.models import *
-from pypdf import PdfReader
-from PIL import Image
-from PIL.ExifTags import TAGS
-from datetime import datetime
-from llm_sanitation.logging.logging_setup import LogUtil, LogType, LogLevel
-
-
 class EditDate(Scanner):
+    """
+    A class to check for potential tampering based on the creation and modification dates in document or image metadata.
+
+    This class extends the `Scanner` base class and provides functionality to analyze the metadata of files (PDFs, images)
+    to determine if the file has been modified beyond a certain date interval from its creation.
+
+    Attributes:
+        date_interval (int): The maximum number of days allowed between the creation and modification dates.
+        
+    Methods:
+        modification_date_checker(created_date, modified_date):
+            Validates the creation and modification dates to check for potential tampering.
+
+        predict(file_path):
+            Analyzes the file to determine if it has been tampered with based on its metadata.
+        
+        format_response():
+            Formats the prediction response to include tampering details and the corresponding score.
+    """
 
     def __init__(self, **kwargs):
+        """
+        Initializes the EditDate instance with the specified date interval.
+
+        Args:
+            **kwargs: Keyword arguments including:
+                - "date_interval" (int): The maximum allowed interval (in days) between creation 
+                  and modification dates to consider a file untampered.
+        """
         self.date_interval = kwargs["date_interval"]
         super().__init__("edit_date", 0.5, date_interval=self.date_interval)
-        self.response
-        
+
     def modification_date_checker(self, created_date, modified_date):
         """
-        Validates the creation and modification dates in the image/ doc metadata to see if there have been any edits since creation
+        Validates the creation and modification dates in the file metadata to determine potential tampering.
+
+        This method checks if the file has been edited based on the difference between the creation 
+        and modification dates. It flags files as potentially tampered if the modification date 
+        exceeds the allowed interval.
+
+        Args:
+            created_date (datetime or None): The creation date of the file.
+            modified_date (datetime or None): The modification date of the file.
+
+        Returns:
+            tuple: A tuple containing a tampering message and a score (1 for untampered, 0 for tampered).
         """
-        if created_date == None and modified_date == None:
-            tampered = (
-                "Date details are not available both create date and modified date."
-            )
+        if created_date is None and modified_date is None:
+            tampered = "Date details are not available for both creation date and modification date."
             score = 0
-        elif created_date == None and modified_date is not None:
-            tampered = "Date details are not available for create date."
+        elif created_date is None and modified_date is not None:
+            tampered = "Date details are not available for creation date."
             score = 0
-        elif created_date is not None and modified_date == None:
-            tampered = "Date details are not available for modified date."
+        elif created_date is not None and modified_date is None:
+            tampered = "Date details are not available for modification date."
             score = 1
         elif (
             created_date is not None
             and modified_date is not None
             and abs((modified_date - created_date)).days > self.date_interval
         ):
-            tampered = f"Potentially tampered since {abs((modified_date - created_date)).days} days have passed since the modification date compared to the creation date, exceeding the maximum limit of {self.date_interval} days."
+            tampered = (
+                f"Potentially tampered since {abs((modified_date - created_date)).days} days "
+                f"have passed since the modification date compared to the creation date, exceeding "
+                f"the maximum limit of {self.date_interval} days."
+            )
             score = 0
         else:
             tampered = "Potentially not tampered."
@@ -42,11 +72,22 @@ class EditDate(Scanner):
         return tampered, score
 
     def predict(self, file_path):
+        """
+        Analyzes a file to check for potential tampering based on its creation and modification dates.
+
+        This method reads the metadata from a PDF or image file and uses the creation and modification 
+        dates to determine if the file has been edited within the allowed date interval.
+
+        Args:
+            file_path (str): The path to the file to be analyzed.
+
+        Returns:
+            tuple: A tuple containing a tampering message and a score (1 for untampered, 0 for tampered).
+        """
         software_tampering = None
         score = 0
         file_type = file_path.split(".")[-1].lower()
-        # if file_type not in ['pdf','jpg','png','jpeg']:
-        #     self.response['error_code'].append("ERR002")
+
         try:
             if file_type == "pdf":
                 self.reader = PdfReader(file_path)
@@ -73,5 +114,11 @@ class EditDate(Scanner):
         return software_tampering, score
 
     def format_response(self):
+        """
+        Formats the prediction response to include tampering details and the corresponding score.
+
+        This method modifies the response dictionary to include details of any detected tampering 
+        under the "edit_date" key and the corresponding score under the "score" key.
+        """
         self.response["prediction"]["edit_date"] = self.pred[0]
         self.response["score"] = self.pred[1]
