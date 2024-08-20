@@ -6,3 +6,29 @@
         ],
         default="undefined",
     )
+{
+    "categories": [
+        {
+            "name": "high",
+            "range": [
+                70,
+                100
+            ]
+        },
+        {
+            "name": "medium",
+            "range": [
+                40,
+                60
+            ]
+        },
+        {
+            "name": "low",
+            "range": [
+                0,
+                39
+            ]
+        }
+    ],
+    "default": "undefined"
+}
