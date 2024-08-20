@@ -1,103 +1,26 @@
-from llm_sanitation.scanners.bounding import (
-    BinTransform,
-    BlankPageCheck,
-    BlurnessCheck,
-    EditDate,
-    EncryptionDetector,
-    ExecutableScript,
-    FormatCheck,
-    PageCount,
-    ImageDPICheck,
-    ImageSizeCheck,
-    ImageMemoryCheck,
-    PinnedFile,
-    ProfanityCheck,
-    SanctionedEntities,
-    SoftwareCheck,
-    TextLength,
-    TokenLimit
-)
+from llm_sanitation.scanners.scanner_base import Scanner
+from llm_sanitation.utils.models import *
+from llm_sanitation.utils.common import read_config
 
-class ScannerPipeline:
-    def __init__(self, input_payloads, input_image):
-        self.input_payloads = input_payloads
-        self.input_image = input_image
-        self.scanner_mapping = self.get_scanner_mapping()
-        self.all_responses = {}
 
-    def get_scanner_mapping(self):
-        """返回扫描器名称到类的映射"""
-        return {
-            "binning_transformer": BinTransform,
-            "blank_page_check": BlankPageCheck,
-            "blurness_check": BlurnessCheck,
-            "editdate_check": EditDate,
-            "encryption_detector": EncryptionDetector,
-            "executable_scripts": ExecutableScript,
-            "file_format_check": FormatCheck,
-            "file_page_check": PageCount,
-            "image_dpi_check": ImageDPICheck,
-            "image_size_check": ImageSizeCheck,
-            "image_memory_check": ImageMemoryCheck,
-            "pinned_pdf_check": PinnedFile,
-            "profanity_check": ProfanityCheck,
-            "sanctioned_entity": SanctionedEntities,
-            "software_check": SoftwareCheck,
-            "text_length_check": TextLength,
-            "token_limit": TokenLimit
-        }
+class BinTransform(Scanner):
 
-    def initialize_scanner(self, scanner_name, conditions):
-        """初始化扫描器对象"""
-        if scanner_name in self.scanner_mapping:
-            return self.scanner_mapping[scanner_name](**conditions)
-        else:
-            raise ValueError(f"Scanner '{scanner_name}' not found in mapping.")
+    def __init__(self, **kwargs):
+        self.default_catagory = kwargs["default"]
+        self.catagories = kwargs["catagories"]
+        super().__init__("bin_transform", None, catagories= kwargs["catagories"],
+                                                default_catagory=kwargs["default"])
 
-    def execute_scanner(self, scanner_obj):
-        """执行扫描操作并返回响应"""
-        scanner_obj.validate(self.input_image)
-        return scanner_obj.response
+    def predict(self, value):
+        try:
+            for catagory in self._kwargs["catagories"]:
+                lower, upper = catagory["range"]
+                if lower <= value <= upper:
+                    return catagory["name"]
+        except Exception as e:
+            print("Error occured: {}".format(e))
+        return self._kwargs["default_catagory"]
 
-    def run_pipeline(self):
-        """运行整个扫描器管道"""
-        for payload in self.input_payloads:
-            scanner_name = payload['scanner_nm']
-            conditions = payload['conditions']
-
-            # 初始化并执行扫描器
-            scanner_obj = self.initialize_scanner(scanner_name, conditions)
-            response = self.execute_scanner(scanner_obj)
-            
-            # 保存响应
-            self.all_responses[scanner_name] = response
-
-        return self.all_responses
-
-    def print_responses(self):
-        """打印所有扫描器的响应"""
-        for scanner_name, response in self.all_responses.items():
-            print(f"Results from {scanner_name}: {response}")
-
-if __name__ == "__main__":
-    # 示例输入：包含多个扫描器
-    input_payloads = [
-        {
-            "scanner_nm": "image_size_check",
-            "conditions": {'img_size_thresh': (256, 256)}
-        },
-        {
-            "scanner_nm": "blurness_check",
-            "conditions": {'blur_threshold': 0.5}
-        },
-        {
-            "scanner_nm": "profanity_check",
-            "conditions": {}
-        }
-    ]
-    input_image = r"llm_sanitation\scanners\bounding\image_size_check\tests\image_size_check_test.jpg"
-    
-    # 创建并运行扫描器管道
-    pipeline = ScannerPipeline(input_payloads, input_image)
-    responses = pipeline.run_pipeline()
-    pipeline.print_responses()
+    def format_response(self):
+        self.response["prediction"]["catagory"] = self.pred
+        self.response["score"] = None
