@@ -1,95 +1,77 @@
-class BlurnessCheck(Scanner):
-    """
-    A class to detect blurry pages in a document based on blurriness scores.
+from llm_sanitation.scanners.scanner_base import Scanner
+from llm_sanitation.utils.models import *
+from pypdf import PdfReader
+from PIL import Image
+from PIL.ExifTags import TAGS
+from datetime import datetime
+from llm_sanitation.logging.logging_setup import LogUtil, LogType, LogLevel
 
-    This class extends the `Scanner` base class to analyze images of document pages and identify 
-    pages that are blurry based on a specified blurriness score threshold.
 
-    Attributes:
-        score_thresh (float): The threshold above which a page is considered blurry.
-        save_folder (str): The directory to save images extracted from the document.
-
-    Methods:
-        suaitability_placeholder(image_path):
-            Placeholder method for evaluating an image's suitability based on blurriness score.
-        
-        predict(image_path):
-            Analyzes the document pages to identify blurry pages based on the blurriness score threshold.
-        
-        format_response():
-            Formats the prediction response to include the indices of blurry pages and the overall score.
-    """
+class EditDate(Scanner):
 
     def __init__(self, **kwargs):
+        self.date_interval = kwargs["date_interval"]
+        super().__init__("edit_date", 0.5, date_interval=self.date_interval)
+        self.response
+        
+    def modification_date_checker(self, created_date, modified_date):
         """
-        Initializes the BlurnessCheck instance with the specified blurriness score threshold and save directory.
-
-        Args:
-            **kwargs: Keyword arguments including:
-                - "score_thresh" (float): The blurriness score threshold for detecting blurry pages.
-                - "save_folder" (str): The directory to save images extracted from the document.
+        Validates the creation and modification dates in the image/ doc metadata to see if there have been any edits since creation
         """
-        score_thresh = kwargs["score_thresh"]
-        save_folder = kwargs['save_folder']
-        super().__init__("blurness_check", 0.5, score_thresh=score_thresh, save_folder=save_folder)
-
-    def suaitability_placeholder(self, image_path):
-        """
-        Evaluates an image's suitability for blurriness detection.
-
-        This method serves as a placeholder for making API calls or running local calculations to 
-        evaluate an image's blurriness score.
-
-        Args:
-            image_path (str): The file path to the image to be evaluated.
-
-        Returns:
-            dict: A dictionary containing the blurriness score.
-        """
-        results = {"data": {}}
-        results["data"]["blurriness_score"] = blurriness_score(image_path)
-
-        return results
-
-    def predict(self, image_path):
-        """
-        Analyzes document pages to identify and index blurry pages.
-
-        This method processes a document by converting it into images and evaluating each image 
-        to determine if it is blurry based on the blurriness score threshold.
-
-        Args:
-            image_path (str): The file path to the document to be analyzed.
-
-        Returns:
-            tuple: A tuple containing a list of indices for blurry pages and a score indicating 
-            the presence of blurry pages.
-        """
-        try:
-            image_paths = doc_to_img(image_path, self._kwargs['save_folder'])
-
-            blur_pg_idx = []
+        if created_date == None and modified_date == None:
+            tampered = (
+                "Date details are not available both create date and modified date."
+            )
+            score = 0
+        elif created_date == None and modified_date is not None:
+            tampered = "Date details are not available for create date."
+            score = 0
+        elif created_date is not None and modified_date == None:
+            tampered = "Date details are not available for modified date."
             score = 1
-            for ix, image_path in enumerate(image_paths):
-                results = self.suaitability_placeholder(image_path)
+        elif (
+            created_date is not None
+            and modified_date is not None
+            and abs((modified_date - created_date)).days > self.date_interval
+        ):
+            tampered = f"Potentially tampered since {abs((modified_date - created_date)).days} days have passed since the modification date compared to the creation date, exceeding the maximum limit of {self.date_interval} days."
+            score = 0
+        else:
+            tampered = "Potentially not tampered."
+            score = 1
+        return tampered, score
 
-                blurness_score = results['data']['blurriness_score'][0]['data']['blurriness_score']['Blurriness Score']
-
-                if blurness_score > self._kwargs['score_thresh']:
-                    blur_pg_idx.append(ix + 1)
-                    score = 0
+    def predict(self, file_path):
+        software_tampering = None
+        score = 0
+        file_type = file_path.split(".")[-1].lower()
+        # if file_type not in ['pdf','jpg','png','jpeg']:
+        #     self.response['error_code'].append("ERR002")
+        try:
+            if file_type == "pdf":
+                self.reader = PdfReader(file_path)
+                create_date = self.reader.metadata.creation_date
+                modification_date = self.reader.metadata.modification_date
+            else:
+                image = Image.open(file_path)
+                exif_data = image.getexif()
+                if exif_data is not None:
+                    exif = {TAGS.get(tag, tag): value for tag, value in exif_data.items()}
+                    create_date = exif.get("DateTimeOriginal", None)
+                    modification_date = exif.get("DateTime", None)
+                if create_date is not None:
+                    create_date = datetime.strptime(create_date, "%Y:%m:%d %H:%M:%S")
+                if modification_date is not None:
+                    modification_date = datetime.strptime(
+                        modification_date, "%Y:%m:%d %H:%M:%S"
+                    )
+            software_tampering, score = self.modification_date_checker(
+                create_date, modification_date
+            )
         except Exception as e:
             LogUtil.log(LogType.ERROR, LogLevel.ERROR, e)
-            blur_pg_idx = []
-            score = 0
-        return blur_pg_idx, score
+        return software_tampering, score
 
     def format_response(self):
-        """
-        Formats the prediction response to include the indices of blurry pages and the overall score.
-
-        This method modifies the response dictionary to include the indices of identified blurry pages 
-        under the "blurness_check" key and the corresponding score under the "score" key.
-        """
-        self.response["prediction"]["blurness_check"] = self.pred[0]
+        self.response["prediction"]["edit_date"] = self.pred[0]
         self.response["score"] = self.pred[1]
