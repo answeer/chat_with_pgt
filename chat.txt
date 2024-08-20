@@ -1,79 +1,78 @@
-from llm_sanitation.scanners.scanner_base import Scanner
-from llm_sanitation.utils.models import *
-from llm_sanitation.utils.connectors.suitability import blurriness_score
-from llm_sanitation.utils.doc_to_img import doc_to_img
-from llm_sanitation.logging.logging_setup import LogUtil, LogType, LogLevel
-
-# import cv2
-
-
 class BlurnessCheck(Scanner):
+    """
+    A class to detect blurry pages in a document based on blurriness scores.
+
+    This class extends the `Scanner` base class to analyze images of document pages and identify 
+    pages that are blurry based on a specified blurriness score threshold.
+
+    Attributes:
+        score_thresh (float): The threshold above which a page is considered blurry.
+        save_folder (str): The directory to save images extracted from the document.
+
+    Methods:
+        suaitability_placeholder(image_path):
+            Placeholder method for evaluating an image's suitability based on blurriness score.
+        
+        predict(image_path):
+            Analyzes the document pages to identify blurry pages based on the blurriness score threshold.
+        
+        format_response():
+            Formats the prediction response to include the indices of blurry pages and the overall score.
+    """
 
     def __init__(self, **kwargs):
+        """
+        Initializes the BlurnessCheck instance with the specified blurriness score threshold and save directory.
+
+        Args:
+            **kwargs: Keyword arguments including:
+                - "score_thresh" (float): The blurriness score threshold for detecting blurry pages.
+                - "save_folder" (str): The directory to save images extracted from the document.
+        """
         score_thresh = kwargs["score_thresh"]
         save_folder = kwargs['save_folder']
-        super().__init__("blurness_check", 0.5, score_thresh=score_thresh,save_folder=save_folder)
+        super().__init__("blurness_check", 0.5, score_thresh=score_thresh, save_folder=save_folder)
 
     def suaitability_placeholder(self, image_path):
-        # img = cv2.imread(image_path)
-        # results = {
-        #     "data": {
-        #         "get_img_dimensions": {
-        #             "Image Memory Size": 303356,
-        #             "Height": 640,
-        #             "Width": 640,
-        #         },
-        #         "blurriness_score": {"Blurriness Score": 0.9098039215686274},
-        #         "brightness_score": {
-        #             "Mean Brightness": 157.4192236328125,
-        #             "RMS Brightness": 163.4810029190844,
-        #         },
-        #         "contours_estimate": {"Contour Count": 0, "Mean Contour Area": 0},
-        #         "image_xy_dpi": {"X Dpi": 25.4, "Y Dpi": 25.4},
-        #     },
-        #     "status": {
-        #         "get_img_dimensions": "success",
-        #         "blurriness_score": "success",
-        #         "brightness_score": "success",
-        #         "contours_estimate": "success",
-        #         "image_xy_dpi": "success",
-        #     },
-        #     "error_message": "success",
-        # }
+        """
+        Evaluates an image's suitability for blurriness detection.
 
-        # url = "http://127.0.0.1:8000/api/ds_img_fet_ext"
+        This method serves as a placeholder for making API calls or running local calculations to 
+        evaluate an image's blurriness score.
 
-        # payload = {
-        #     "job_id":"12345",
-        #     "input_img":image_path,
-        #     "expected_features":["blurriness_score"]
-        # }
-        # headers = {
-        # 'Content-Type': 'application/json',
-        # 'Authorization': 'django-insecure-1j822l40w003!5q3j^m%#)1*+x5f+kz&njqm#aeu^(o7j1k@uv',
-        # 'Userid': 'io_sanitation',
-        # 'Content-Type': 'application/json'
-        # }
-        # response = requests.request("POST", url, headers=headers, json = payload)
-        # results = response.text.encode('utf8')
-        # return json.loads(results)
+        Args:
+            image_path (str): The file path to the image to be evaluated.
 
-        results = {"data":{}}
+        Returns:
+            dict: A dictionary containing the blurriness score.
+        """
+        results = {"data": {}}
         results["data"]["blurriness_score"] = blurriness_score(image_path)
 
         return results
 
-
     def predict(self, image_path):
+        """
+        Analyzes document pages to identify and index blurry pages.
+
+        This method processes a document by converting it into images and evaluating each image 
+        to determine if it is blurry based on the blurriness score threshold.
+
+        Args:
+            image_path (str): The file path to the document to be analyzed.
+
+        Returns:
+            tuple: A tuple containing a list of indices for blurry pages and a score indicating 
+            the presence of blurry pages.
+        """
         try:
-            image_paths = doc_to_img(image_path,self._kwargs['save_folder'])
+            image_paths = doc_to_img(image_path, self._kwargs['save_folder'])
 
             blur_pg_idx = []
             score = 1
             for ix, image_path in enumerate(image_paths):
                 results = self.suaitability_placeholder(image_path)
 
-                # blurness_score = results["data"]["blurriness_score"]["Blurriness Score"]
                 blurness_score = results['data']['blurriness_score'][0]['data']['blurriness_score']['Blurriness Score']
 
                 if blurness_score > self._kwargs['score_thresh']:
@@ -86,5 +85,11 @@ class BlurnessCheck(Scanner):
         return blur_pg_idx, score
 
     def format_response(self):
+        """
+        Formats the prediction response to include the indices of blurry pages and the overall score.
+
+        This method modifies the response dictionary to include the indices of identified blurry pages 
+        under the "blurness_check" key and the corresponding score under the "score" key.
+        """
         self.response["prediction"]["blurness_check"] = self.pred[0]
         self.response["score"] = self.pred[1]
