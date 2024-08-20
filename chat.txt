@@ -53,24 +53,44 @@ def execute_scanner(scanner_obj, input_image):
     scanner_obj.validate(input_image)
     return scanner_obj.response
 
-# 主处理流程
-def main_pipeline(input_payload, input_image):
-    # 初始化扫描器
-    scanner_obj = initialize_scanner(input_payload['scanner_nm'], input_payload['conditions'])
+# 主处理流程：串联多个扫描器
+def main_pipeline(input_payloads, input_image):
+    all_responses = {}
+
+    for payload in input_payloads:
+        scanner_name = payload['scanner_nm']
+        conditions = payload['conditions']
+
+        # 初始化扫描器
+        scanner_obj = initialize_scanner(scanner_name, conditions)
+        
+        # 执行扫描并获取结果
+        response = execute_scanner(scanner_obj, input_image)
+        
+        # 将结果存储在字典中
+        all_responses[scanner_name] = response
     
-    # 执行扫描并获取结果
-    response = execute_scanner(scanner_obj, input_image)
-    
-    # 输出结果
-    print(response)
+    # 输出所有扫描器的结果
+    for scanner_name, response in all_responses.items():
+        print(f"Results from {scanner_name}: {response}")
 
 if __name__ == "__main__":
-    # 示例输入
-    input_payload = {
-        "scanner_nm": "image_size_check",
-        "conditions": {'img_size_thresh': (256, 256)}
-    }
+    # 示例输入：包含多个扫描器
+    input_payloads = [
+        {
+            "scanner_nm": "image_size_check",
+            "conditions": {'img_size_thresh': (256, 256)}
+        },
+        {
+            "scanner_nm": "blurness_check",
+            "conditions": {'blur_threshold': 0.5}
+        },
+        {
+            "scanner_nm": "profanity_check",
+            "conditions": {}
+        }
+    ]
     input_image = r"llm_sanitation\scanners\bounding\image_size_check\tests\image_size_check_test.jpg"
     
     # 运行主处理流程
-    main_pipeline(input_payload, input_image)
+    main_pipeline(input_payloads, input_image)
