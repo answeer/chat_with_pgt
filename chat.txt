@@ -1,67 +1,98 @@
-class BinTransform(Scanner):
-    """
-    A class for performing bin-based categorization of values.
+from llm_sanitation.scanners.scanner_base import Scanner
+from llm_sanitation.utils.models import *
+from llm_sanitation.utils.connectors.suitability import brightness_score, contours_estimate
+from llm_sanitation.utils.doc_to_img import doc_to_img
+from llm_sanitation.logging.logging_setup import LogUtil, LogType, LogLevel
 
-    This class extends the `Scanner` base class to categorize input values based on predefined ranges. 
-    It assigns a category to the value if it falls within any of the specified ranges, and returns 
-    the default category if no match is found.
+# import cv2
 
-    Attributes:
-        default_catagory (str): The default category to return if no match is found.
-        catagories (list): A list of dictionaries where each dictionary defines a category with its range.
-
-    Methods:
-        predict(value):
-            Determines the category of the given value based on the predefined ranges.
-        
-        format_response():
-            Updates the response dictionary with the predicted category and sets the score to None.
-    """
+class BlankPageCheck(Scanner):
 
     def __init__(self, **kwargs):
-        """
-        Initializes the BinTransform instance with specified categories and default category.
+        brightness_thresh = kwargs["brightness_thresh"]
+        countour_thresh = kwargs["countour_thresh"]
+        save_folder = kwargs['save_folder']
+        super().__init__("blank_page_check", 0.5, brightness_thresh=brightness_thresh, countour_thresh=countour_thresh,save_folder=save_folder)
 
-        Args:
-            **kwargs: Keyword arguments including:
-                - "default" (str): The default category.
-                - "catagories" (list): A list of category dictionaries, each containing:
-                    - "name" (str): The name of the category.
-                    - "range" (tuple): A tuple specifying the inclusive range of values for the category.
-        """
-        self.default_catagory = kwargs["default"]
-        self.catagories = kwargs["catagories"]
-        super().__init__("bin_transform", None, catagories=kwargs["catagories"],
-                         default_catagory=kwargs["default"])
+    def suaitability_placeholder(self, image_path):
+        # results = {
+        #             "data": {
+        #                 "get_img_dimensions": {
+        #                     "Image Memory Size": 303356,
+        #                     "Height": 640,
+        #                     "Width": 640
+        #                 },
+        #                 "blurriness_score": {
+        #                     "Blurriness Score": 0.9098039215686274
+        #                 },
+        #                 "brightness_score": {
+        #                     "Mean Brightness": 241,
+        #                     "RMS Brightness": 246
+        #                 },
+        #                 "contours_estimate": {
+        #                     "Contour Count": 0,
+        #                     "Mean Contour Area": 0
+        #                 },
+        #                 "image_xy_dpi": {
+        #                     "X Dpi": 25.4,
+        #                     "Y Dpi": 25.4
+        #                 }
+        #             },
+        #             "status": {
+        #                 "get_img_dimensions": "success",
+        #                 "blurriness_score": "success",
+        #                 "brightness_score": "success",
+        #                 "contours_estimate": "success",
+        #                 "image_xy_dpi": "success"
+        #             },
+        #             "error_message": "success"
+        #             }
 
-    def predict(self, value):
-        """
-        Predicts the category of the given value based on predefined ranges.
+        # url = "http://127.0.0.1:8000/api/ds_img_fet_ext"
 
-        Args:
-            value (float or int): The value to categorize.
+        # payload = {
+        #     "job_id":"12345",
+        #     "input_img":image_path,
+        #     "expected_features":["brightness_score", "contours_estimate"]
+        # }
+        # headers = {
+        # 'Content-Type': 'application/json',
+        # 'Authorization': 'django-insecure-1j822l40w003!5q3j^m%#)1*+x5f+kz&njqm#aeu^(o7j1k@uv',
+        # 'Userid': 'io_sanitation',
+        # 'Content-Type': 'application/json'
+        # }
+        # response = requests.request("POST", url, headers=headers, json = payload)
+        # results = response.text.encode('utf8')
+        # return json.loads(results)
 
-        Returns:
-            str: The name of the category that the value falls into, or the default category if no match is found.
+        results = {"data":{}}
+        results["data"]["brightness_score"] = brightness_score(image_path)
+        results["data"]["contours_estimate"] = contours_estimate(image_path)
 
-        Raises:
-            Exception: If an error occurs while processing the value.
-        """
+        return results
+
+    def predict(self, image_path):
         try:
-            for catagory in self._kwargs["catagories"]:
-                lower, upper = catagory["range"]
-                if lower <= value <= upper:
-                    return catagory["name"]
+            image_paths = doc_to_img(image_path,self._kwargs['save_folder'])
+            blank_pg_idx = []
+            score = 1
+            for ix, image_path in enumerate(image_paths):
+                results = self.suaitability_placeholder(image_path)
+
+                # brightness_score = results['data']['brightness_score']['Mean Brightness']
+                brightness_score = results['data']['brightness_score'][0]['data']['brightness_score']['Mean Brightness']
+                # contour_count = results['data']['contours_estimate']['Contour Count']
+                contour_count = results['data']['contours_estimate'][0]['data']['contours_estimate']['Contour Count']
+
+                if brightness_score > self._kwargs['brightness_thresh'] and contour_count < self._kwargs['countour_thresh']:
+                    blank_pg_idx.append(ix+1)
+                    score = 0
         except Exception as e:
-            print("Error occurred: {}".format(e))
-        return self._kwargs["default_catagory"]
+            LogUtil.log(LogType.ERROR, LogLevel.ERROR, e)
+            blank_pg_idx = []
+            score = 0
+        return blank_pg_idx, score
 
     def format_response(self):
-        """
-        Updates the response dictionary with the predicted category and sets the score to None.
-
-        This method modifies the response dictionary to include the predicted category under the 
-        "prediction" key and sets the "score" to None.
-        """
-        self.response["prediction"]["catagory"] = self.pred
-        self.response["score"] = None
+        self.response["prediction"]["blank_page_idx"] = self.pred[0]
+        self.response["score"] = self.pred[1]
