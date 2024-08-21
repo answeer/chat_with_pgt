@@ -2,14 +2,49 @@ from llm_sanitation.scanners.scanner_base import Scanner
 import re
 from llm_sanitation.logging.logging_setup import LogUtil, LogType, LogLevel
 
-
 class RemovePunctuation(Scanner):
+    """
+    A Scanner class to remove punctuation from text data.
+
+    This class identifies and removes punctuation characters from the 
+    provided text. It extends the Scanner base class and provides a 
+    sanitization feature specifically for punctuation.
+
+    Attributes:
+        sanitize (bool): Flag to indicate whether to perform the sanitization.
+    
+    Methods:
+        predict(data: str) -> tuple:
+            Identifies and removes punctuation characters from the input text data.
+            Returns a tuple containing a score (1 for success, 0 for failure) 
+            and the sanitized text.
+        
+        format_response() -> None:
+            Formats the response by assigning the prediction and score to the 
+            response dictionary.
+    """
 
     def __init__(self, **kwargs):
+        """
+        Initializes the RemovePunctuation scanner.
+
+        Args:
+            sanitize (bool): Flag indicating whether the text should be sanitized.
+        """
         sanitize = kwargs["sanitize"]
-        super().__init__("remove_punctuation", 0.5,sanitize=sanitize)
+        super().__init__("remove_punctuation", 0.5, sanitize=sanitize)
 
     def predict(self, data):
+        """
+        Identifies and removes punctuation characters from the provided text data.
+
+        Args:
+            data (str): The input text from which punctuation characters need to be removed.
+
+        Returns:
+            tuple: A tuple containing the score (1 for success, 0 for failure) 
+                   and the sanitized text.
+        """
         punctuations = '''!()-[]{};:'"\,<>./?@#$%^&*_~'''
         sanitized_data = data
         score = 0
@@ -24,5 +59,11 @@ class RemovePunctuation(Scanner):
         return score, sanitized_data
 
     def format_response(self):
+        """
+        Formats the scanner's response.
+
+        Assigns the prediction and score to the response dictionary, making them 
+        available for further processing or output.
+        """
         self.response["score"] = self.pred[0]
         self.response['sanitized_data'] = self.pred[1]
