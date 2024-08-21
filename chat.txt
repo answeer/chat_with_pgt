@@ -1,66 +1,38 @@
-class PinnedFile(Scanner):
-    """
-    A class to detect if a PDF file contains any attached or embedded files.
+import profanity_check
+from llm_sanitation.scanners.scanner_base import Scanner
+from llm_sanitation.utils.models import *
+import nltk
+from llm_sanitation.logging.logging_setup import LogUtil, LogType, LogLevel
 
-    This class extends the `Scanner` base class and provides functionality to scan a PDF document
-    and identify any attached files (also known as "pinned files") within it.
-
-    Methods:
-        predict(file_path):
-            Scans the PDF file to detect any attached files.
-
-        format_response():
-            Formats the prediction response to include the result of the pinned file check and the corresponding score.
-    """
+class ProfanityCheck(Scanner):
 
     def __init__(self, **kwargs):
-        """
-        Initializes the PinnedFile instance.
+        super().__init__("profanity", 0.5)
 
-        Args:
-            **kwargs: Additional keyword arguments (not used directly in this class).
-        """
-        super().__init__("pinned_file", 0.5)
-
-    def predict(self, file_path):
-        """
-        Scans the PDF file to detect any attached files.
-
-        Args:
-            file_path (str): The file path of the PDF document to be scanned.
-
-        Returns:
-            tuple: A tuple containing a prediction message (str) indicating whether any attached files were found
-                   and the corresponding score (int).
-                   A score of 1 indicates that no attached files were found, while a score of 0 indicates that attached files were found.
-        """
+    def predict(self, data):
+        # sanitized_text = ""
         try:
-            document = fitz.open(file_path)
-            file_name = []
-            for page_num in range(document.page_count):
-                page = document[page_num]
-                annot = page.first_annot
-                if annot is not None:
-                    file_info = annot.file_info
-                    file_name.append(file_info['filename'])
-            if len(file_name) == 0:
-                predict = "No attached file found."
-                score = 1
+            predict = profanity_check.predict([data])
+            score = profanity_check.predict_prob([data])
+            if predict[0] == 1:
+                predict = True
             else:
-                predict = "Found attached file(s), named: {}".format(', '.join(file_name))
-                score = 0
+                predict = False
+            # if self._kwargs["sanitize"]:
+            #     sentences = nltk.sent_tokenize(data)
+            #     supported_sentences = []
+            #     for sentence in sentences:
+            #         predict = profanity_check.predict([sentence])
+            #         if not predict:
+            #             supported_sentences.append(sentence)
+            #         sanitized_text="\n".join(supported_sentences)
         except Exception as e:
             LogUtil.log(LogType.ERROR, LogLevel.ERROR, e)
-            predict = "Error occurred: {}".format(e)
+            predict = "Error occured: {}".format(e)
             score = 0
-        return predict, score
+        return predict,score[0]
 
     def format_response(self):
-        """
-        Formats the prediction response to include the result of the pinned file check and the corresponding score.
-
-        This method modifies the response dictionary to include the prediction result under the 
-        "pinned_file" key and the corresponding score under the "score" key.
-        """
-        self.response["prediction"]["pinned_file"] = self.pred[0]
-        self.response["score"] = self.pred[1]
+        self.response["prediction"]["Contain_profanity"] = self.pred[0]
+        self.response["score"] = 1 - self.pred[1]
+        # self.response['sanitized_text'] = self.pred[2]
