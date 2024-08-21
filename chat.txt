@@ -1,14 +1,37 @@
-from llm_sanitation.scanners.scanner_base import Scanner
-from llm_sanitation.utils.common import read_config
-import re
-from llm_sanitation.logging.logging_setup import LogUtil, LogType, LogLevel
-
 class SanctionedEnitities(Scanner):
+    """
+    A class to identify and optionally sanitize mentions of sanctioned entities in text data.
+
+    This class extends the `Scanner` base class and provides functionality to scan text for mentions 
+    of sanctioned entities based on a predefined list and return the results along with a sanitized version of the text.
+
+    Methods:
+        get_sanctioned_entities():
+            Retrieves the list of sanctioned entities from a configuration file.
+
+        predict(data):
+            Scans the provided text data for mentions of sanctioned entities and optionally sanitizes the text.
+
+        format_response():
+            Formats the prediction response to include the found entities, score, and optionally sanitized text.
+    """
 
     def __init__(self, **kwargs):
+        """
+        Initializes the SanctionedEnitities instance.
+
+        Args:
+            **kwargs: Additional keyword arguments. The 'sanitize' flag determines whether to sanitize the text.
+        """
         super().__init__("sanctioned_entities", .5, sanitize=True)
 
     def get_sanctioned_entities(self):
+        """
+        Retrieves the list of sanctioned entities from a configuration file.
+
+        The sanctioned entities are expected to be stored in a YAML file named "sanctioned_entity.yml".
+        This method reads the file and stores the entities in an instance variable.
+        """
         try:
             self.sanctioned_entities = read_config("sanctioned_entity.yml")
             self.sanctioned_entities = self.sanctioned_entities["sanctioned_entities"]
@@ -16,6 +39,16 @@ class SanctionedEnitities(Scanner):
             LogUtil.log(LogType.ERROR, LogLevel.ERROR, e)
 
     def predict(self, data):
+        """
+        Scans the provided text data for mentions of sanctioned entities and optionally sanitizes the text.
+
+        Args:
+            data (str): The text data to be scanned for mentions of sanctioned entities.
+
+        Returns:
+            dict: A dictionary containing the found entities under the "entities_found" key,
+                  the prediction score under the "score" key, and optionally sanitized data under the "sanitized_data" key.
+        """
         sanitized_data = data
         self.get_sanctioned_entities()
         found_entities = []
@@ -33,9 +66,15 @@ class SanctionedEnitities(Scanner):
         except Exception as e:
             LogUtil.log(LogType.ERROR, LogLevel.ERROR, e)
 
-        return {"entities_found": found_entities, "score": score, "sanitized_data" : sanitized_data }
+        return {"entities_found": found_entities, "score": score, "sanitized_data": sanitized_data}
 
     def format_response(self):
+        """
+        Formats the prediction response to include the found entities, score, and optionally sanitized text.
+
+        This method modifies the response dictionary to include the entities found under the 
+        "entities_found" key and the prediction score under the "score" key.
+        """
         self.response["prediction"]["entities_found"] = self.pred["entities_found"]
         self.response["score"] = self.pred["score"]
         # self.response["sanitized_text"] = self.pred["sanitized_data"]
