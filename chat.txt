@@ -1,76 +1,47 @@
 from llm_sanitation.scanners.scanner_base import Scanner
-import nltk
-from nltk.corpus import stopwords
-from nltk.tokenize import word_tokenize
-from llm_sanitation.utils.common import read_config
+from llm_sanitation.utils.models import *
+import unicodedata
 from llm_sanitation.logging.logging_setup import LogUtil, LogType, LogLevel
 
-class RemoveStopwords(Scanner):
-    """
-    A Scanner class to remove stopwords from text data.
-
-    This class identifies and removes common stopwords from the 
-    provided text. It extends the Scanner base class and provides a 
-    sanitization feature specifically for stopwords.
-
-    Attributes:
-        sanitize (bool): Flag to indicate whether to perform the sanitization.
-        stop_words (set): A set of stopwords to be removed from the text.
-    
-    Methods:
-        predict(data: str) -> tuple:
-            Identifies and removes stopwords from the input text data.
-            Returns a tuple containing a score (1 for success, 0 for failure) 
-            and the sanitized text.
-        
-        format_response() -> None:
-            Formats the response by assigning the prediction and score to the 
-            response dictionary.
-    """
+class RemoveUnicode(Scanner):
 
     def __init__(self, **kwargs):
-        """
-        Initializes the RemoveStopwords scanner.
-
-        Args:
-            sanitize (bool): Flag indicating whether the text should be sanitized.
-        """
         sanitize = kwargs["sanitize"]
-        super().__init__("remove_stopwords", 0.5, sanitize=sanitize)
-        self.stop_words = set(stopwords.words('english'))
-        config = read_config("harmful_strings.yml")
-        # custom_stopwords = config.get("custom_stopwords", [])
-        # self.stop_words = set(list(self.stop_words).extend(custom_stopwords))
+        super().__init__("invisible_text_check", 0.5, sanitize=sanitize)
+        # 'Cf' (Format characters), 'Cc' (Control characters), 'Co' (Private use characters), and 'Cn' (Unassigned characters)
+        self.banned_categories = ["Cf", "Cc", "Co", "Cn"]
 
-    def predict(self, data):
-        """
-        Identifies and removes stopwords from the provided text data.
+    @staticmethod
+    def contains_unicode(text: str):
+        return any(ord(char) > 127 for char in text)
 
-        Args:
-            data (str): The input text from which stopwords need to be removed.
-
-        Returns:
-            tuple: A tuple containing the score (1 for success, 0 for failure) 
-                   and the sanitized text.
-        """
-        sanitized_data = data
+    def predict(self,data):
+        sanitized_text = data
         score = 0
         try:
-            tokens = word_tokenize(data)
-            result = [i for i in tokens if i.lower() not in self.stop_words]
-            sanitized_data = " ".join(result)
-            score = 1
+            if not self.contains_unicode(data):
+                predict = "No invisible characters found"
+                score = 1
+            else:
+                chars = []
+                for char in data:
+                    if unicodedata.category(char) not in self.banned_categories:
+                        continue
+
+                    chars.append(char)
+                    data = data.replace(char, "")
+                if chars:
+                    predict = "Found invisible characters in the text:{}".format(', '.join(chars))
+                    sanitized_text = data
+                else:
+                    predict = "No invisible characters found"
+                    score = 1
         except Exception as e:
             LogUtil.log(LogType.ERROR, LogLevel.ERROR, e)
-
-        return score, sanitized_data
+        
+        return predict, score, sanitized_text
 
     def format_response(self):
-        """
-        Formats the scanner's response.
-
-        Assigns the prediction and score to the response dictionary, making them 
-        available for further processing or output.
-        """
-        self.response["score"] = self.pred[0]
-        self.response['sanitized_data'] = self.pred[1]
+        self.response["prediction"]["invisible_text_check"] = self.pred[0]
+        self.response["score"] = self.pred[1]
+        self.response['sanitized_data'] = self.pred[2]
