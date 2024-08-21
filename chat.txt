@@ -5,15 +5,51 @@ from detect_secrets.core.secrets_collection import SecretsCollection
 from detect_secrets.settings import default_settings
 from presidio_anonymizer.core.text_replace_builder import TextReplaceBuilder
 from llm_sanitation.logging.logging_setup import LogUtil, LogType, LogLevel
+import os
 
 class Secrets(Scanner):
+    """
+    A Scanner class that detects and optionally sanitizes secrets (e.g., API keys, passwords) in text data.
+
+    This class uses the `detect-secrets` library to find sensitive information in the provided text. If sanitization
+    is enabled, the detected secrets are replaced with asterisks.
+
+    Attributes:
+        sanitize (bool): Flag to indicate whether to perform the sanitization.
+        secrets (SecretsCollection): An instance of SecretsCollection for managing detected secrets.
+
+    Methods:
+        predict(data: str) -> tuple:
+            Scans the text for secrets, optionally sanitizes the detected secrets, and returns a prediction message, score, and sanitized text.
+        
+        format_response() -> None:
+            Formats the response by assigning the prediction message, score, and sanitized text to the response dictionary.
+    """
 
     def __init__(self, **kwargs):
-        sanitize=kwargs["sanitize"]
+        """
+        Initializes the Secrets scanner.
+
+        Args:
+            sanitize (bool): Flag indicating whether the text should be sanitized by replacing detected secrets.
+        """
+        sanitize = kwargs["sanitize"]
         super().__init__("secret_detector", 0.5, sanitize=sanitize)
         self.secrets = SecretsCollection()
 
-    def predict(self,data):
+    def predict(self, data):
+        """
+        Detects and optionally sanitizes secrets in the provided text data.
+
+        This method scans the text for secrets using the `detect-secrets` library. If sanitization is enabled,
+        the detected secrets are replaced with asterisks in the sanitized text.
+
+        Args:
+            data (str): The input text to scan for secrets.
+
+        Returns:
+            tuple: A tuple containing a prediction message, a score (1 for success, 0 for failure), and the sanitized text.
+        """
         sanitized_text = data
         score = 0
         try:
@@ -54,11 +90,17 @@ class Secrets(Scanner):
         
         except Exception as e:
             LogUtil.log(LogType.ERROR, LogLevel.ERROR, e)
-            predict = "Error occured: {}".format(e)
+            predict = "Error occurred: {}".format(e)
 
         return predict, score, sanitized_text
 
     def format_response(self):
+        """
+        Formats the scanner's response.
+
+        Assigns the prediction message, score, and sanitized text to the response dictionary, making them 
+        available for further processing or output.
+        """
         self.response["prediction"]["secret_detector"] = self.pred[0]
         self.response["score"] = 1 - self.pred[1]
         self.response['sanitized_data'] = self.pred[2]
