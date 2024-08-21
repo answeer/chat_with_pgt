@@ -1,15 +1,42 @@
-from llm_sanitation.scanners.scanner_base import Scanner
-from llm_sanitation.utils.models import *
-from llm_sanitation.logging.logging_setup import LogUtil, LogType, LogLevel
-
 class TextLength(Scanner):
+    """
+    A class to check the length of text data to ensure it falls within a specified range.
+
+    This class extends the `Scanner` base class and provides functionality to validate that the 
+    length of text data, in terms of word count, falls within the specified minimum and maximum limits.
+
+    Methods:
+        predict(data):
+            Checks the length of the provided text data and determines if it is within the specified range.
+
+        format_response():
+            Formats the prediction response to include the text length result and score.
+    """
 
     def __init__(self, **kwargs):
+        """
+        Initializes the TextLength instance.
+
+        Args:
+            **kwargs: Additional keyword arguments, including 'min_len' and 'max_len' which specify 
+                      the minimum and maximum word lengths for validation.
+        """
         min_len = kwargs["min_len"]
         max_len = kwargs["max_len"]
-        super().__init__("text_length", 0.5,min_len=min_len,max_len=max_len)
+        super().__init__("text_length", 0.5, min_len=min_len, max_len=max_len)
 
     def predict(self, data):
+        """
+        Checks the length of the provided text data to ensure it falls within the specified range.
+
+        Args:
+            data (str): The text data to be checked.
+
+        Returns:
+            tuple: A tuple containing the length of the text (in words) and a score (1 if the length 
+                   is within the specified range, 0 otherwise). In case of an error, returns an 
+                   error message and a score of 0.
+        """
         score = 0
         try:
             text_length = len(data.split())
@@ -17,9 +44,15 @@ class TextLength(Scanner):
                 score = 1
         except Exception as e:
             LogUtil.log(LogType.ERROR, LogLevel.ERROR, e)
-            text_length = "Error occured: {}".format(e)
-        return text_length,score
+            text_length = "Error occurred: {}".format(e)
+        return text_length, score
 
     def format_response(self):
+        """
+        Formats the prediction response to include the text length result and score.
+
+        This method modifies the response dictionary to include the text length under the 
+        "text_length" key and the prediction score under the "score" key.
+        """
         self.response["prediction"]["text_length"] = self.pred[0]
         self.response["score"] = self.pred[1]
