@@ -1,86 +1,53 @@
-class ConvertPDF(Scanner):
-    """
-    A class to convert PDF pages into images and then back into a PDF file.
+from llm_sanitation.scanners.scanner_base import Scanner
+from llm_sanitation.utils.models import *
+from llm_sanitation.utils.common import read_config
+from llm_sanitation.logging.logging_setup import LogUtil, LogType, LogLevel
 
-    This class extends the `Scanner` base class and provides functionality to convert each page
-    of a PDF file into an image and then reassemble those images into a new PDF file. The conversion
-    can be customized with zoom factor and output save path.
-
-    Attributes:
-        zoom_factor (float): The factor by which to zoom in/out on the PDF pages during conversion.
-        save_path (str): The directory path where the converted PDF will be saved.
-
-    Methods:
-        predict(input_path):
-            Converts the input PDF file into images, then creates a new PDF file from those images and saves it
-            to the specified location. Provides feedback on the success of the conversion process.
-
-        format_response():
-            Formats the prediction response to include a message about the conversion status and a score.
-    """
+class HarmfulString(Scanner):
 
     def __init__(self, **kwargs):
-        """
-        Initializes the ConvertPDF instance.
+        sanitize = kwargs["sanitize"]
+        case_sensitive = kwargs['case_sensitive']
+        super().__init__("harmful_stgring", 0.5,sanitize=sanitize,case_sensitive=case_sensitive)
+        self.harm_str = read_config("harmful_strings.yml")
 
-        Args:
-            **kwargs: Additional keyword arguments, including 'zoom_factor' to adjust the image size
-                      and 'save_path' to specify where the converted PDF will be saved.
-        """
-        zoom_factor = kwargs['zoom_factor']
-        save_path = kwargs['save_path']
-        super().__init__("convert_pdf", 0.5, zoom_factor=zoom_factor, save_path=save_path)
+    def redact_text(self,text,substrings):
+        redacted_text = text
+        for s in substrings:
+            redacted_text = redacted_text.replace(s, "[REDACTED]")
+        return redacted_text
 
-    def predict(self, input_path):
-        """
-        Converts the input PDF file into images and then assembles these images into a new PDF file.
-
-        Args:
-            input_path (str): The path to the input PDF file to be converted.
-
-        Returns:
-            tuple: A tuple containing a message about the conversion status and a score. A score of 1 indicates
-                   successful conversion, while a score of 0 indicates an error.
-        """
+    def predict(self, data):
+        sanitized_data = data
+        matched_substrings = []
+        missing_substrings = []
         try:
-            file_name = os.path.splitext(os.path.basename(input_path))[0]
-            doc_output_path = tempfile.gettempdir()
-            doc = fitz.open(input_path)
-            mat = fitz.Matrix(self._kwargs['zoom_factor'], self._kwargs['zoom_factor'])
-            result = fitz.open()
-            for page_no in range(1, doc.page_count + 1):
-                # Image conversion
-                os.makedirs(doc_output_path, exist_ok=True)
-                page = doc.load_page(page_no - 1) # Index of fitz different from textract response
-                pix = page.get_pixmap(matrix=mat)
-                img_path = os.path.join(doc_output_path, "page_" + str(page_no) + ".png")
-                pix.save(img_path)
+            for s in self.harm_str['harmful_strings']:
+                if self._kwargs['case_sensitive'] is False:
+                    s, data = s.lower(), data.lower()
 
-                img = fitz.open(img_path)  # Open image as document
-                rect = img[0].rect  # Get image dimensions
-                pdfbytes = img.convert_to_pdf()  # Convert image to PDF stream
-                img.close()  # Close the image
-                img_pdf = fitz.open("pdf", pdfbytes)  # Open PDF stream
-                page = result.new_page(width=rect.width, height=rect.height)  # Create new page with image dimensions
-                page.show_pdf_page(rect, img_pdf, 0)  # Display image on the new page
-            doc.close()
-            file_path = os.path.join(self._kwargs['save_path'], file_name + "_converted.pdf")
-            result.save(file_path)
-            result.close()
-            predict = "Convert PDF successful. Saved the converted PDF in: {}".format(file_path)
-            score = 1
+                if s in data:
+                    matched_substrings.append(s)
+                else:
+                    missing_substrings.append(s)
+
+            if matched_substrings:
+
+                if self._kwargs['sanitize']:
+                    sanitized_data = self.redact_text(sanitized_data, matched_substrings)
+                    predict = "Found the harmful strings: {}.".format(', '.join(matched_substrings))
+                    score = 0
+            else:
+                predict = "No harmful strings found."
+                score = 1
         except Exception as e:
             LogUtil.log(LogType.ERROR, LogLevel.ERROR, e)
-            predict = "Error occurred: {}".format(e)
+            predict = "Error occured: {}".format(e)
             score = 0
-        return predict, score
 
+        return predict, score, sanitized_data
+ 
     def format_response(self):
-        """
-        Formats the prediction response to include the conversion status message and score.
-
-        This method updates the response dictionary to include the conversion result message under the
-        "convert_pdf" key and the score under the "score" key.
-        """
-        self.response["prediction"]["convert_pdf"] = self.pred[0]
+        self.response["prediction"]["harmful_stgring"] = self.pred[0]
         self.response["score"] = self.pred[1]
+        self.response['sanitized_data'] = self.pred[2]
