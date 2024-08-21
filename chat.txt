@@ -1,40 +1,75 @@
-from llm_sanitation.scanners.scanner_base import Scanner
-from llm_sanitation.utils.models import *
-import bleach
-import re
-from llm_sanitation.logging.logging_setup import LogUtil, LogType, LogLevel
-
 class ExecutableScript(Scanner):
+    """
+    A class to detect the presence of potentially harmful executable scripts in HTML content.
+
+    This class extends the `Scanner` base class and provides functionality to check for embedded 
+    scripts and other potentially harmful HTML tags and attributes. It uses regular expressions 
+    to identify these patterns and assigns a score based on the findings.
+
+    Attributes:
+        scripts_pattern (dict): A dictionary of regular expressions for detecting various 
+                                types of executable scripts and HTML tags/attributes.
+
+    Methods:
+        predict(data):
+            Analyzes the provided HTML content to detect executable scripts or harmful tags.
+
+        format_response():
+            Formats the prediction response to include the details of detected scripts and the 
+            corresponding score.
+    """
 
     def __init__(self, **kwargs):
-        super().__init__("execuable_script", 0.8)
-        self.scripts_pattern = {"embedded script":re.compile(r"<script.*?>.*?</script>"),
-                           "iframe":re.compile(r"<iframe.*?>.*?</iframe>"),
-                           "object":re.compile(r"<object.*?>.*?</object>"),
-                           "embed":re.compile(r"<embed.*?>.*?</embed>"),
-                           "applet":re.compile(r"<applet.*?>.*?</applet>"),
-                           "link":re.compile(r"<link.*?>"),
-                           "style":re.compile(r"<style.*?>.*?</style>"),
-                           "JavaScript event handlers":re.compile(r"on\w+=\s*['\"].+?['\"]"),
-                           "JavaScript":re.compile(r"<JavaScript\s*:"),
-                           "data":re.compile(r"<JavaScript\s*:"),
-                           "img tag with src":re.compile(r"<img.*?src\s*['\"].*?['\"].*?>"),
-                           "a tag with href":re.compile(r"<a.*?href\s*['\"].*?['\"].*?>"),
-                           "body":re.compile(r"<body.*?online=.*?>"),
-                           "input":re.compile(r"<input.*?>"),
-                           "form":re.compile(r"<form.*?>.*?</form>"),
-                           "marquee":re.compile(r"<marquee.*?>.*?</marquee>"),
-                           "base":re.compile(r"<base.*?>"),
-                           }
+        """
+        Initializes the ExecutableScript instance and sets up the regular expressions for detecting 
+        various types of executable scripts and HTML tags/attributes.
 
-    def predict(self,data):
+        Args:
+            **kwargs: Additional keyword arguments (not utilized in this implementation).
+        """
+        super().__init__("executable_script", 0.8)
+        self.scripts_pattern = {
+            "embedded script": re.compile(r"<script.*?>.*?</script>"),
+            "iframe": re.compile(r"<iframe.*?>.*?</iframe>"),
+            "object": re.compile(r"<object.*?>.*?</object>"),
+            "embed": re.compile(r"<embed.*?>.*?</embed>"),
+            "applet": re.compile(r"<applet.*?>.*?</applet>"),
+            "link": re.compile(r"<link.*?>"),
+            "style": re.compile(r"<style.*?>.*?</style>"),
+            "JavaScript event handlers": re.compile(r"on\w+=\s*['\"].+?['\"]"),
+            "JavaScript": re.compile(r"<JavaScript\s*:"),
+            "data": re.compile(r"<JavaScript\s*:"),
+            "img tag with src": re.compile(r"<img.*?src\s*['\"].*?['\"].*?>"),
+            "a tag with href": re.compile(r"<a.*?href\s*['\"].*?['\"].*?>"),
+            "body": re.compile(r"<body.*?online=.*?>"),
+            "input": re.compile(r"<input.*?>"),
+            "form": re.compile(r"<form.*?>.*?</form>"),
+            "marquee": re.compile(r"<marquee.*?>.*?</marquee>"),
+            "base": re.compile(r"<base.*?>"),
+        }
+
+    def predict(self, data):
+        """
+        Analyzes the provided HTML content to detect executable scripts or harmful tags.
+
+        This method uses the defined regular expressions to check the HTML code for embedded scripts 
+        or tags that might execute code. It returns a prediction message and a score based on the findings.
+
+        Args:
+            data (str): The HTML content to be analyzed.
+
+        Returns:
+            tuple: A tuple containing the prediction message (str) and the corresponding score (int).
+                   A score of 0 indicates the presence of executable scripts, while a score of 1 
+                   indicates the content is clean.
+        """
         try:
-            # check the HTML code block, if exist, match the script patterns.
+            # Clean the HTML content by stripping out potentially harmful tags.
             cleaned_data = bleach.clean(data, strip=True)
             if cleaned_data != data:
                 languages = []
                 for language, pattern in self.scripts_pattern.items():
-                    if re.search(pattern,data):
+                    if re.search(pattern, data):
                         languages.append(language)
                 prediction = "Found executable scripts: {}.".format(', '.join(languages))
                 score = 0
@@ -42,12 +77,19 @@ class ExecutableScript(Scanner):
                 prediction = "No executable scripts found."
                 score = 1
         except Exception as e:
-            prediction = "Error occured: {}".format(e)
+            prediction = "Error occurred: {}".format(e)
             score = 0
             LogUtil.log(LogType.ERROR, LogLevel.ERROR, e)
             
-        return prediction,score
+        return prediction, score
  
     def format_response(self):
+        """
+        Formats the prediction response to include the details of detected executable scripts 
+        and the corresponding score.
+
+        This method modifies the response dictionary to include details of detected executable 
+        scripts under the "executable_script" key and the corresponding score under the "score" key.
+        """
         self.response["prediction"]["executable_script"] = self.pred[0]
         self.response["score"] = self.pred[1]
