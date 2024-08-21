@@ -1,38 +1,54 @@
-import profanity_check
-from llm_sanitation.scanners.scanner_base import Scanner
-from llm_sanitation.utils.models import *
-import nltk
-from llm_sanitation.logging.logging_setup import LogUtil, LogType, LogLevel
-
 class ProfanityCheck(Scanner):
+    """
+    A class to detect profanity in a given text using the `profanity_check` library.
+
+    This class extends the `Scanner` base class and provides functionality to scan text data
+    for profanity and return a prediction along with a confidence score.
+
+    Methods:
+        predict(data):
+            Scans the provided text data to detect the presence of profanity.
+
+        format_response():
+            Formats the prediction response to include the result of the profanity check and the corresponding score.
+    """
 
     def __init__(self, **kwargs):
+        """
+        Initializes the ProfanityCheck instance.
+
+        Args:
+            **kwargs: Additional keyword arguments (not used directly in this class).
+        """
         super().__init__("profanity", 0.5)
 
     def predict(self, data):
-        # sanitized_text = ""
+        """
+        Scans the provided text data to detect the presence of profanity.
+
+        Args:
+            data (str): The text data to be scanned for profanity.
+
+        Returns:
+            tuple: A tuple containing a boolean prediction indicating whether profanity was detected (True for yes, False for no),
+                   and a confidence score (float) between 0 and 1 representing the likelihood of the text containing profanity.
+        """
         try:
             predict = profanity_check.predict([data])
             score = profanity_check.predict_prob([data])
-            if predict[0] == 1:
-                predict = True
-            else:
-                predict = False
-            # if self._kwargs["sanitize"]:
-            #     sentences = nltk.sent_tokenize(data)
-            #     supported_sentences = []
-            #     for sentence in sentences:
-            #         predict = profanity_check.predict([sentence])
-            #         if not predict:
-            #             supported_sentences.append(sentence)
-            #         sanitized_text="\n".join(supported_sentences)
+            predict = bool(predict[0])
         except Exception as e:
             LogUtil.log(LogType.ERROR, LogLevel.ERROR, e)
-            predict = "Error occured: {}".format(e)
-            score = 0
-        return predict,score[0]
+            predict = "Error occurred: {}".format(e)
+            score = [0]
+        return predict, score[0]
 
     def format_response(self):
+        """
+        Formats the prediction response to include the result of the profanity check and the corresponding score.
+
+        This method modifies the response dictionary to include the prediction result under the 
+        "Contain_profanity" key and the adjusted score under the "score" key.
+        """
         self.response["prediction"]["Contain_profanity"] = self.pred[0]
         self.response["score"] = 1 - self.pred[1]
-        # self.response['sanitized_text'] = self.pred[2]
