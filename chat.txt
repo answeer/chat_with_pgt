@@ -1,58 +1,89 @@
-class TextLength(Scanner):
-    """
-    A class to check the length of text data to ensure it falls within a specified range.
+from llm_sanitation.scanners.scanner_base import Scanner
+from llm_sanitation.utils.models import *
+import sentencepiece as spm
+import spacy
+from nltk.tokenize import NLTKWordTokenizer,WordPunctTokenizer,WhitespaceTokenizer
+from transformers import BertTokenizer, RobertaTokenizerFast, GPT2Tokenizer
+from llm_sanitation.logging.logging_setup import LogUtil, LogType, LogLevel
 
-    This class extends the `Scanner` base class and provides functionality to validate that the 
-    length of text data, in terms of word count, falls within the specified minimum and maximum limits.
-
-    Methods:
-        predict(data):
-            Checks the length of the provided text data and determines if it is within the specified range.
-
-        format_response():
-            Formats the prediction response to include the text length result and score.
-    """
+class TokenLimit(Scanner):
 
     def __init__(self, **kwargs):
-        """
-        Initializes the TextLength instance.
+        token_limit = kwargs["token_limit"]
+        token_method = kwargs['token_method']
+        super().__init__("token_limit", 0.5,token_limit=token_limit,token_method=token_method)
 
-        Args:
-            **kwargs: Additional keyword arguments, including 'min_len' and 'max_len' which specify 
-                      the minimum and maximum word lengths for validation.
-        """
-        min_len = kwargs["min_len"]
-        max_len = kwargs["max_len"]
-        super().__init__("text_length", 0.5, min_len=min_len, max_len=max_len)
+        self.token_methods = {
+            'wiite space':self.white_space_tokenizer,
+            'word piece':self.word_piece_tokenizer,
+            'word punct':self.word_punct_tokenizer,
+            'BPE':self.gpt2_tokenizer,
+            # 'sentence piece':self.sent_piece_tokenizer,
+            'fast tokenizer':self.robert_fast_tokenizer,
+            'nltk':self.nltk_tokenizer,
+            'spacy':self.spacy_tokenizer
+            }
+
+    def nltk_tokenizer(self,data):
+        tokens = NLTKWordTokenizer().tokenize(data)
+        token_count = len(tokens)
+        return token_count
+    
+    def word_piece_tokenizer(self,data):
+        tokenizer = BertTokenizer.from_pretrained(models_path['bert_tokenizer'][0])
+        tokens = tokenizer.tokenize(data)
+        token_count = len(tokens)
+        return token_count
+    
+    def robert_fast_tokenizer(self,data):
+        tokenizer = RobertaTokenizerFast.from_pretrained(models_path['roberta_tokenizer'][0])
+        tokens = tokenizer.tokenize(data)
+        token_count = len(tokens)
+        return token_count
+    
+    def gpt2_tokenizer(self,data):
+        tokenizer = GPT2Tokenizer.from_pretrained(models_path['gpt2_tokenizer'][0])
+        tokens = tokenizer.tokenize(data)
+        token_count = len(tokens)
+        return token_count
+
+    # def sent_piece_tokenizer(self,data):
+    #     s = spm.SentencePieceProcessor(model_file=models_path['sentence_piece'][0])
+    #     token_count = len(s.encode(data))
+    #     return token_count
+    
+    def white_space_tokenizer(self,data):
+        tokens = WhitespaceTokenizer().tokenize(data)
+        token_count = len(tokens)
+        return token_count
+
+    def word_punct_tokenizer(self,data):
+        tokens = WordPunctTokenizer().tokenize(data)
+        token_count = len(tokens)
+        return token_count
+    
+    def spacy_tokenizer(slef,data):
+        nlp = spacy.load("en_core_web_sm")
+        doc = nlp(data)
+        token_count = len(doc)
+        return token_count
 
     def predict(self, data):
-        """
-        Checks the length of the provided text data to ensure it falls within the specified range.
-
-        Args:
-            data (str): The text data to be checked.
-
-        Returns:
-            tuple: A tuple containing the length of the text (in words) and a score (1 if the length 
-                   is within the specified range, 0 otherwise). In case of an error, returns an 
-                   error message and a score of 0.
-        """
+        token_method = self._kwargs['token_method']
         score = 0
         try:
-            text_length = len(data.split())
-            if text_length < self._kwargs['max_len'] and text_length > self._kwargs['min_len']:
-                score = 1
+            if token_method in self.token_methods:
+                token_count = self.token_methods[token_method](data)
+                pred = f"Tokens numbers is {token_count}."
+                if token_count < self._kwargs['token_limit']:
+                    score = 1
+            else:
+                pred = "This method is not support, please choose a methods in [{}].".format(", ".join(self.token_methods.keys()))
         except Exception as e:
             LogUtil.log(LogType.ERROR, LogLevel.ERROR, e)
-            text_length = "Error occurred: {}".format(e)
-        return text_length, score
+            pred = "Error occured: {}".format(e)
+        return pred,score
 
     def format_response(self):
-        """
-        Formats the prediction response to include the text length result and score.
-
-        This method modifies the response dictionary to include the text length under the 
-        "text_length" key and the prediction score under the "score" key.
-        """
-        self.response["prediction"]["text_length"] = self.pred[0]
+        self.response["prediction"]["token_limit"] = self.pred[0]
         self.response["score"] = self.pred[1]
