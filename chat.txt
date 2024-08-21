@@ -2,59 +2,17 @@ from llm_sanitation.scanners.scanner_base import Scanner
 import re
 from llm_sanitation.logging.logging_setup import LogUtil, LogType, LogLevel
 
-class RemoveEmojis(Scanner):
-    """
-    A Scanner class to remove emojis from text data.
-
-    This class identifies and removes emojis from a given text using a regular 
-    expression pattern. It extends the Scanner base class and provides a 
-    sanitization feature specifically for emojis.
-
-    Attributes:
-        sanitize (bool): Flag to indicate whether to perform the sanitization.
-    
-    Methods:
-        predict(data: str) -> tuple:
-            Identifies and removes emojis from the input text data.
-            Returns a tuple containing a score (1 for success, 0 for failure) 
-            and the sanitized text.
-        
-        format_response() -> None:
-            Formats the response by assigning the prediction and score to the 
-            response dictionary.
-    """
+class RemoveNumbers(Scanner):
 
     def __init__(self, **kwargs):
-        """
-        Initializes the RemoveEmojis scanner.
-
-        Args:
-            sanitize (bool): Flag indicating whether the text should be sanitized.
-        """
         sanitize = kwargs["sanitize"]
-        super().__init__("remove_emojies", 0.5, sanitize=sanitize)
+        super().__init__("remove_numbers", 0.5, sanitize=sanitize)
 
     def predict(self, data):
-        """
-        Identifies and removes emojis from the provided text data.
-
-        Args:
-            data (str): The input text from which emojis need to be removed.
-
-        Returns:
-            tuple: A tuple containing the score (1 for success, 0 for failure) 
-                   and the sanitized text.
-        """
         sanitized_data = data
         score = 0
         try:
-            emoji_pattern = re.compile("["
-            u"\U0001F600-\U0001F64F"  # emoticons
-            u"\U0001F300-\U0001F5FF"  # symbols & pictographs
-            u"\U0001F680-\U0001F6FF"  # transport & map symbols
-            u"\U0001F1E0-\U0001F1FF"  # flags (iOS)
-                            "]+", flags=re.UNICODE)
-            sanitized_data = emoji_pattern.sub(r'', data)
+            sanitized_data = re.sub(r'\d+', "", data)
             score = 1
         except Exception as e:
             LogUtil.log(LogType.ERROR, LogLevel.ERROR, e)
@@ -62,11 +20,5 @@ class RemoveEmojis(Scanner):
         return score, sanitized_data
 
     def format_response(self):
-        """
-        Formats the scanner's response.
-
-        Assigns the prediction and score to the response dictionary, making them 
-        available for further processing or output.
-        """
         self.response["score"] = self.pred[0]
         self.response['sanitized_data'] = self.pred[1]
