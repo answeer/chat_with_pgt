@@ -1,63 +1,43 @@
-class FormatCheck(Scanner):
-    """
-    A class to check if a given file's format is valid based on a predefined list of acceptable formats.
+from llm_sanitation.scanners.scanner_base import Scanner
+from llm_sanitation.utils.models import *
+from PIL import Image
+import pypdf
+from llm_sanitation.logging.logging_setup import LogUtil, LogType, LogLevel
 
-    This class extends the `Scanner` base class and provides functionality to validate the file format 
-    by checking its suffix against a provided list of acceptable formats.
 
-    Attributes:
-        format_list (list): A list of valid file formats to check against.
-
-    Methods:
-        predict(file):
-            Checks the file format and returns a prediction message and score.
-
-        format_response():
-            Formats the prediction response to include the result of the format check and the corresponding score.
-    """
+class PageCount(Scanner):
 
     def __init__(self, **kwargs):
-        """
-        Initializes the FormatCheck instance and sets up the list of valid formats.
+        self.page_thresh = kwargs["page_thresh"]
+        super().__init__("page_count", 0.5, page_thresh=self.page_thresh)
 
-        Args:
-            **kwargs: Additional keyword arguments, specifically 'format_list', which is a list of valid formats.
-        """
-        format_list = kwargs["format_list"]
-        super().__init__("format_check", 0.5, format_list=format_list)
-
-    def predict(self, file):
-        """
-        Checks the file format by comparing the file's suffix against the provided list of valid formats.
-
-        Args:
-            file (str): The file name or path to be checked.
-
-        Returns:
-            tuple: A tuple containing the prediction message (str) and the corresponding score (int).
-                   A score of 1 indicates a valid format, while a score of 0 indicates an invalid format.
-        """
+    def predict(self, file_path):
+        file_type = file_path.split(".")[-1].lower()
+        # if file_type not in ['pdf','jpg','png','jpeg']:
+        #     self.response['error_code'].append("ERR002")
         try:
-            file_suffix = file.split('.')[-1]
-            if file_suffix in self._kwargs['format_list']:
-                score = 1
-                predict = "valid format"
+            if file_type == "pdf":
+                doc = pypdf.PdfReader(file_path)
+                page_count = len(doc.pages)
+            elif file_type == "tiff" or "tif":
+                img = Image.open(file_path)
+                page_count = img.n_frames
             else:
+                predict = "Unsupport file format. Only support tiff and pdf now."
                 score = 0
-                predict = "invalid format"
+                return predict, score
+            if page_count> self._kwargs['page_thresh']:
+                predict = "The page count({}) for this file is exceeded threshlod.".format(page_count)
+                score = 0
+            else:
+                predict = "Valid page count({}) for this file.".format(page_count)
+                score = 1
         except Exception as e:
-            predict = "Error occurred: {}".format(e)
-            score = 0
             LogUtil.log(LogType.ERROR, LogLevel.ERROR, e)
-
+            predict = "Error occured: {}".format(e)
+            score = 0
         return predict, score
 
     def format_response(self):
-        """
-        Formats the prediction response to include the result of the format check and the corresponding score.
-
-        This method modifies the response dictionary to include the format check result under the "format" key 
-        and the corresponding score under the "score" key.
-        """
-        self.response["prediction"]["format"] = self.pred[0]
+        self.response["prediction"]["page_count"] = self.pred[0]
         self.response["score"] = self.pred[1]
