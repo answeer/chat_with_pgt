@@ -1,73 +1,30 @@
-class RemoveEmoticons(Scanner):
-    """
-    A class to detect and optionally sanitize (remove or convert) emoticons in text data.
+from llm_sanitation.scanners.scanner_base import Scanner
+import re
+from llm_sanitation.logging.logging_setup import LogUtil, LogType, LogLevel
 
-    This class extends the `Scanner` base class to identify and handle emoticons using a predefined
-    mapping of emoticons to their textual representations. The class can either remove emoticons or
-    convert them into descriptive text.
-
-    Attributes:
-        sanitize (bool): Indicates whether to sanitize (remove or convert) emoticons from the text.
-        convert (bool): Determines whether to convert emoticons into descriptive text instead of removing them.
-
-    Methods:
-        predict(data):
-            Processes the input text to either remove or convert emoticons based on the configuration.
-
-        format_response():
-            Formats the response to include the sanitization result and the sanitized text.
-    """
+class RemoveEmojis(Scanner):
 
     def __init__(self, **kwargs):
-        """
-        Initializes the RemoveEmoticons instance.
-
-        Args:
-            **kwargs: Additional keyword arguments, including:
-                - 'sanitize': A boolean indicating whether to sanitize emoticons from the text.
-                - 'convert': A boolean indicating whether to convert emoticons to descriptive text instead of removing them (default is False).
-        """
         sanitize = kwargs["sanitize"]
-        convert = kwargs.get("convert", False)
-        super().__init__("text_emoticons", 0.5, sanitize=sanitize, convert=convert)
+        super().__init__("remove_emojies", 0.5,sanitize=sanitize)
 
     def predict(self, data):
-        """
-        Processes the input text to either remove or convert emoticons based on the configuration.
-
-        Args:
-            data (str): The text data to be processed for emoticons.
-
-        Returns:
-            tuple: A tuple containing:
-                - A score indicating the success of the operation (1 for success, 0 for failure).
-                - The sanitized text after emoticons have been removed or converted.
-        """
         sanitized_data = data
+        score = 0
         try:
-            if self._kwargs["convert"]:
-                for emot in EMOTICONS_EMO:
-                    sanitized_data = sanitized_data.replace(
-                        emot, "_".join(EMOTICONS_EMO[emot].replace(",", "").split())
-                    )
-            else:
-                for emot in EMOTICONS_EMO:
-                    sanitized_data = sanitized_data.replace(emot, "")
-
+            emoji_pattern = re.compile("["
+            u"\U0001F600-\U0001F64F"  # emoticons
+            u"\U0001F300-\U0001F5FF"  # symbols & pictographs
+            u"\U0001F680-\U0001F6FF"  # transport & map symbols
+            u"\U0001F1E0-\U0001F1FF"  # flags (iOS)
+                            "]+", flags=re.UNICODE)
+            sanitized_data = emoji_pattern.sub(r'', data)
             score = 1
         except Exception as e:
             LogUtil.log(LogType.ERROR, LogLevel.ERROR, e)
-            score = 0
 
         return score, sanitized_data
 
     def format_response(self):
-        """
-        Formats the prediction response to include the sanitization result and the sanitized text.
-
-        This method updates the response dictionary to include:
-            - The score of the operation under the "score" key.
-            - The sanitized data under the "sanitized_data" key.
-        """
         self.response["score"] = self.pred[0]
         self.response['sanitized_data'] = self.pred[1]
