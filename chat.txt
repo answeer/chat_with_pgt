@@ -1,38 +1,72 @@
-from llm_sanitation.scanners.scanner_base import Scanner
-from llm_sanitation.utils.models import *
-from PIL import Image
-from llm_sanitation.logging.logging_setup import LogUtil, LogType, LogLevel
-
 class ImageSizeCheck(Scanner):
+    """
+    A class to check the dimensions (height and width) of an image and validate them against specified thresholds.
 
-    def __init__(self,**kwargs):
+    This class extends the `Scanner` base class and provides functionality to determine if an image file's dimensions
+    meet the minimum required size.
+
+    Attributes:
+        img_size_thresh (tuple): A tuple containing the minimum required height and width for the image.
+
+    Methods:
+        predict(image_path):
+            Checks the dimensions of the image and validates them against the specified thresholds.
+
+        format_response():
+            Formats the prediction response to include the result of the size check and the corresponding score.
+    """
+
+    def __init__(self, **kwargs):
+        """
+        Initializes the ImageSizeCheck instance and sets up the image size thresholds.
+
+        Args:
+            **kwargs: Additional keyword arguments, including 'img_size_thresh' which is a tuple of minimum required
+                      image dimensions (height, width).
+        """
         img_size_thresh = kwargs['img_size_thresh']
-        super().__init__("img_size", 0.5,img_size_thresh=img_size_thresh)
+        super().__init__("img_size", 0.5, img_size_thresh=img_size_thresh)
 
-    def predict(self,image_path):
+    def predict(self, image_path):
+        """
+        Checks the dimensions of the image and validates them against the specified thresholds.
+
+        Args:
+            image_path (str): The file path of the image to be checked.
+
+        Returns:
+            tuple: A tuple containing a prediction message (str) indicating whether the image size is valid 
+                   and the corresponding score (int).
+                   A score of 1 indicates that the image size is within the valid range, while a score of 0 indicates that it is not.
+        """
         try:
             extn = os.path.split(image_path)[-1].split(".")[-1].lower()
             if extn in ["tiff", "tif", "png", "jpg", "jpeg"]:
                 img = Image.open(image_path)
-                height, weidth = img.size
-                height_thresh, weidth_thresh = self._kwargs['img_size_thresh']
-                if height >= height_thresh and weidth >= weidth_thresh:
-                    predict = f"The image size {(height,weidth)} for this image is valid."
+                height, width = img.size
+                height_thresh, width_thresh = self._kwargs['img_size_thresh']
+                if height >= height_thresh and width >= width_thresh:
+                    predict = f"The image size {(height, width)} for this image is valid."
                     score = 1
                 else:
-                    predict = f"The image size for this image is NOT valid, image size is {(height,weidth)}. Please double check the image and upload an valid image with enough size."
+                    predict = f"The image size for this image is NOT valid. Image size is {(height, width)}. Please upload a valid image with sufficient size."
                     score = 0
-
             else:
                 predict = "Doc Type '{}' not supported".format(extn)
                 score = 0
         except Exception as e:
             LogUtil.log(LogType.ERROR, LogLevel.ERROR, e)
-            predict = "Error occured: {}".format(e)
+            predict = "Error occurred: {}".format(e)
             score = 0
 
         return predict, score
 
     def format_response(self):
+        """
+        Formats the prediction response to include the result of the size check and the corresponding score.
+
+        This method modifies the response dictionary to include the prediction result under the 
+        "img_size" key and the corresponding score under the "score" key.
+        """
         self.response["prediction"]["img_size"] = self.pred[0]
         self.response["score"] = self.pred[1]
