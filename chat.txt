@@ -1,34 +1,72 @@
-from llm_sanitation.scanners.scanner_base import Scanner
-from llm_sanitation.utils.models import *
-from presidio_analyzer.nlp_engine import NlpEngineProvider
-from presidio_analyzer.analyzer_engine import AnalyzerEngine
-from presidio_anonymizer import AnonymizerEngine
-from presidio_analyzer.context_aware_enhancers import LemmaContextAwareEnhancer
-from presidio_analyzer import (
-    AnalyzerEngine,
-    Pattern,
-    PatternRecognizer,
-    RecognizerRegistry,
-)
-import spacy
-import copy
-from llm_sanitation.utils.common import read_config
-from llm_sanitation.logging.logging_setup import LogUtil, LogType, LogLevel
-
 class PiiDetector(Scanner):
+    """
+    A class to detect and optionally sanitize Personally Identifiable Information (PII) in text data.
+
+    This class extends the `Scanner` base class to identify PII using the Presidio library, which
+    leverages NLP models and custom regex patterns. It can also sanitize the detected PII from the
+    input text.
+
+    Attributes:
+        sanitize (bool): Indicates whether to sanitize (redact) PII from the text.
+        default_entities (list): A list of default PII entities to be detected, as defined in the configuration.
+        default_regex_patterns (list): A list of custom regex patterns for detecting PII, loaded from a configuration file.
+        analyzer (AnalyzerEngine): The Presidio analyzer engine configured with custom and predefined recognizers.
+
+    Methods:
+        read_config():
+            Reads and loads the default entity types and regex patterns for PII detection from a configuration file.
+
+        get_regex_patterns(regex_patterns):
+            Prepares regex patterns for PII detection based on the provided configuration.
+
+        add_recognizers(registry, regex_groups):
+            Adds custom recognizers to the registry using predefined and custom regex patterns.
+
+        get_analyzer():
+            Initializes the Presidio analyzer engine, loads predefined and custom recognizers, and sets up the NLP engine.
+
+        predict(data):
+            Detects PII in the provided text and optionally sanitizes it. Returns the result of the detection,
+            a risk score, and the sanitized text.
+
+        format_response():
+            Formats the response to include the detection result, risk score, and sanitized text.
+    """
 
     def __init__(self, **kwargs):
-        sanitize=kwargs["sanitize"]
+        """
+        Initializes the PiiDetector instance.
+
+        Args:
+            **kwargs: Additional keyword arguments, including 'sanitize' to determine if PII should be redacted.
+        """
+        sanitize = kwargs["sanitize"]
         super().__init__("pii_detector", 0.5, sanitize=sanitize)
         self.read_config()
         self.get_analyzer()
 
     def read_config(self):
+        """
+        Reads the configuration file to load the default entity types and regex patterns for PII detection.
+
+        This method loads the entity types and custom regex patterns that are defined in the configuration file
+        'pii_detector.yml'.
+        """
         config = read_config("pii_detector.yml")
         self.default_entities = config['default_entity_types']
         self.default_regex_patterns = config['default_regex_patterns']
 
-    def get_regex_patterns(self,regex_patterns):
+    def get_regex_patterns(self, regex_patterns):
+        """
+        Prepares regex patterns for PII detection based on the provided configuration.
+
+        Args:
+            regex_patterns (list): A list of regex patterns from the configuration file.
+
+        Returns:
+            list: A list of dictionaries, each containing details of a regex pattern including its name, expressions,
+                  context, score, and supported languages.
+        """
         result = []
         for group in regex_patterns:
             result.append(
@@ -43,19 +81,18 @@ class PiiDetector(Scanner):
             )
         return result
 
-    def add_recognizers(self,registry,regex_groups):
+    def add_recognizers(self, registry, regex_groups):
         """
-        Create a RecognizerRegistry and populate it with regex patterns and custom names.
+        Adds custom recognizers to the registry using predefined and custom regex patterns.
 
-        Parameters:
-            regex_groups: List of regex patterns.
+        Args:
+            registry (RecognizerRegistry): The registry to which recognizers are added.
+            regex_groups (list): A list of regex patterns to be added as recognizers.
 
         Returns:
-            RecognizerRegistry: A RecognizerRegistry object loaded with regex and custom name recognizers.
+            RecognizerRegistry: The updated RecognizerRegistry object.
         """
-
         for pattern_data in regex_groups:
-
             label = pattern_data["name"]
             reuse = pattern_data.get("reuse", False)
 
@@ -64,12 +101,9 @@ class PiiDetector(Scanner):
                 pattern_data.get("expressions", []) or [],
             )
 
-
             if reuse:
                 new_recognizer = copy.deepcopy(
-                    registry.get_recognizers(language=reuse["language"], entities=[reuse["name"]])[
-                        0
-                    ]
+                    registry.get_recognizers(language=reuse["language"], entities=[reuse["name"]])[0]
                 )
                 registry.add_recognizer(new_recognizer)
             else:
@@ -84,8 +118,14 @@ class PiiDetector(Scanner):
         return registry
 
     def get_analyzer(self):
+        """
+        Initializes the Presidio analyzer engine, loads predefined and custom recognizers, and sets up the NLP engine.
+
+        This method configures the analyzer engine with predefined recognizers, loads custom regex patterns,
+        and removes the default Spacy recognizer to avoid redundancy.
+        """
         try:
-            # Use small spacy model, for faster inference.
+            # Use small spacy model for faster inference.
             if not spacy.util.is_package("en_core_web_sm"):
                 spacy.cli.download("en_core_web_sm")
 
@@ -99,15 +139,30 @@ class PiiDetector(Scanner):
             registry.load_predefined_recognizers(nlp_engine=nlp_engine)
             registry = self.add_recognizers(registry, regex_groups)
             registry.remove_recognizer("SpacyRecognizer")
-            self.analyzer = AnalyzerEngine(registry=registry,
-                                        nlp_engine=nlp_engine,
-                                        context_aware_enhancer=LemmaContextAwareEnhancer(
-                                        context_similarity_factor=0.35,
-                                        min_score_with_context_similarity=0.4,))
+            self.analyzer = AnalyzerEngine(
+                registry=registry,
+                nlp_engine=nlp_engine,
+                context_aware_enhancer=LemmaContextAwareEnhancer(
+                    context_similarity_factor=0.35,
+                    min_score_with_context_similarity=0.4,
+                ),
+            )
         except Exception as e:
             LogUtil.log(LogType.ERROR, LogLevel.ERROR, e)
 
-    def predict(self,data):
+    def predict(self, data):
+        """
+        Detects PII in the provided text and optionally sanitizes it.
+
+        Args:
+            data (str): The text data to be checked for PII.
+
+        Returns:
+            tuple: A tuple containing:
+                - A message indicating whether PII was detected or not.
+                - A risk score indicating the likelihood of PII presence (1 for high risk, 0 for low risk).
+                - The sanitized text if PII was detected and sanitization is enabled.
+        """
         sanitized_prompt = data
         try:
             analyzer_results = self.analyzer.analyze(
@@ -138,11 +193,19 @@ class PiiDetector(Scanner):
                 sanitized_prompt = data
         except Exception as e:
             LogUtil.log(LogType.ERROR, LogLevel.ERROR, e)
-            predict = "Error occured: {}".format(e)
+            predict = "Error occurred: {}".format(e)
             risk_score = 1
-        return predict,risk_score,sanitized_prompt
+        return predict, risk_score, sanitized_prompt
 
     def format_response(self):
+        """
+        Formats the prediction response to include the detection result, risk score, and sanitized text.
+
+        This method updates the response dictionary to include:
+            - The prediction result under the "pii_detector" key.
+            - The risk score under the "score" key (inverted to represent safety, where 1 indicates no PII).
+            - The sanitized data under the "sanitized_data" key.
+        """
         self.response["prediction"]["pii_detector"] = self.pred[0]
         self.response["score"] = 1 - self.pred[1]
         self.response['sanitized_data'] = self.pred[2]
