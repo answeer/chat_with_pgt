@@ -1,106 +1,38 @@
 from llm_sanitation.scanners.scanner_base import Scanner
-from llm_sanitation.utils.models import *
-import tempfile
-from detect_secrets.core.secrets_collection import SecretsCollection
-from detect_secrets.settings import default_settings
-from presidio_anonymizer.core.text_replace_builder import TextReplaceBuilder
+from symspellpy import SymSpell, Verbosity
+import pkg_resources
 from llm_sanitation.logging.logging_setup import LogUtil, LogType, LogLevel
-import os
 
-class Secrets(Scanner):
-    """
-    A Scanner class that detects and optionally sanitizes secrets (e.g., API keys, passwords) in text data.
-
-    This class uses the `detect-secrets` library to find sensitive information in the provided text. If sanitization
-    is enabled, the detected secrets are replaced with asterisks.
-
-    Attributes:
-        sanitize (bool): Flag to indicate whether to perform the sanitization.
-        secrets (SecretsCollection): An instance of SecretsCollection for managing detected secrets.
-
-    Methods:
-        predict(data: str) -> tuple:
-            Scans the text for secrets, optionally sanitizes the detected secrets, and returns a prediction message, score, and sanitized text.
-        
-        format_response() -> None:
-            Formats the response by assigning the prediction message, score, and sanitized text to the response dictionary.
-    """
+class SpellCorrection(Scanner):
 
     def __init__(self, **kwargs):
-        """
-        Initializes the Secrets scanner.
-
-        Args:
-            sanitize (bool): Flag indicating whether the text should be sanitized by replacing detected secrets.
-        """
         sanitize = kwargs["sanitize"]
-        super().__init__("secret_detector", 0.5, sanitize=sanitize)
-        self.secrets = SecretsCollection()
+        super().__init__("spell_corrector", 0.5, sanitize=sanitize,)
 
     def predict(self, data):
-        """
-        Detects and optionally sanitizes secrets in the provided text data.
-
-        This method scans the text for secrets using the `detect-secrets` library. If sanitization is enabled,
-        the detected secrets are replaced with asterisks in the sanitized text.
-
-        Args:
-            data (str): The input text to scan for secrets.
-
-        Returns:
-            tuple: A tuple containing a prediction message, a score (1 for success, 0 for failure), and the sanitized text.
-        """
-        sanitized_text = data
+        sanitized_data = data
         score = 0
         try:
-            temp_file = tempfile.NamedTemporaryFile(delete=False)
-            temp_file.write(data.encode("utf-8"))
-            temp_file.close()
+            sym_spell = SymSpell(max_dictionary_edit_distance=2, prefix_length=7)
+            dictionary_path = pkg_resources.resource_filename(
+                "symspellpy", "frequency_dictionary_en_82_765.txt")
+            bigram_path = pkg_resources.resource_filename(
+                "symspellpy", "frequency_bigramdictionary_en_243_342.txt")
 
-            with default_settings():
-                self.secrets.scan_file(str(temp_file.name))
+            sym_spell.load_dictionary(dictionary_path, term_index=0, count_index=1)
+            sym_spell.load_bigram_dictionary(bigram_path, term_index=0, count_index=2)
 
-            secret_types = []
-            text_replace_builder = TextReplaceBuilder(original_text=data)
-            for file in self.secrets.files:
-                for found_secret in self.secrets[file]:
-                    secret_types.append(found_secret.type)
-                    if self._kwargs['sanitize']:
-                        character_start_index = data.find(found_secret.secret_value, None, None)
-                        character_end_index = character_start_index + len(str(found_secret.secret_value))
-                        secret_value = text_replace_builder.get_text_in_position(
-                            character_start_index, character_end_index
-                        )
+            suggestions = sym_spell.lookup_compound((data), max_edit_distance=2)
+            sanitized_data = ""
+            for suggestion in suggestions:
+                sanitized_data =sanitized_data + str(suggestion).split(",")[0]
 
-                        text_replace_builder.replace_text_get_insertion_index(
-                            "******",
-                            character_start_index,
-                            character_end_index,
-                        )   
-
-            os.remove(temp_file.name)
-
-            if secret_types:
-                predict = "Detected secrets in text: {}".format(', '.join(secret_types))
-                score = 1
-                sanitized_text = text_replace_builder.output_text
-
-            else:
-                predict = "No secrets detected in the text"
-        
+            score = 1
         except Exception as e:
             LogUtil.log(LogType.ERROR, LogLevel.ERROR, e)
-            predict = "Error occurred: {}".format(e)
 
-        return predict, score, sanitized_text
+        return score, sanitized_data
 
     def format_response(self):
-        """
-        Formats the scanner's response.
-
-        Assigns the prediction message, score, and sanitized text to the response dictionary, making them 
-        available for further processing or output.
-        """
-        self.response["prediction"]["secret_detector"] = self.pred[0]
-        self.response["score"] = 1 - self.pred[1]
-        self.response['sanitized_data'] = self.pred[2]
+        self.response["score"] = self.pred[0]
+        self.response['sanitized_data'] = self.pred[1]
