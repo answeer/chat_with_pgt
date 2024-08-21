@@ -1,64 +1,24 @@
 from llm_sanitation.scanners.scanner_base import Scanner
-from symspellpy import SymSpell, Verbosity
-import pkg_resources
+from nltk.stem import WordNetLemmatizer
+from nltk.tokenize import word_tokenize
 from llm_sanitation.logging.logging_setup import LogUtil, LogType, LogLevel
 
-class SpellCorrection(Scanner):
-    """
-    A Scanner class that detects and corrects spelling errors in text data.
-
-    This class uses the `symspellpy` library to perform spelling correction on the provided text. If sanitization
-    is enabled, the corrected text is returned.
-
-    Attributes:
-        sanitize (bool): Flag to indicate whether to perform the sanitization.
-
-    Methods:
-        predict(data: str) -> tuple:
-            Corrects spelling errors in the provided text and returns a score and the corrected text.
-        
-        format_response() -> None:
-            Formats the response by assigning the score and sanitized text to the response dictionary.
-    """
+class TextLemmatizer(Scanner):
 
     def __init__(self, **kwargs):
-        """
-        Initializes the SpellCorrection scanner.
-
-        Args:
-            sanitize (bool): Flag indicating whether the text should be sanitized by correcting spelling errors.
-        """
         sanitize = kwargs["sanitize"]
-        super().__init__("spell_corrector", 0.5, sanitize=sanitize)
+        super().__init__("text_lemmetizer", 0.5,sanitize=sanitize)
 
     def predict(self, data):
-        """
-        Corrects spelling errors in the provided text data.
-
-        This method uses the `symspellpy` library to correct spelling errors in the input text.
-
-        Args:
-            data (str): The input text to correct.
-
-        Returns:
-            tuple: A tuple containing a score (1 for success, 0 for failure) and the corrected text.
-        """
-        sanitized_data = data
+        tokens = []
+        sanitized_data =data
         score = 0
         try:
-            sym_spell = SymSpell(max_dictionary_edit_distance=2, prefix_length=7)
-            dictionary_path = pkg_resources.resource_filename(
-                "symspellpy", "frequency_dictionary_en_82_765.txt")
-            bigram_path = pkg_resources.resource_filename(
-                "symspellpy", "frequency_bigramdictionary_en_243_342.txt")
-
-            sym_spell.load_dictionary(dictionary_path, term_index=0, count_index=1)
-            sym_spell.load_bigram_dictionary(bigram_path, term_index=0, count_index=2)
-
-            suggestions = sym_spell.lookup_compound(data, max_edit_distance=2)
-            sanitized_data = ""
-            for suggestion in suggestions:
-                sanitized_data = sanitized_data + str(suggestion).split(",")[0]
+            lemmatizer=WordNetLemmatizer()
+            input_str=word_tokenize(data)
+            for word in input_str:
+                tokens.append(lemmatizer.lemmatize(word))
+            sanitized_data=  " ".join(tokens)
 
             score = 1
         except Exception as e:
@@ -67,11 +27,5 @@ class SpellCorrection(Scanner):
         return score, sanitized_data
 
     def format_response(self):
-        """
-        Formats the scanner's response.
-
-        Assigns the score and sanitized text to the response dictionary, making them 
-        available for further processing or output.
-        """
         self.response["score"] = self.pred[0]
         self.response['sanitized_data'] = self.pred[1]
