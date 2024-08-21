@@ -1,99 +1,77 @@
-from llm_sanitation.scanners.scanner_base import Scanner
-from llm_sanitation.utils.models import *
-from llm_sanitation.utils.connectors.suitability import image_xy_dpi
-from llm_sanitation.utils.doc_to_img import doc_to_img
-from llm_sanitation.logging.logging_setup import LogUtil, LogType, LogLevel
-# import cv2
-
 class ImageDPICheck(Scanner):
+    """
+    A class to check the DPI (dots per inch) of images extracted from documents and ensure they meet specified thresholds.
 
-    def __init__(self,**kwargs):
-        x_dpi_thresh= kwargs["x_dpi_thresh"]
-        y_dpi_thresh= kwargs["y_dpi_thresh"]
+    This class extends the `Scanner` base class and provides functionality to convert documents to images and 
+    verify if their DPI values meet the given thresholds for both X and Y dimensions.
+
+    Attributes:
+        x_dpi_thresh (int): The minimum allowable DPI for the X dimension.
+        y_dpi_thresh (int): The minimum allowable DPI for the Y dimension.
+        save_folder (str): The directory where images extracted from the document will be saved.
+
+    Methods:
+        suaitability_placeholder(image_path):
+            Placeholder method to get the DPI of an image. This method can be replaced with an actual implementation or API call.
+
+        predict(image_path):
+            Converts the document into images, checks their DPI values, and returns the indices of images that do not meet the threshold.
+
+        format_response():
+            Formats the prediction response to include the result of the DPI check and the corresponding score.
+    """
+
+    def __init__(self, **kwargs):
+        """
+        Initializes the ImageDPICheck instance and sets up the DPI thresholds and save folder.
+
+        Args:
+            **kwargs: Additional keyword arguments, including 'x_dpi_thresh' (minimum allowable X DPI), 
+                      'y_dpi_thresh' (minimum allowable Y DPI), and 'save_folder' (directory for saving images).
+        """
+        x_dpi_thresh = kwargs["x_dpi_thresh"]
+        y_dpi_thresh = kwargs["y_dpi_thresh"]
         save_folder = kwargs['save_folder']
 
-        super().__init__("image_dpi_check", 0.5,x_dpi_thresh=x_dpi_thresh,y_dpi_thresh=y_dpi_thresh,save_folder=save_folder)
+        super().__init__("image_dpi_check", 0.5, x_dpi_thresh=x_dpi_thresh, y_dpi_thresh=y_dpi_thresh, save_folder=save_folder)
 
     def suaitability_placeholder(self, image_path):
-        # img = cv2.imread(image_path)
-        # results = {
-        #             "data": {
-        #                 "get_img_dimensions": {
-        #                     "Image Memory Size": 303356,
-        #                     "Height": 640,
-        #                     "Width": 640
-        #                 },
-        #                 "blurriness_score": {
-        #                     "Blurriness Score": 0.9098039215686274
-        #                 },
-        #                 "brightness_score": {
-        #                     "Mean Brightness": 241,
-        #                     "RMS Brightness": 246
-        #                 },
-        #                 "contours_estimate": {
-        #                     "Contour Count": 0,
-        #                     "Mean Contour Area": 0
-        #                 },
-        #                 "image_xy_dpi": {
-        #                     "X Dpi": 25.4,
-        #                     "Y Dpi": 25.4
-        #                 }
-        #             },
-        #             "status": {
-        #                 "get_img_dimensions": "success",
-        #                 "blurriness_score": "success",
-        #                 "brightness_score": "success",
-        #                 "contours_estimate": "success",
-        #                 "image_xy_dpi": "success"
-        #             },
-        #             "error_message": "success"
-        #             }
-        # url = "http://127.0.0.1:8000/api/ds_img_fet_ext"
+        """
+        Placeholder method to simulate the retrieval of DPI values for an image.
 
-        # payload = {
-        #     "job_id":"12345",
-        #     "input_img":image_path,
-        #     "expected_features":["image_xy_dpi"]
-        # }
-        # headers = {
-        # 'Content-Type': 'application/json',
-        # 'Authorization': 'django-insecure-1j822l40w003!5q3j^m%#)1*+x5f+kz&njqm#aeu^(o7j1k@uv',
-        # 'Userid': 'io_sanitation',
-        # 'Content-Type': 'application/json'
-        # }
-        # response = requests.request("POST", url, headers=headers, json = payload)
-        # results = response.text.encode('utf8')
-        # return json.loads(results)
+        Args:
+            image_path (str): The file path of the image to be analyzed.
 
-        results = {"data":{}}
+        Returns:
+            dict: A dictionary containing the simulated DPI values for the image.
+        """
+        results = {"data": {}}
         results["data"]["image_xy_dpi"] = image_xy_dpi(image_path)
 
         return results
 
+    def predict(self, image_path):
+        """
+        Converts the document into images, checks their DPI values, and returns the indices of images that do not meet the threshold.
 
+        Args:
+            image_path (str): The file path of the document to be checked.
 
-    def predict(self,image_path):
-        image_paths = doc_to_img(image_path,self._kwargs['save_folder'])
+        Returns:
+            tuple: A tuple containing a list of page indices with low DPI and the corresponding score (int).
+                   A score of 1 indicates that all pages meet the DPI thresholds, while a score of 0 indicates that some pages do not.
+        """
+        image_paths = doc_to_img(image_path, self._kwargs['save_folder'])
 
         low_dpi_pg_idx = []
         score = 1
         try:
             for ix, image_path in enumerate(image_paths):
-
                 results = self.suaitability_placeholder(image_path)
-                # x_dpi = results['data']['image_xy_dpi']['X Dpi']
                 x_dpi = results['data']['image_xy_dpi'][0]['data']['image_xy_dpi']['X Dpi']
-                # y_dpi = results['data']['image_xy_dpi']['Y Dpi']
                 y_dpi = results['data']['image_xy_dpi'][0]['data']['image_xy_dpi']['Y Dpi']
-                if x_dpi >= self._kwargs['x_dpi_thresh'] and y_dpi >= self._kwargs['y_dpi_thresh']:
-                    pass
-                # elif x_dpi < self._kwargs['x_dpi_thresh'] and y_dpi > self._kwargs['y_dpi_thresh']:
-                #     predict = f"DPI check failed. The x DPI({x_dpi}) is lower than threshold."
-                #     score = 0
-                # elif x_dpi > self._kwargs['x_dpi_thresh'] and y_dpi < self._kwargs['y_dpi_thresh']:
-                #     predict = f"DPI check failed. The y DPI({y_dpi}) is lower than threshold."
-                #     score = 0
-                else:
+
+                if x_dpi < self._kwargs['x_dpi_thresh'] or y_dpi < self._kwargs['y_dpi_thresh']:
                     low_dpi_pg_idx.append(ix + 1)
                     score = 0
         except Exception as e:
@@ -102,5 +80,11 @@ class ImageDPICheck(Scanner):
         return low_dpi_pg_idx, score
 
     def format_response(self):
+        """
+        Formats the prediction response to include the result of the DPI check and the corresponding score.
+
+        This method modifies the response dictionary to include the indices of pages with low DPI under the 
+        "blank_page_check" key and the corresponding score under the "score" key.
+        """
         self.response["prediction"]["blank_page_check"] = self.pred[0]
         self.response["score"] = self.pred[1]
