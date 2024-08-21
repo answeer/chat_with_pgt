@@ -1,52 +1,65 @@
-from llm_sanitation.scanners.scanner_base import Scanner
-from llm_sanitation.utils.models import *
-from pypdf import PdfReader
-from PIL import Image
-from PIL.ExifTags import TAGS
-import re
-from llm_sanitation.logging.logging_setup import LogUtil, LogType, LogLevel
-
 class SoftwareCheck(Scanner):
+    """
+    A class to check the software used to create or modify a PDF or image file.
 
-    def __init__(self,**kwargs):
+    This class extends the `Scanner` base class and provides functionality to validate the software 
+    found in the metadata of PDF and image files against a blacklist of potentially untrusted software.
+
+    Methods:
+        pdf_software_validator(software):
+            Validates the creator software found in the metadata to determine if it is blacklisted.
+
+        predict(file_path):
+            Scans the provided file (PDF or image) for software metadata and checks it against the blacklist.
+
+        format_response():
+            Formats the prediction response to include the software check result and score.
+    """
+
+    def __init__(self, **kwargs):
+        """
+        Initializes the SoftwareCheck instance.
+
+        Args:
+            **kwargs: Additional keyword arguments, including 'software_blacklist' which is a list of blacklisted software.
+        """
         self.software_blacklist = kwargs["software_blacklist"]
         super().__init__("software_check", 0.5)
 
     def pdf_software_validator(self, software):
         """
-        Validates the creator software / software in the metadata to see if they are any of the potentially blacklist ones
+        Validates the creator software found in the metadata to determine if it is blacklisted.
+
+        Args:
+            software (str): The name of the software extracted from the file metadata.
+
+        Returns:
+            tuple: A tuple containing a string message about the validation result and a score 
+                   (1 if the software is not blacklisted, 0 if it is).
         """
-        if software==None:
+        if software is None:
             tampered = "Software details are not available"
             score = 1
         elif software in self.software_blacklist:
             tampered = "Potentially tampered using '{}'".format(software)
             score = 0
         else:
-            tampered = "Potentially not tampered, Software useed for creation is '{}'".format(software)
+            tampered = "Potentially not tampered, Software used for creation is '{}'".format(software)
             score = 1
-        return tampered,score
+        return tampered, score
 
-    def predict(self,file_path):
+    def predict(self, file_path):
+        """
+        Scans the provided file (PDF or image) for software metadata and checks it against the blacklist.
+
+        Args:
+            file_path (str): The path to the file to be scanned.
+
+        Returns:
+            tuple: A tuple containing a string message about the software tampering check and a score 
+                   (1 if the software is not blacklisted, 0 if it is).
+        """
         file_format = os.path.split(file_path)[-1].split(".")[-1].lower()
         try:
             if file_format == "pdf":
-                self.reader = PdfReader(file_path)
-                software = self.reader.metadata.producer
-            else:
-                image = Image.open(file_path)
-                exif_data = image.getexif()
-                if exif_data is not None:
-                    exif = {TAGS.get(tag,tag): value for tag, value in exif_data.items()}
-                    software = exif.get("Software",None)
-            if software is not None:
-                software = re.sub(r'\d+', '', re.sub(r'[^a-zA-Z\s]', '', software)).rstrip()
-            software_tampering,score = self.pdf_software_validator(software)
-        except Exception as e:
-            LogUtil.log(LogType.ERROR, LogLevel.ERROR, e)
-        return software_tampering,score
-
-
-    def format_response(self):
-        self.response["prediction"]["software_check"] = self.pred[0]
-        self.response["score"] = self.pred[1]
+          
