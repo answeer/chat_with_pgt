@@ -1,66 +1,64 @@
 from llm_sanitation.scanners.scanner_base import Scanner
-import re
+from llm_sanitation.utils.models import *
+import tempfile
+from detect_secrets.core.secrets_collection import SecretsCollection
+from detect_secrets.settings import default_settings
+from presidio_anonymizer.core.text_replace_builder import TextReplaceBuilder
 from llm_sanitation.logging.logging_setup import LogUtil, LogType, LogLevel
 
-class RemoveWhitespaces(Scanner):
-    """
-    A Scanner class that removes unnecessary whitespaces from text data.
-
-    This class trims and condenses multiple consecutive whitespace characters 
-    (including tabs and newlines) into a single space. It extends the Scanner base class 
-    and offers sanitization features for text data.
-
-    Attributes:
-        sanitize (bool): Flag to indicate whether to perform the sanitization.
-
-    Methods:
-        predict(data: str) -> tuple:
-            Trims and removes excessive whitespace characters from the input text.
-            Returns a tuple containing a score (1 for success, 0 for failure) and the sanitized text.
-        
-        format_response() -> None:
-            Formats the response by assigning the score and sanitized text to the response dictionary.
-    """
+class Secrets(Scanner):
 
     def __init__(self, **kwargs):
-        """
-        Initializes the RemoveWhitespaces scanner.
+        sanitize=kwargs["sanitize"]
+        super().__init__("secret_detector", 0.5, sanitize=sanitize)
+        self.secrets = SecretsCollection()
 
-        Args:
-            sanitize (bool): Flag indicating whether the text should be sanitized.
-        """
-        sanitize = kwargs["sanitize"]
-        super().__init__("remove_whitespaces", 0.5, sanitize=sanitize)
-
-    def predict(self, data):
-        """
-        Removes unnecessary whitespaces from the provided text data.
-
-        This method trims leading and trailing whitespace and condenses multiple 
-        consecutive spaces into a single space.
-
-        Args:
-            data (str): The input text from which whitespace characters need to be removed.
-
-        Returns:
-            tuple: A tuple containing a score (1 for success, 0 for failure) and the sanitized text.
-        """
-        sanitized_data = data
+    def predict(self,data):
+        sanitized_text = data
         score = 0
         try:
-            sanitized_data = ' '.join(data.strip().split())
-            score = 1
+            temp_file = tempfile.NamedTemporaryFile(delete=False)
+            temp_file.write(data.encode("utf-8"))
+            temp_file.close()
+
+            with default_settings():
+                self.secrets.scan_file(str(temp_file.name))
+
+            secret_types = []
+            text_replace_builder = TextReplaceBuilder(original_text=data)
+            for file in self.secrets.files:
+                for found_secret in self.secrets[file]:
+                    secret_types.append(found_secret.type)
+                    if self._kwargs['sanitize']:
+                        character_start_index = data.find(found_secret.secret_value, None, None)
+                        character_end_index = character_start_index + len(str(found_secret.secret_value))
+                        secret_value = text_replace_builder.get_text_in_position(
+                            character_start_index, character_end_index
+                        )
+
+                        text_replace_builder.replace_text_get_insertion_index(
+                            "******",
+                            character_start_index,
+                            character_end_index,
+                        )   
+
+            os.remove(temp_file.name)
+
+            if secret_types:
+                predict = "Detected secrets in text: {}".format(', '.join(secret_types))
+                score = 1
+                sanitized_text = text_replace_builder.output_text
+
+            else:
+                predict = "No secrets detected in the text"
+        
         except Exception as e:
             LogUtil.log(LogType.ERROR, LogLevel.ERROR, e)
+            predict = "Error occured: {}".format(e)
 
-        return score, sanitized_data
+        return predict, score, sanitized_text
 
     def format_response(self):
-        """
-        Formats the scanner's response.
-
-        Assigns the score and sanitized text to the response dictionary, making them 
-        available for further processing or output.
-        """
-        self.response["score"] = self.pred[0]
-        self.response['sanitized_data'] = self.pred[1]
+        self.response["prediction"]["secret_detector"] = self.pred[0]
+        self.response["score"] = 1 - self.pred[1]
+        self.response['sanitized_data'] = self.pred[2]
