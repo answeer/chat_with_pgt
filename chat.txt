@@ -1,200 +1,51 @@
-class TokenLimit(Scanner):
-    """
-    A class to check if the number of tokens in a text data exceeds a specified limit.
+from llm_sanitation.scanners.scanner_base import Scanner
+from llm_sanitation.utils.models import *
+import fitz
+import tempfile
+from llm_sanitation.logging.logging_setup import LogUtil, LogType, LogLevel
 
-    This class extends the `Scanner` base class and provides functionality to tokenize text data
-    using various methods and check if the number of tokens falls within a specified limit.
-
-    Attributes:
-        token_methods (dict): A dictionary mapping tokenization methods to their corresponding functions.
-
-    Methods:
-        nltk_tokenizer(data):
-            Tokenizes the data using NLTK's word tokenizer and returns the token count.
-
-        word_piece_tokenizer(data):
-            Tokenizes the data using BERT's WordPiece tokenizer and returns the token count.
-
-        robert_fast_tokenizer(data):
-            Tokenizes the data using RoBERTa's fast tokenizer and returns the token count.
-
-        gpt2_tokenizer(data):
-            Tokenizes the data using GPT-2's tokenizer and returns the token count.
-
-        white_space_tokenizer(data):
-            Tokenizes the data using whitespace-based tokenizer and returns the token count.
-
-        word_punct_tokenizer(data):
-            Tokenizes the data using word and punctuation-based tokenizer and returns the token count.
-
-        spacy_tokenizer(data):
-            Tokenizes the data using spaCy's tokenizer and returns the token count.
-
-        predict(data):
-            Checks the token count of the provided data using the specified tokenization method 
-            and determines if it is within the specified limit.
-
-        format_response():
-            Formats the prediction response to include the token count and score.
-    """
+class ConvertPDF(Scanner):
 
     def __init__(self, **kwargs):
-        """
-        Initializes the TokenLimit instance.
+        zoom_factor = kwargs['zoom_factor']
+        save_path = kwargs['save_path']
+        super().__init__("convert_pdf", 0.5,zoom_factor=zoom_factor,save_path=save_path)
 
-        Args:
-            **kwargs: Additional keyword arguments, including 'token_limit' specifying the maximum
-                      number of tokens allowed and 'token_method' specifying the tokenization method to use.
-        """
-        token_limit = kwargs["token_limit"]
-        token_method = kwargs['token_method']
-        super().__init__("token_limit", 0.5, token_limit=token_limit, token_method=token_method)
-
-        self.token_methods = {
-            'wiite space': self.white_space_tokenizer,
-            'word piece': self.word_piece_tokenizer,
-            'word punct': self.word_punct_tokenizer,
-            'BPE': self.gpt2_tokenizer,
-            'fast tokenizer': self.robert_fast_tokenizer,
-            'nltk': self.nltk_tokenizer,
-            'spacy': self.spacy_tokenizer
-        }
-
-    def nltk_tokenizer(self, data):
-        """
-        Tokenizes the data using NLTK's word tokenizer.
-
-        Args:
-            data (str): The text data to be tokenized.
-
-        Returns:
-            int: The number of tokens in the data.
-        """
-        tokens = NLTKWordTokenizer().tokenize(data)
-        token_count = len(tokens)
-        return token_count
-
-    def word_piece_tokenizer(self, data):
-        """
-        Tokenizes the data using BERT's WordPiece tokenizer.
-
-        Args:
-            data (str): The text data to be tokenized.
-
-        Returns:
-            int: The number of tokens in the data.
-        """
-        tokenizer = BertTokenizer.from_pretrained(models_path['bert_tokenizer'][0])
-        tokens = tokenizer.tokenize(data)
-        token_count = len(tokens)
-        return token_count
-
-    def robert_fast_tokenizer(self, data):
-        """
-        Tokenizes the data using RoBERTa's fast tokenizer.
-
-        Args:
-            data (str): The text data to be tokenized.
-
-        Returns:
-            int: The number of tokens in the data.
-        """
-        tokenizer = RobertaTokenizerFast.from_pretrained(models_path['roberta_tokenizer'][0])
-        tokens = tokenizer.tokenize(data)
-        token_count = len(tokens)
-        return token_count
-
-    def gpt2_tokenizer(self, data):
-        """
-        Tokenizes the data using GPT-2's tokenizer.
-
-        Args:
-            data (str): The text data to be tokenized.
-
-        Returns:
-            int: The number of tokens in the data.
-        """
-        tokenizer = GPT2Tokenizer.from_pretrained(models_path['gpt2_tokenizer'][0])
-        tokens = tokenizer.tokenize(data)
-        token_count = len(tokens)
-        return token_count
-
-    def white_space_tokenizer(self, data):
-        """
-        Tokenizes the data using whitespace-based tokenizer.
-
-        Args:
-            data (str): The text data to be tokenized.
-
-        Returns:
-            int: The number of tokens in the data.
-        """
-        tokens = WhitespaceTokenizer().tokenize(data)
-        token_count = len(tokens)
-        return token_count
-
-    def word_punct_tokenizer(self, data):
-        """
-        Tokenizes the data using word and punctuation-based tokenizer.
-
-        Args:
-            data (str): The text data to be tokenized.
-
-        Returns:
-            int: The number of tokens in the data.
-        """
-        tokens = WordPunctTokenizer().tokenize(data)
-        token_count = len(tokens)
-        return token_count
-
-    def spacy_tokenizer(self, data):
-        """
-        Tokenizes the data using spaCy's tokenizer.
-
-        Args:
-            data (str): The text data to be tokenized.
-
-        Returns:
-            int: The number of tokens in the data.
-        """
-        nlp = spacy.load("en_core_web_sm")
-        doc = nlp(data)
-        token_count = len(doc)
-        return token_count
-
-    def predict(self, data):
-        """
-        Checks the token count of the provided data using the specified tokenization method.
-
-        Args:
-            data (str): The text data to be checked.
-
-        Returns:
-            tuple: A tuple containing the prediction message (number of tokens) and a score (1 if 
-                   the token count is within the limit, 0 otherwise). In case of an unsupported method 
-                   or error, returns an appropriate message and a score of 0.
-        """
-        token_method = self._kwargs['token_method']
-        score = 0
+    def predict(self, input_path):
         try:
-            if token_method in self.token_methods:
-                token_count = self.token_methods[token_method](data)
-                pred = f"Tokens numbers is {token_count}."
-                if token_count < self._kwargs['token_limit']:
-                    score = 1
-            else:
-                pred = "This method is not supported, please choose a method in [{}].".format(", ".join(self.token_methods.keys()))
+            file_name = os.path.splitext(os.path.basename(input_path))[0]
+            doc_output_path = tempfile.gettempdir()
+            doc = fitz.open(input_path)
+            mat = fitz.Matrix(self._kwargs['zoom_factor'], self._kwargs['zoom_factor'])
+            result = fitz.open()
+            for page_no in range(1, doc.page_count + 1):
+                # Image conversion
+                os.makedirs(doc_output_path, exist_ok=True)
+                page = doc.load_page(page_no - 1) # Index of fitz different from textract response
+                pix = page.get_pixmap(matrix=mat)
+                img_path = os.path.join(doc_output_path, "page_" + str(page_no) + ".png")
+                pix.save(img_path)
+
+                img = fitz.open(img_path)  # open pic as document
+                rect = img[0].rect  # pic dimension
+                pdfbytes = img.convert_to_pdf()  # make a PDF stream
+                img.close()  # no longer needed
+                img_pdf = fitz.open("pdf", pdfbytes)  # open stream as PDF
+                page = result.new_page(width=rect.width,  # new page with ...
+                                        height=rect.height)  # pic dimension
+                page.show_pdf_page(rect, img_pdf, 0)  # image fills the page
+            doc.close()
+            file_path = os.path.join(self._kwargs['save_path'], file_name + "_converted.pdf")
+            result.save(file_path)
+            result.close()
+            predict = "Convert PDF successful. Saved the converted PDF in: {}".format(file_path)
+            score = 1
         except Exception as e:
             LogUtil.log(LogType.ERROR, LogLevel.ERROR, e)
-            pred = "Error occurred: {}".format(e)
-        return pred, score
-
+            predict = "Error occured: {}".format(e)
+            score = 0
+        return predict, score
+ 
     def format_response(self):
-        """
-        Formats the prediction response to include the token count and score.
-
-        This method modifies the response dictionary to include the token count under the 
-        "token_limit" key and the prediction score under the "score" key.
-        """
-        self.response["prediction"]["token_limit"] = self.pred[0]
+        self.response["prediction"]["convert_pdf"] = self.pred[0]
         self.response["score"] = self.pred[1]
