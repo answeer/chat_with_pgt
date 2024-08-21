@@ -1,74 +1,106 @@
-class PageCount(Scanner):
-    """
-    A class to check the page count of a file and determine if it exceeds a predefined threshold.
+from llm_sanitation.scanners.scanner_base import Scanner
+from llm_sanitation.utils.models import *
+from llm_sanitation.utils.connectors.suitability import image_xy_dpi
+from llm_sanitation.utils.doc_to_img import doc_to_img
+from llm_sanitation.logging.logging_setup import LogUtil, LogType, LogLevel
+# import cv2
 
-    This class extends the `Scanner` base class and provides functionality to evaluate the page count 
-    of PDF and TIFF files. It checks whether the page count exceeds the specified threshold.
+class ImageDPICheck(Scanner):
 
-    Attributes:
-        page_thresh (int): The maximum allowable number of pages.
+    def __init__(self,**kwargs):
+        x_dpi_thresh= kwargs["x_dpi_thresh"]
+        y_dpi_thresh= kwargs["y_dpi_thresh"]
+        save_folder = kwargs['save_folder']
 
-    Methods:
-        predict(file_path):
-            Checks the page count of the file and returns a prediction message and score.
+        super().__init__("image_dpi_check", 0.5,x_dpi_thresh=x_dpi_thresh,y_dpi_thresh=y_dpi_thresh,save_folder=save_folder)
 
-        format_response():
-            Formats the prediction response to include the result of the page count check and the corresponding score.
-    """
+    def suaitability_placeholder(self, image_path):
+        # img = cv2.imread(image_path)
+        # results = {
+        #             "data": {
+        #                 "get_img_dimensions": {
+        #                     "Image Memory Size": 303356,
+        #                     "Height": 640,
+        #                     "Width": 640
+        #                 },
+        #                 "blurriness_score": {
+        #                     "Blurriness Score": 0.9098039215686274
+        #                 },
+        #                 "brightness_score": {
+        #                     "Mean Brightness": 241,
+        #                     "RMS Brightness": 246
+        #                 },
+        #                 "contours_estimate": {
+        #                     "Contour Count": 0,
+        #                     "Mean Contour Area": 0
+        #                 },
+        #                 "image_xy_dpi": {
+        #                     "X Dpi": 25.4,
+        #                     "Y Dpi": 25.4
+        #                 }
+        #             },
+        #             "status": {
+        #                 "get_img_dimensions": "success",
+        #                 "blurriness_score": "success",
+        #                 "brightness_score": "success",
+        #                 "contours_estimate": "success",
+        #                 "image_xy_dpi": "success"
+        #             },
+        #             "error_message": "success"
+        #             }
+        # url = "http://127.0.0.1:8000/api/ds_img_fet_ext"
 
-    def __init__(self, **kwargs):
-        """
-        Initializes the PageCount instance and sets up the page count threshold.
+        # payload = {
+        #     "job_id":"12345",
+        #     "input_img":image_path,
+        #     "expected_features":["image_xy_dpi"]
+        # }
+        # headers = {
+        # 'Content-Type': 'application/json',
+        # 'Authorization': 'django-insecure-1j822l40w003!5q3j^m%#)1*+x5f+kz&njqm#aeu^(o7j1k@uv',
+        # 'Userid': 'io_sanitation',
+        # 'Content-Type': 'application/json'
+        # }
+        # response = requests.request("POST", url, headers=headers, json = payload)
+        # results = response.text.encode('utf8')
+        # return json.loads(results)
 
-        Args:
-            **kwargs: Additional keyword arguments, specifically 'page_thresh', which is the maximum allowable number of pages.
-        """
-        self.page_thresh = kwargs["page_thresh"]
-        super().__init__("page_count", 0.5, page_thresh=self.page_thresh)
+        results = {"data":{}}
+        results["data"]["image_xy_dpi"] = image_xy_dpi(image_path)
 
-    def predict(self, file_path):
-        """
-        Checks the page count of the file by determining the number of pages in PDF or TIFF files.
+        return results
 
-        Args:
-            file_path (str): The file path of the document to be checked.
 
-        Returns:
-            tuple: A tuple containing the prediction message (str) and the corresponding score (int).
-                   A score of 1 indicates that the page count is within the threshold, while a score of 0 indicates that it exceeds the threshold.
-        """
-        file_type = file_path.split(".")[-1].lower()
+
+    def predict(self,image_path):
+        image_paths = doc_to_img(image_path,self._kwargs['save_folder'])
+
+        low_dpi_pg_idx = []
+        score = 1
         try:
-            if file_type == "pdf":
-                doc = pypdf.PdfReader(file_path)
-                page_count = len(doc.pages)
-            elif file_type in ["tiff", "tif"]:
-                img = Image.open(file_path)
-                page_count = img.n_frames
-            else:
-                predict = "Unsupported file format. Only TIFF and PDF are supported."
-                score = 0
-                return predict, score
-            
-            if page_count > self._kwargs['page_thresh']:
-                predict = f"The page count ({page_count}) for this file exceeds the threshold."
-                score = 0
-            else:
-                predict = f"Valid page count ({page_count}) for this file."
-                score = 1
+            for ix, image_path in enumerate(image_paths):
+
+                results = self.suaitability_placeholder(image_path)
+                # x_dpi = results['data']['image_xy_dpi']['X Dpi']
+                x_dpi = results['data']['image_xy_dpi'][0]['data']['image_xy_dpi']['X Dpi']
+                # y_dpi = results['data']['image_xy_dpi']['Y Dpi']
+                y_dpi = results['data']['image_xy_dpi'][0]['data']['image_xy_dpi']['Y Dpi']
+                if x_dpi >= self._kwargs['x_dpi_thresh'] and y_dpi >= self._kwargs['y_dpi_thresh']:
+                    pass
+                # elif x_dpi < self._kwargs['x_dpi_thresh'] and y_dpi > self._kwargs['y_dpi_thresh']:
+                #     predict = f"DPI check failed. The x DPI({x_dpi}) is lower than threshold."
+                #     score = 0
+                # elif x_dpi > self._kwargs['x_dpi_thresh'] and y_dpi < self._kwargs['y_dpi_thresh']:
+                #     predict = f"DPI check failed. The y DPI({y_dpi}) is lower than threshold."
+                #     score = 0
+                else:
+                    low_dpi_pg_idx.append(ix + 1)
+                    score = 0
         except Exception as e:
             LogUtil.log(LogType.ERROR, LogLevel.ERROR, e)
-            predict = f"Error occurred: {e}"
-            score = 0
-        
-        return predict, score
+
+        return low_dpi_pg_idx, score
 
     def format_response(self):
-        """
-        Formats the prediction response to include the result of the page count check and the corresponding score.
-
-        This method modifies the response dictionary to include the page count check result under the "page_count" key 
-        and the corresponding score under the "score" key.
-        """
-        self.response["prediction"]["page_count"] = self.pred[0]
+        self.response["prediction"]["blank_page_check"] = self.pred[0]
         self.response["score"] = self.pred[1]
