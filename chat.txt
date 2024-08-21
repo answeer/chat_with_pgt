@@ -1,17 +1,47 @@
-from llm_sanitation.scanners.scanner_base import Scanner
-from llm_sanitation.utils.models import *
-import fitz
-import tempfile
-from llm_sanitation.logging.logging_setup import LogUtil, LogType, LogLevel
-
 class ConvertPDF(Scanner):
+    """
+    A class to convert PDF pages into images and then back into a PDF file.
+
+    This class extends the `Scanner` base class and provides functionality to convert each page
+    of a PDF file into an image and then reassemble those images into a new PDF file. The conversion
+    can be customized with zoom factor and output save path.
+
+    Attributes:
+        zoom_factor (float): The factor by which to zoom in/out on the PDF pages during conversion.
+        save_path (str): The directory path where the converted PDF will be saved.
+
+    Methods:
+        predict(input_path):
+            Converts the input PDF file into images, then creates a new PDF file from those images and saves it
+            to the specified location. Provides feedback on the success of the conversion process.
+
+        format_response():
+            Formats the prediction response to include a message about the conversion status and a score.
+    """
 
     def __init__(self, **kwargs):
+        """
+        Initializes the ConvertPDF instance.
+
+        Args:
+            **kwargs: Additional keyword arguments, including 'zoom_factor' to adjust the image size
+                      and 'save_path' to specify where the converted PDF will be saved.
+        """
         zoom_factor = kwargs['zoom_factor']
         save_path = kwargs['save_path']
-        super().__init__("convert_pdf", 0.5,zoom_factor=zoom_factor,save_path=save_path)
+        super().__init__("convert_pdf", 0.5, zoom_factor=zoom_factor, save_path=save_path)
 
     def predict(self, input_path):
+        """
+        Converts the input PDF file into images and then assembles these images into a new PDF file.
+
+        Args:
+            input_path (str): The path to the input PDF file to be converted.
+
+        Returns:
+            tuple: A tuple containing a message about the conversion status and a score. A score of 1 indicates
+                   successful conversion, while a score of 0 indicates an error.
+        """
         try:
             file_name = os.path.splitext(os.path.basename(input_path))[0]
             doc_output_path = tempfile.gettempdir()
@@ -26,14 +56,13 @@ class ConvertPDF(Scanner):
                 img_path = os.path.join(doc_output_path, "page_" + str(page_no) + ".png")
                 pix.save(img_path)
 
-                img = fitz.open(img_path)  # open pic as document
-                rect = img[0].rect  # pic dimension
-                pdfbytes = img.convert_to_pdf()  # make a PDF stream
-                img.close()  # no longer needed
-                img_pdf = fitz.open("pdf", pdfbytes)  # open stream as PDF
-                page = result.new_page(width=rect.width,  # new page with ...
-                                        height=rect.height)  # pic dimension
-                page.show_pdf_page(rect, img_pdf, 0)  # image fills the page
+                img = fitz.open(img_path)  # Open image as document
+                rect = img[0].rect  # Get image dimensions
+                pdfbytes = img.convert_to_pdf()  # Convert image to PDF stream
+                img.close()  # Close the image
+                img_pdf = fitz.open("pdf", pdfbytes)  # Open PDF stream
+                page = result.new_page(width=rect.width, height=rect.height)  # Create new page with image dimensions
+                page.show_pdf_page(rect, img_pdf, 0)  # Display image on the new page
             doc.close()
             file_path = os.path.join(self._kwargs['save_path'], file_name + "_converted.pdf")
             result.save(file_path)
@@ -42,10 +71,16 @@ class ConvertPDF(Scanner):
             score = 1
         except Exception as e:
             LogUtil.log(LogType.ERROR, LogLevel.ERROR, e)
-            predict = "Error occured: {}".format(e)
+            predict = "Error occurred: {}".format(e)
             score = 0
         return predict, score
- 
+
     def format_response(self):
+        """
+        Formats the prediction response to include the conversion status message and score.
+
+        This method updates the response dictionary to include the conversion result message under the
+        "convert_pdf" key and the score under the "score" key.
+        """
         self.response["prediction"]["convert_pdf"] = self.pred[0]
         self.response["score"] = self.pred[1]
