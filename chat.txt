@@ -1,107 +1,148 @@
-class HarmfulString(Scanner):
-    """
-    A class to detect and optionally sanitize harmful strings in text data.
+from llm_sanitation.scanners.scanner_base import Scanner
+from llm_sanitation.utils.models import *
+from presidio_analyzer.nlp_engine import NlpEngineProvider
+from presidio_analyzer.analyzer_engine import AnalyzerEngine
+from presidio_anonymizer import AnonymizerEngine
+from presidio_analyzer.context_aware_enhancers import LemmaContextAwareEnhancer
+from presidio_analyzer import (
+    AnalyzerEngine,
+    Pattern,
+    PatternRecognizer,
+    RecognizerRegistry,
+)
+import spacy
+import copy
+from llm_sanitation.utils.common import read_config
+from llm_sanitation.logging.logging_setup import LogUtil, LogType, LogLevel
 
-    This class extends the `Scanner` base class to identify specific harmful strings
-    from a configuration file within given text data. It can optionally sanitize the text
-    by replacing harmful strings with a placeholder.
-
-    Attributes:
-        sanitize (bool): Indicates whether to sanitize (redact) harmful strings from the text.
-        case_sensitive (bool): Indicates whether the search for harmful strings should be case-sensitive.
-        harm_str (dict): A dictionary of harmful strings loaded from a configuration file.
-
-    Methods:
-        redact_text(text, substrings):
-            Redacts (replaces with "[REDACTED]") harmful substrings in the given text.
-
-        predict(data):
-            Detects harmful strings in the provided text and optionally sanitizes it. Returns the
-            result of the detection, score, and sanitized text.
-
-        format_response():
-            Formats the response to include the prediction result, score, and sanitized text.
-    """
+class PiiDetector(Scanner):
 
     def __init__(self, **kwargs):
-        """
-        Initializes the HarmfulString instance.
+        sanitize=kwargs["sanitize"]
+        super().__init__("pii_detector", 0.5, sanitize=sanitize)
+        self.read_config()
+        self.get_analyzer()
 
-        Args:
-            **kwargs: Additional keyword arguments, including 'sanitize' to determine if harmful strings
-                      should be redacted and 'case_sensitive' to control case sensitivity of the search.
-        """
-        sanitize = kwargs["sanitize"]
-        case_sensitive = kwargs['case_sensitive']
-        super().__init__("harmful_string", 0.5, sanitize=sanitize, case_sensitive=case_sensitive)
-        self.harm_str = read_config("harmful_strings.yml")
+    def read_config(self):
+        config = read_config("pii_detector.yml")
+        self.default_entities = config['default_entity_types']
+        self.default_regex_patterns = config['default_regex_patterns']
 
-    def redact_text(self, text, substrings):
-        """
-        Redacts harmful substrings from the given text by replacing them with "[REDACTED]".
+    def get_regex_patterns(self,regex_patterns):
+        result = []
+        for group in regex_patterns:
+            result.append(
+                {
+                    "name": group["name"].upper(),
+                    "expressions": group.get("expressions", []),
+                    "context": group.get("context", []),
+                    "score": group.get("score", 0.75),
+                    "languages": group.get("languages", ["en"]),
+                    "reuse": group.get("reuse", False),
+                }
+            )
+        return result
 
-        Args:
-            text (str): The text in which harmful substrings are to be redacted.
-            substrings (list): A list of harmful substrings to be redacted.
+    def add_recognizers(self,registry,regex_groups):
+        """
+        Create a RecognizerRegistry and populate it with regex patterns and custom names.
+
+        Parameters:
+            regex_groups: List of regex patterns.
 
         Returns:
-            str: The text with harmful substrings redacted.
+            RecognizerRegistry: A RecognizerRegistry object loaded with regex and custom name recognizers.
         """
-        redacted_text = text
-        for s in substrings:
-            redacted_text = redacted_text.replace(s, "[REDACTED]")
-        return redacted_text
 
-    def predict(self, data):
-        """
-        Detects harmful strings in the provided text and optionally sanitizes it.
+        for pattern_data in regex_groups:
 
-        Args:
-            data (str): The text data to be checked for harmful strings.
+            label = pattern_data["name"]
+            reuse = pattern_data.get("reuse", False)
 
-        Returns:
-            tuple: A tuple containing:
-                - A message indicating the presence of harmful strings or lack thereof.
-                - A score indicating the result (1 for no harmful strings, 0 for detected harmful strings).
-                - The sanitized text if harmful strings were detected and sanitization is enabled.
-        """
-        sanitized_data = data
-        matched_substrings = []
-        missing_substrings = []
-        try:
-            for s in self.harm_str['harmful_strings']:
-                if not self._kwargs['case_sensitive']:
-                    s, data = s.lower(), data.lower()
+            patterns = map(
+                lambda exp: Pattern(name=label, regex=exp, score=pattern_data["score"]),
+                pattern_data.get("expressions", []) or [],
+            )
 
-                if s in data:
-                    matched_substrings.append(s)
-                else:
-                    missing_substrings.append(s)
 
-            if matched_substrings:
-                if self._kwargs['sanitize']:
-                    sanitized_data = self.redact_text(sanitized_data, matched_substrings)
-                predict = "Found the harmful strings: {}.".format(', '.join(matched_substrings))
-                score = 0
+            if reuse:
+                new_recognizer = copy.deepcopy(
+                    registry.get_recognizers(language=reuse["language"], entities=[reuse["name"]])[
+                        0
+                    ]
+                )
+                registry.add_recognizer(new_recognizer)
             else:
-                predict = "No harmful strings found."
-                score = 1
+                registry.add_recognizer(
+                    PatternRecognizer(
+                        supported_entity=label,
+                        patterns=patterns,
+                        context=pattern_data["context"],
+                    )
+                )
+
+        return registry
+
+    def get_analyzer(self):
+        try:
+            # Use small spacy model, for faster inference.
+            if not spacy.util.is_package("en_core_web_sm"):
+                spacy.cli.download("en_core_web_sm")
+
+            nlp_configuration = {
+                "nlp_engine_name": "spacy",
+                "models": [{"lang_code": "en", "model_name": "en_core_web_sm"}],
+            }
+            nlp_engine = NlpEngineProvider(nlp_configuration=nlp_configuration).create_engine()
+            regex_groups = self.get_regex_patterns(self.default_regex_patterns)
+            registry = RecognizerRegistry()
+            registry.load_predefined_recognizers(nlp_engine=nlp_engine)
+            registry = self.add_recognizers(registry, regex_groups)
+            registry.remove_recognizer("SpacyRecognizer")
+            self.analyzer = AnalyzerEngine(registry=registry,
+                                        nlp_engine=nlp_engine,
+                                        context_aware_enhancer=LemmaContextAwareEnhancer(
+                                        context_similarity_factor=0.35,
+                                        min_score_with_context_similarity=0.4,))
         except Exception as e:
             LogUtil.log(LogType.ERROR, LogLevel.ERROR, e)
-            predict = "Error occurred: {}".format(e)
-            score = 0
 
-        return predict, score, sanitized_data
+    def predict(self,data):
+        sanitized_prompt = data
+        try:
+            analyzer_results = self.analyzer.analyze(
+                text=data.replace("'", " "),
+                language="en",
+                entities=self.default_entities,
+                score_threshold=self.score_thresh,
+            )
+            risk_score = round(
+                (
+                    max(analyzer_result.score for analyzer_result in analyzer_results)
+                    if analyzer_results
+                    else 0.0
+                ),
+                2,
+            )
+            pii_anonymizer = AnonymizerEngine()
+            anonymized_text = pii_anonymizer.anonymize(
+                text=data, analyzer_results=analyzer_results
+            ).text
+            if len(analyzer_results) is not None:
+                predict = "PII detected."
+            else:
+                predict = "NO PII detected."
+            if self._kwargs['sanitize']:
+                sanitized_prompt = anonymized_text
+            else:
+                sanitized_prompt = data
+        except Exception as e:
+            LogUtil.log(LogType.ERROR, LogLevel.ERROR, e)
+            predict = "Error occured: {}".format(e)
+            risk_score = 1
+        return predict,risk_score,sanitized_prompt
 
     def format_response(self):
-        """
-        Formats the prediction response to include the detection result, score, and sanitized text.
-
-        This method updates the response dictionary to include:
-            - The prediction result under the "harmful_string" key.
-            - The score under the "score" key.
-            - The sanitized data under the "sanitized_data" key.
-        """
-        self.response["prediction"]["harmful_string"] = self.pred[0]
-        self.response["score"] = self.pred[1]
+        self.response["prediction"]["pii_detector"] = self.pred[0]
+        self.response["score"] = 1 - self.pred[1]
         self.response['sanitized_data'] = self.pred[2]
