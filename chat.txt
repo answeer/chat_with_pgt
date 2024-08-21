@@ -1,57 +1,28 @@
 from llm_sanitation.scanners.scanner_base import Scanner
-import re
+import nltk
+from nltk.corpus import stopwords
+from nltk.tokenize import word_tokenize
+from llm_sanitation.utils.common import read_config
 from llm_sanitation.logging.logging_setup import LogUtil, LogType, LogLevel
 
-class RemovePunctuation(Scanner):
-    """
-    A Scanner class to remove punctuation from text data.
 
-    This class identifies and removes punctuation characters from the 
-    provided text. It extends the Scanner base class and provides a 
-    sanitization feature specifically for punctuation.
-
-    Attributes:
-        sanitize (bool): Flag to indicate whether to perform the sanitization.
-    
-    Methods:
-        predict(data: str) -> tuple:
-            Identifies and removes punctuation characters from the input text data.
-            Returns a tuple containing a score (1 for success, 0 for failure) 
-            and the sanitized text.
-        
-        format_response() -> None:
-            Formats the response by assigning the prediction and score to the 
-            response dictionary.
-    """
+class RemoveStopwords(Scanner):
 
     def __init__(self, **kwargs):
-        """
-        Initializes the RemovePunctuation scanner.
-
-        Args:
-            sanitize (bool): Flag indicating whether the text should be sanitized.
-        """
         sanitize = kwargs["sanitize"]
-        super().__init__("remove_punctuation", 0.5, sanitize=sanitize)
+        super().__init__("remove_stopwords", 0.5,sanitize=sanitize)
+        self.stop_words = set(stopwords.words('english'))
+        config = read_config("harmful_strings.yml")
+        # custom_stopwords = config.get("custom_stopwords", [])
+        # self.stop_words = set(list(self.stop_words).extend(custom_stopwords))
 
     def predict(self, data):
-        """
-        Identifies and removes punctuation characters from the provided text data.
-
-        Args:
-            data (str): The input text from which punctuation characters need to be removed.
-
-        Returns:
-            tuple: A tuple containing the score (1 for success, 0 for failure) 
-                   and the sanitized text.
-        """
-        punctuations = '''!()-[]{};:'"\,<>./?@#$%^&*_~'''
         sanitized_data = data
         score = 0
         try:
-            for x in sanitized_data:
-                if x in punctuations:
-                    sanitized_data = sanitized_data.replace(x, "")
+            tokens = word_tokenize(data)
+            result = [i for i in tokens if not i in self.stop_words]
+            sanitized_data =  " ".join(result)
             score = 1
         except Exception as e:
             LogUtil.log(LogType.ERROR, LogLevel.ERROR, e)
@@ -59,11 +30,5 @@ class RemovePunctuation(Scanner):
         return score, sanitized_data
 
     def format_response(self):
-        """
-        Formats the scanner's response.
-
-        Assigns the prediction and score to the response dictionary, making them 
-        available for further processing or output.
-        """
         self.response["score"] = self.pred[0]
         self.response['sanitized_data'] = self.pred[1]
