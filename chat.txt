@@ -1,43 +1,74 @@
-from llm_sanitation.scanners.scanner_base import Scanner
-from llm_sanitation.utils.models import *
-from PIL import Image
-import pypdf
-from llm_sanitation.logging.logging_setup import LogUtil, LogType, LogLevel
-
-
 class PageCount(Scanner):
+    """
+    A class to check the page count of a file and determine if it exceeds a predefined threshold.
+
+    This class extends the `Scanner` base class and provides functionality to evaluate the page count 
+    of PDF and TIFF files. It checks whether the page count exceeds the specified threshold.
+
+    Attributes:
+        page_thresh (int): The maximum allowable number of pages.
+
+    Methods:
+        predict(file_path):
+            Checks the page count of the file and returns a prediction message and score.
+
+        format_response():
+            Formats the prediction response to include the result of the page count check and the corresponding score.
+    """
 
     def __init__(self, **kwargs):
+        """
+        Initializes the PageCount instance and sets up the page count threshold.
+
+        Args:
+            **kwargs: Additional keyword arguments, specifically 'page_thresh', which is the maximum allowable number of pages.
+        """
         self.page_thresh = kwargs["page_thresh"]
         super().__init__("page_count", 0.5, page_thresh=self.page_thresh)
 
     def predict(self, file_path):
+        """
+        Checks the page count of the file by determining the number of pages in PDF or TIFF files.
+
+        Args:
+            file_path (str): The file path of the document to be checked.
+
+        Returns:
+            tuple: A tuple containing the prediction message (str) and the corresponding score (int).
+                   A score of 1 indicates that the page count is within the threshold, while a score of 0 indicates that it exceeds the threshold.
+        """
         file_type = file_path.split(".")[-1].lower()
-        # if file_type not in ['pdf','jpg','png','jpeg']:
-        #     self.response['error_code'].append("ERR002")
         try:
             if file_type == "pdf":
                 doc = pypdf.PdfReader(file_path)
                 page_count = len(doc.pages)
-            elif file_type == "tiff" or "tif":
+            elif file_type in ["tiff", "tif"]:
                 img = Image.open(file_path)
                 page_count = img.n_frames
             else:
-                predict = "Unsupport file format. Only support tiff and pdf now."
+                predict = "Unsupported file format. Only TIFF and PDF are supported."
                 score = 0
                 return predict, score
-            if page_count> self._kwargs['page_thresh']:
-                predict = "The page count({}) for this file is exceeded threshlod.".format(page_count)
+            
+            if page_count > self._kwargs['page_thresh']:
+                predict = f"The page count ({page_count}) for this file exceeds the threshold."
                 score = 0
             else:
-                predict = "Valid page count({}) for this file.".format(page_count)
+                predict = f"Valid page count ({page_count}) for this file."
                 score = 1
         except Exception as e:
             LogUtil.log(LogType.ERROR, LogLevel.ERROR, e)
-            predict = "Error occured: {}".format(e)
+            predict = f"Error occurred: {e}"
             score = 0
+        
         return predict, score
 
     def format_response(self):
+        """
+        Formats the prediction response to include the result of the page count check and the corresponding score.
+
+        This method modifies the response dictionary to include the page count check result under the "page_count" key 
+        and the corresponding score under the "score" key.
+        """
         self.response["prediction"]["page_count"] = self.pred[0]
         self.response["score"] = self.pred[1]
