@@ -1,101 +1,24 @@
 from llm_sanitation.scanners.scanner_base import Scanner
-from llm_sanitation.utils.models import *
-import unicodedata
+import re
 from llm_sanitation.logging.logging_setup import LogUtil, LogType, LogLevel
 
-class RemoveUnicode(Scanner):
-    """
-    A Scanner class to detect and remove invisible or non-standard Unicode characters from text data.
-
-    This class identifies and optionally removes invisible Unicode characters (e.g., format, 
-    control, private use, and unassigned characters) from the provided text. It extends the 
-    Scanner base class and provides a sanitization feature specifically for these characters.
-
-    Attributes:
-        sanitize (bool): Flag to indicate whether to perform the sanitization.
-        banned_categories (list): List of Unicode categories considered as invisible characters.
-    
-    Methods:
-        contains_unicode(text: str) -> bool:
-            Checks if the text contains any non-ASCII characters.
-
-        predict(data: str) -> tuple:
-            Identifies and removes invisible characters from the input text data.
-            Returns a tuple containing a prediction message, a score (1 for success, 0 for failure), 
-            and the sanitized text.
-        
-        format_response() -> None:
-            Formats the response by assigning the prediction and score to the response dictionary.
-    """
+class RemoveWhitespaces(Scanner):
 
     def __init__(self, **kwargs):
-        """
-        Initializes the RemoveUnicode scanner.
-
-        Args:
-            sanitize (bool): Flag indicating whether the text should be sanitized.
-        """
         sanitize = kwargs["sanitize"]
-        super().__init__("invisible_text_check", 0.5, sanitize=sanitize)
-        # 'Cf' (Format characters), 'Cc' (Control characters), 'Co' (Private use characters), and 'Cn' (Unassigned characters)
-        self.banned_categories = ["Cf", "Cc", "Co", "Cn"]
-
-    @staticmethod
-    def contains_unicode(text: str):
-        """
-        Checks if the text contains any non-ASCII characters.
-
-        Args:
-            text (str): The input text to check for Unicode characters.
-
-        Returns:
-            bool: True if non-ASCII characters are found, False otherwise.
-        """
-        return any(ord(char) > 127 for char in text)
+        super().__init__("remove_whitespaces", 0.5,sanitize=sanitize)
 
     def predict(self, data):
-        """
-        Identifies and removes invisible Unicode characters from the provided text data.
-
-        Args:
-            data (str): The input text from which invisible characters need to be detected and removed.
-
-        Returns:
-            tuple: A tuple containing a prediction message, a score (1 for success, 0 for failure), 
-                   and the sanitized text.
-        """
-        sanitized_text = data
+        sanitized_data = data
         score = 0
         try:
-            if not self.contains_unicode(data):
-                predict = "No invisible characters found"
-                score = 1
-            else:
-                chars = []
-                for char in data:
-                    if unicodedata.category(char) not in self.banned_categories:
-                        continue
-
-                    chars.append(char)
-                    data = data.replace(char, "")
-                if chars:
-                    predict = "Found invisible characters in the text:{}".format(', '.join(chars))
-                    sanitized_text = data
-                else:
-                    predict = "No invisible characters found"
-                    score = 1
+            sanitized_data = ' '.join(data.strip().split())
+            score = 1
         except Exception as e:
             LogUtil.log(LogType.ERROR, LogLevel.ERROR, e)
-        
-        return predict, score, sanitized_text
+
+        return score, sanitized_data
 
     def format_response(self):
-        """
-        Formats the scanner's response.
-
-        Assigns the prediction and score to the response dictionary, making them 
-        available for further processing or output.
-        """
-        self.response["prediction"]["invisible_text_check"] = self.pred[0]
-        self.response["score"] = self.pred[1]
-        self.response['sanitized_data'] = self.pred[2]
+        self.response["score"] = self.pred[0]
+        self.response['sanitized_data'] = self.pred[1]
