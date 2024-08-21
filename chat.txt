@@ -1,167 +1,53 @@
-class EncryptionDetector(Scanner):
-    """
-    A class to detect if a given file is encrypted or password-protected.
+from llm_sanitation.scanners.scanner_base import Scanner
+from llm_sanitation.utils.models import *
+import bleach
+import re
+from llm_sanitation.logging.logging_setup import LogUtil, LogType, LogLevel
 
-    This class extends the `Scanner` base class and provides functionality to check for encryption 
-    in various file formats, including PDFs, Microsoft Office documents, ZIP, and 7z archives.
-
-    Methods:
-        get_extn(path):
-            Extracts and returns the file extension from a given file path.
-
-        is_pwd_pdf(file_path):
-            Checks if a PDF file is password-protected.
-
-        is_pwd_msdoc(file_path):
-            Checks if a Microsoft Office document (Excel, Word) is password-protected.
-
-        is_pwd_7z(file_path):
-            Checks if a 7z archive is password-protected.
-
-        is_pwd_zip(file_path):
-            Checks if a ZIP archive is password-protected.
-
-        predict(file_path):
-            Determines if a given file is encrypted or password-protected based on its file type.
-
-        format_response():
-            Formats the prediction response to include the encryption status and the corresponding score.
-    """
+class ExecutableScript(Scanner):
 
     def __init__(self, **kwargs):
-        """
-        Initializes the EncryptionDetector instance.
+        super().__init__("execuable_script", 0.8)
+        self.scripts_pattern = {"embedded script":re.compile(r"<script.*?>.*?</script>"),
+                           "iframe":re.compile(r"<iframe.*?>.*?</iframe>"),
+                           "object":re.compile(r"<object.*?>.*?</object>"),
+                           "embed":re.compile(r"<embed.*?>.*?</embed>"),
+                           "applet":re.compile(r"<applet.*?>.*?</applet>"),
+                           "link":re.compile(r"<link.*?>"),
+                           "style":re.compile(r"<style.*?>.*?</style>"),
+                           "JavaScript event handlers":re.compile(r"on\w+=\s*['\"].+?['\"]"),
+                           "JavaScript":re.compile(r"<JavaScript\s*:"),
+                           "data":re.compile(r"<JavaScript\s*:"),
+                           "img tag with src":re.compile(r"<img.*?src\s*['\"].*?['\"].*?>"),
+                           "a tag with href":re.compile(r"<a.*?href\s*['\"].*?['\"].*?>"),
+                           "body":re.compile(r"<body.*?online=.*?>"),
+                           "input":re.compile(r"<input.*?>"),
+                           "form":re.compile(r"<form.*?>.*?</form>"),
+                           "marquee":re.compile(r"<marquee.*?>.*?</marquee>"),
+                           "base":re.compile(r"<base.*?>"),
+                           }
 
-        Args:
-            **kwargs: Additional keyword arguments (not utilized in this implementation).
-        """
-        super().__init__("encryption_detector", 1)
-
-    def get_extn(self, path):
-        """
-        Extracts the file extension from a given file path.
-
-        Args:
-            path (str): The file path from which to extract the extension.
-
-        Returns:
-            str: The file extension in lowercase.
-        """
-        return os.path.split(path)[-1].split(".")[-1].lower()
-
-    def is_pwd_pdf(self, file_path):
-        """
-        Checks if a PDF file is password-protected.
-
-        Args:
-            file_path (str): The path to the PDF file.
-
-        Returns:
-            bool: True if the PDF is password-protected, False otherwise.
-        """
+    def predict(self,data):
         try:
-            doc = fitz.open(file_path, filetype="pdf")
-            return doc.needs_pass
-        except Exception as e:
-            print("Error occurred: {}".format(e))
-
-    def is_pwd_msdoc(self, file_path):
-        """
-        Checks if a Microsoft Office document (Excel, Word) is password-protected.
-
-        Args:
-            file_path (str): The path to the Microsoft Office document.
-
-        Returns:
-            bool: True if the document is password-protected, False otherwise.
-        """
-        try:
-            with open(file_path, "rb") as stream:
-                ms_file = msoffcrypto.OfficeFile(stream)
-                return ms_file.is_encrypted()
-        except Exception as e:
-            print("Error occurred: {}".format(e))
-
-    def is_pwd_7z(self, file_path):
-        """
-        Checks if a 7z archive is password-protected.
-
-        Args:
-            file_path (str): The path to the 7z archive.
-
-        Returns:
-            bool: True if the archive is password-protected, False otherwise.
-        """
-        try:
-            with py7zr.SevenZipFile(file_path, "r") as archive:
-                archive.extractall()
-                return False
-        except Exception as e:
-            if isinstance(e, py7zr.exceptions.PasswordRequired):
-                return True
+            # check the HTML code block, if exist, match the script patterns.
+            cleaned_data = bleach.clean(data, strip=True)
+            if cleaned_data != data:
+                languages = []
+                for language, pattern in self.scripts_pattern.items():
+                    if re.search(pattern,data):
+                        languages.append(language)
+                prediction = "Found executable scripts: {}.".format(', '.join(languages))
+                score = 0
             else:
-                print("Error occurred: {}".format(e))
-
-    def is_pwd_zip(self, file_path):
-        """
-        Checks if a ZIP archive is password-protected.
-
-        Args:
-            file_path (str): The path to the ZIP archive.
-
-        Returns:
-            bool: True if the archive is password-protected, False otherwise.
-        """
-        try:
-            zf = zipfile.ZipFile(file_path)
-            zf.testzip()
-            return False
-        except RuntimeError as e:
-            if "encrypted" in str(e):
-                return True
-            else:
-                print("Error occurred: {}".format(e))
-
-    def predict(self, file_path):
-        """
-        Determines if a given file is encrypted or password-protected based on its file type.
-
-        This method checks the file type (extension) and applies the corresponding method 
-        to detect encryption.
-
-        Args:
-            file_path (str): The path to the file to be checked.
-
-        Returns:
-            dict: A dictionary containing the encryption status (`is_protected`) and a score 
-                  (`score`), where 0 indicates the file is protected, and 1 indicates it is not.
-        """
-        extn = self.get_extn(file_path)
-        is_protected = False
-
-        if extn == "pdf":
-            is_protected = self.is_pwd_pdf(file_path)
-
-        elif extn in ["xlsx", "xls", "doc", "docx"]:
-            is_protected = self.is_pwd_msdoc(file_path)
-
-        elif extn == "7z":
-            is_protected = self.is_pwd_7z(file_path)
-
-        elif extn == "zip":
-            is_protected = self.is_pwd_zip(file_path)
-
-        else:
-            print("Unsupported format {}".format(extn))
-
-        return {"is_protected": is_protected, "score": 0 if is_protected else 1}
-
+                prediction = "No executable scripts found."
+                score = 1
+        except Exception as e:
+            prediction = "Error occured: {}".format(e)
+            score = 0
+            LogUtil.log(LogType.ERROR, LogLevel.ERROR, e)
+            
+        return prediction,score
+ 
     def format_response(self):
-        """
-        Formats the prediction response to include the encryption status and the corresponding score.
-
-        This method modifies the response dictionary to include details of the encryption 
-        status under the "is_protected" key and the corresponding score under the "score" key.
-        """
-        self.response["prediction"]["is_protected"] = self.pred["is_protected"]
-        self.response["score"] = self.pred["score"]
+        self.response["prediction"]["executable_script"] = self.pred[0]
+        self.response["score"] = self.pred[1]
