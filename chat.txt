@@ -1,80 +1,52 @@
-class SanctionedEnitities(Scanner):
-    """
-    A class to identify and optionally sanitize mentions of sanctioned entities in text data.
+from llm_sanitation.scanners.scanner_base import Scanner
+from llm_sanitation.utils.models import *
+from pypdf import PdfReader
+from PIL import Image
+from PIL.ExifTags import TAGS
+import re
+from llm_sanitation.logging.logging_setup import LogUtil, LogType, LogLevel
 
-    This class extends the `Scanner` base class and provides functionality to scan text for mentions 
-    of sanctioned entities based on a predefined list and return the results along with a sanitized version of the text.
+class SoftwareCheck(Scanner):
 
-    Methods:
-        get_sanctioned_entities():
-            Retrieves the list of sanctioned entities from a configuration file.
+    def __init__(self,**kwargs):
+        self.software_blacklist = kwargs["software_blacklist"]
+        super().__init__("software_check", 0.5)
 
-        predict(data):
-            Scans the provided text data for mentions of sanctioned entities and optionally sanitizes the text.
-
-        format_response():
-            Formats the prediction response to include the found entities, score, and optionally sanitized text.
-    """
-
-    def __init__(self, **kwargs):
+    def pdf_software_validator(self, software):
         """
-        Initializes the SanctionedEnitities instance.
-
-        Args:
-            **kwargs: Additional keyword arguments. The 'sanitize' flag determines whether to sanitize the text.
+        Validates the creator software / software in the metadata to see if they are any of the potentially blacklist ones
         """
-        super().__init__("sanctioned_entities", .5, sanitize=True)
+        if software==None:
+            tampered = "Software details are not available"
+            score = 1
+        elif software in self.software_blacklist:
+            tampered = "Potentially tampered using '{}'".format(software)
+            score = 0
+        else:
+            tampered = "Potentially not tampered, Software useed for creation is '{}'".format(software)
+            score = 1
+        return tampered,score
 
-    def get_sanctioned_entities(self):
-        """
-        Retrieves the list of sanctioned entities from a configuration file.
-
-        The sanctioned entities are expected to be stored in a YAML file named "sanctioned_entity.yml".
-        This method reads the file and stores the entities in an instance variable.
-        """
+    def predict(self,file_path):
+        file_format = os.path.split(file_path)[-1].split(".")[-1].lower()
         try:
-            self.sanctioned_entities = read_config("sanctioned_entity.yml")
-            self.sanctioned_entities = self.sanctioned_entities["sanctioned_entities"]
+            if file_format == "pdf":
+                self.reader = PdfReader(file_path)
+                software = self.reader.metadata.producer
+            else:
+                image = Image.open(file_path)
+                exif_data = image.getexif()
+                if exif_data is not None:
+                    exif = {TAGS.get(tag,tag): value for tag, value in exif_data.items()}
+                    software = exif.get("Software",None)
+            if software is not None:
+                software = re.sub(r'\d+', '', re.sub(r'[^a-zA-Z\s]', '', software)).rstrip()
+            software_tampering,score = self.pdf_software_validator(software)
         except Exception as e:
             LogUtil.log(LogType.ERROR, LogLevel.ERROR, e)
+        return software_tampering,score
 
-    def predict(self, data):
-        """
-        Scans the provided text data for mentions of sanctioned entities and optionally sanitizes the text.
-
-        Args:
-            data (str): The text data to be scanned for mentions of sanctioned entities.
-
-        Returns:
-            dict: A dictionary containing the found entities under the "entities_found" key,
-                  the prediction score under the "score" key, and optionally sanitized data under the "sanitized_data" key.
-        """
-        sanitized_data = data
-        self.get_sanctioned_entities()
-        found_entities = []
-        score = 1
-        try:
-            for country in self.sanctioned_entities:
-                pattern = rf"\b{re.escape(country)}\b"
-                match = re.search(pattern.lower(), data.lower())
-                if match:
-                    found_entities.append(country)
-                    score = 0
-
-                if self._kwargs["sanitize"]:
-                    sanitized_data = re.sub(country, "[SANCTIONED_COUNTRY]", sanitized_data, flags=re.IGNORECASE)
-        except Exception as e:
-            LogUtil.log(LogType.ERROR, LogLevel.ERROR, e)
-
-        return {"entities_found": found_entities, "score": score, "sanitized_data": sanitized_data}
 
     def format_response(self):
-        """
-        Formats the prediction response to include the found entities, score, and optionally sanitized text.
-
-        This method modifies the response dictionary to include the entities found under the 
-        "entities_found" key and the prediction score under the "score" key.
-        """
-        self.response["prediction"]["entities_found"] = self.pred["entities_found"]
-        self.response["score"] = self.pred["score"]
-        # self.response["sanitized_text"] = self.pred["sanitized_data"]
+        self.response["prediction"]["software_check"] = self.pred[0]
+        self.response["score"] = self.pred[1]
