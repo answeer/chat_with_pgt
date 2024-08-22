@@ -6,13 +6,46 @@ import os
 from llm_sanitation.logging.logging_setup import LogUtil, LogType, LogLevel
 
 class FileIntegrity(Scanner):
+    """
+    A Scanner class that checks the integrity of a file by comparing it with a reference file or hash.
+
+    This class can verify if a file matches a given reference file or hash, ensuring data integrity.
+
+    Attributes:
+        reference (str): The reference file path or hash value to compare against.
+
+    Methods:
+        calculate_file_hash(file_path: str, hash_type: str) -> str:
+            Calculates the hash of a given file using the specified hash algorithm.
+
+        predict(file_path: str, hash_type: str) -> tuple:
+            Compares the provided file with the reference file or hash and returns a prediction and score.
+
+        format_response() -> None:
+            Formats the response by assigning the prediction and score to the response dictionary.
+    """
 
     def __init__(self, **kwargs):
+        """
+        Initializes the FileIntegrity scanner.
+
+        Args:
+            reference (str): The reference file path or hash value for integrity comparison.
+        """
         reference = kwargs["reference"]
-        super().__init__("file_integrity",  1, reference=reference)
+        super().__init__("file_integrity", 1, reference=reference)
 
-    def calculate_file_hash(self,file_path, hash_type='sha256'):
+    def calculate_file_hash(self, file_path, hash_type='sha256'):
+        """
+        Calculates the hash of a file.
 
+        Args:
+            file_path (str): The path of the file to calculate the hash for.
+            hash_type (str): The hash algorithm to use (default is 'sha256').
+
+        Returns:
+            str: The calculated hash of the file.
+        """
         hash_func = getattr(hashlib, hash_type)()
 
         with open(file_path, 'rb') as f:
@@ -21,32 +54,48 @@ class FileIntegrity(Scanner):
 
         return hash_func.hexdigest()
 
-    def predict(self, file_path,hash_type='sha256'):
+    def predict(self, file_path, hash_type='sha256'):
+        """
+        Predicts the integrity of a file by comparing it with a reference file or hash.
+
+        Args:
+            file_path (str): The path of the file to check.
+            hash_type (str): The hash algorithm to use if comparing against a hash (default is 'sha256').
+
+        Returns:
+            tuple: A tuple containing a prediction string and a score (1 for success, 0 for failure).
+        """
         reference = self._kwargs['reference']
         try:
             if os.path.isfile(reference):
-                file_integrity =  filecmp.cmp(file_path, reference, shallow=False)
+                file_integrity = filecmp.cmp(file_path, reference, shallow=False)
                 if file_integrity:
-                    predict = "File is integrtity."
+                    predict = "File is intact."
                     score = 1
                 else:
-                    predict = "File is NOT integrtity, please check the input file."
+                    predict = "File is NOT intact, please check the input file."
                     score = 0
 
             else:
                 actual_hash = self.calculate_file_hash(file_path, hash_type)
                 if actual_hash == reference:
-                    predict = "File is integrtity."
+                    predict = "File is intact."
                     score = 1
                 else:
-                    predict = "File is NOT integrtity, please check the input file."
+                    predict = "File is NOT intact, please check the input file."
                     score = 0
         except Exception as e:
             LogUtil.log(LogType.ERROR, LogLevel.ERROR, e)
-            predict = "Error occured: {}".format(e)
+            predict = "Error occurred: {}".format(e)
             score = 0
         return predict, score
 
     def format_response(self):
+        """
+        Formats the scanner's response.
+
+        Assigns the prediction and score to the response dictionary, making them 
+        available for further processing or output.
+        """
         self.response["prediction"]["file_integrity"] = self.pred[0]
         self.response["score"] = self.pred[1]
