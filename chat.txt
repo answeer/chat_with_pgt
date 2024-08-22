@@ -1,70 +1,52 @@
 from llm_sanitation.scanners.scanner_base import Scanner
-from nltk.stem import WordNetLemmatizer
-from nltk.tokenize import word_tokenize
+from llm_sanitation.utils.models import *
+import hashlib
+import filecmp
+import os
 from llm_sanitation.logging.logging_setup import LogUtil, LogType, LogLevel
 
-class TextLemmatizer(Scanner):
-    """
-    A Scanner class that performs lemmatization on text data.
-
-    This class uses NLTK's `WordNetLemmatizer` to reduce words to their base or root form.
-    If sanitization is enabled, the lemmatized text is returned.
-
-    Attributes:
-        sanitize (bool): Flag to indicate whether to perform the sanitization.
-
-    Methods:
-        predict(data: str) -> tuple:
-            Lemmatizes the provided text and returns a score and the lemmatized text.
-        
-        format_response() -> None:
-            Formats the response by assigning the score and sanitized text to the response dictionary.
-    """
+class FileIntegrity(Scanner):
 
     def __init__(self, **kwargs):
-        """
-        Initializes the TextLemmatizer scanner.
+        reference = kwargs["reference"]
+        super().__init__("file_integrity",  1, reference=reference)
 
-        Args:
-            sanitize (bool): Flag indicating whether the text should be sanitized by lemmatizing words.
-        """
-        sanitize = kwargs["sanitize"]
-        super().__init__("text_lemmetizer", 0.5, sanitize=sanitize)
+    def calculate_file_hash(self,file_path, hash_type='sha256'):
 
-    def predict(self, data):
-        """
-        Lemmatizes the provided text data.
+        hash_func = getattr(hashlib, hash_type)()
 
-        This method uses the NLTK `WordNetLemmatizer` to reduce words in the input text to their base form.
+        with open(file_path, 'rb') as f:
+            while chunk := f.read(8192):
+                hash_func.update(chunk)
 
-        Args:
-            data (str): The input text to lemmatize.
+        return hash_func.hexdigest()
 
-        Returns:
-            tuple: A tuple containing a score (1 for success, 0 for failure) and the lemmatized text.
-        """
-        tokens = []
-        sanitized_data = data
-        score = 0
+    def predict(self, file_path,hash_type='sha256'):
+        reference = self._kwargs['reference']
         try:
-            lemmatizer = WordNetLemmatizer()
-            input_str = word_tokenize(data)
-            for word in input_str:
-                tokens.append(lemmatizer.lemmatize(word))
-            sanitized_data = " ".join(tokens)
+            if os.path.isfile(reference):
+                file_integrity =  filecmp.cmp(file_path, reference, shallow=False)
+                if file_integrity:
+                    predict = "File is integrtity."
+                    score = 1
+                else:
+                    predict = "File is NOT integrtity, please check the input file."
+                    score = 0
 
-            score = 1
+            else:
+                actual_hash = self.calculate_file_hash(file_path, hash_type)
+                if actual_hash == reference:
+                    predict = "File is integrtity."
+                    score = 1
+                else:
+                    predict = "File is NOT integrtity, please check the input file."
+                    score = 0
         except Exception as e:
             LogUtil.log(LogType.ERROR, LogLevel.ERROR, e)
-
-        return score, sanitized_data
+            predict = "Error occured: {}".format(e)
+            score = 0
+        return predict, score
 
     def format_response(self):
-        """
-        Formats the scanner's response.
-
-        Assigns the score and sanitized text to the response dictionary, making them 
-        available for further processing or output.
-        """
-        self.response["score"] = self.pred[0]
-        self.response['sanitized_data'] = self.pred[1]
+        self.response["prediction"]["file_integrity"] = self.pred[0]
+        self.response["score"] = self.pred[1]
