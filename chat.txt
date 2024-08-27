@@ -1,24 +1,16 @@
-{
-    "Version": "2024-08-26",
-    "Statement": [
-        {
-            "id": "0011",
-            "name": "image_bounding_policy",
-            "Effect": "",
-            "Type": "DataPolicy",
-            "Action": [
-                "image_bounding:ImageBlurCheck",
-                "image_bounding:ImageDimCheck",
-                "image_bounding:ImageDPICheck",
-                "image_bounding:ImageMemoryCheck"
-            ],
-            "Resource": "Payload text",
-            "Condition": {
-                "ImageBlurCheck": {"score_thresh": 0.6, "save_folder":"save_folder"},
-                "ImageDimCheck": {"img_dim_thresh": (1024,1024)},
-                "ImageDPICheck": {"x_dpi_thresh": 20, "y_dpi_thresh": 20, "save_folder":"save_folder"},
-                "ImageMemoryCheck": {"max_size":4096,"min_size":2048}
-            }
-        }
-    ]
-}
+CREATE OR REPLACE FUNCTION swoosh.get_io_sanitation_master_id_pk_seq(
+	table_name bigint)
+    RETURNS bigint
+    LANGUAGE 'plpgsql'
+    COST 100
+    VOLATILE PARALLEL UNSAFE
+AS $BODY$
+declare
+seqid varchar;
+date varchar;
+BEGIN
+SELECT into date REPLACE(TO_CHAR(NOW()::date, 'yyyy/mm/dd'),'/','');
+select into seqid lpad((nextval('swoosh.io_sanitation_master_id_pk_seq')||''),7,'0');
+return (table_name||date||seqid);
+END;
+$BODY$;
