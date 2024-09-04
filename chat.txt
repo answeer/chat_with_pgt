@@ -1,10 +1,11 @@
 import json
+import os
 import pandas as pd
 import streamlit as st
 
 # Step 1: 读取JSON文件
-def load_json(file):
-    with open(file, 'r') as f:
+def load_json(file_path):
+    with open(file_path, 'r') as f:
         data = json.load(f)
     return data
 
@@ -28,15 +29,26 @@ def extract_values(data):
 def main():
     st.title("JSON数据处理与编辑")
     
-    # 上传JSON文件
-    uploaded_file = st.file_uploader("上传JSON文件", type="json")
-    if uploaded_file is not None:
-        data = json.load(uploaded_file)
+    # 输入JSON文件路径
+    file_path = st.text_input("输入JSON文件路径")
+    if file_path:
+        data = load_json(file_path)
         df = extract_values(data)
         
-        # 提供下拉菜单供用户编辑value列
-        options = ["correct_redact", "wrong_redact", "entity_not_found"]
-        df['value'] = df['value'].apply(lambda x: st.selectbox('Select value', options, index=options.index(x)))
+        # 显示表格
+        st.write("数据表格：")
+        edited_values = []
+        for index, row in df.iterrows():
+            # 提供下拉菜单供用户编辑value列
+            selected_value = st.selectbox(
+                f'选择 {row["entity_name"]} 的值 (行 {index + 1})',
+                options=["correct_redact", "wrong_redact", "entity_not_found"],
+                index=["correct_redact", "wrong_redact", "entity_not_found"].index(row['value'])
+            )
+            edited_values.append(selected_value)
+        
+        df['value'] = edited_values
+        st.dataframe(df)  # 显示编辑后的表格
         
         # 提交按钮
         if st.button("提交"):
@@ -48,10 +60,14 @@ def main():
                             if value['pred_ref_id'] == row['pred_ref_id']:
                                 value['value'] = row['value']
             
+            # 获取保存路径（与输入文件同级目录）
+            dir_name = os.path.dirname(file_path)
+            save_path = os.path.join(dir_name, 'updated_data.json')
+            
             # 保存为新的JSON文件
-            with open('updated_data.json', 'w') as f:
+            with open(save_path, 'w') as f:
                 json.dump(data, f, indent=4)
-            st.success("数据已更新并保存为 updated_data.json")
+            st.success(f"数据已更新并保存为 {save_path}")
 
 if __name__ == "__main__":
     main()
