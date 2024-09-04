@@ -1,16 +1,64 @@
-CREATE OR REPLACE FUNCTION swoosh.get_io_sanitation_master_id_pk_seq(
-	table_name bigint)
-    RETURNS bigint
-    LANGUAGE 'plpgsql'
-    COST 100
-    VOLATILE PARALLEL UNSAFE
-AS $BODY$
-declare
-seqid varchar;
-date varchar;
-BEGIN
-SELECT into date REPLACE(TO_CHAR(NOW()::date, 'yyyy/mm/dd'),'/','');
-select into seqid lpad((nextval('swoosh.io_sanitation_master_id_pk_seq')||''),7,'0');
-return (table_name||date||seqid);
-END;
-$BODY$;
+{
+    "header": {
+        "clientRefNumber": "NA",
+        "job_id": "a7009813-dd42-410f-a0c8-05e674a228c6",
+        "country": "IN",
+        "project_version": "1.0.0",
+        "project_id": "RTOB_DOC_REDACTION",
+        "input_type": "Image",
+        "doc_ids": [
+            "{aadhar (1).jpeg}"
+        ],
+        "doc_count": 1,
+        "total_pagecount": 1,
+        "status": "Completed",
+        "agent_execute_id": "",
+        "error_code": "200",
+        "error_description": ""
+    },
+    "extracted_values": [
+        {
+            "doc_id": "aadhar (1).jpeg",
+            "doc_type": "aadhar",
+            "page_number": 1,
+            "page_data": {
+                "transaction_no": "001",
+                "values": [
+                    {
+                        "entity_name": "aadhar_no",
+                        "pred_ref_id": "a7009813-dd42-410f-a0c8-05e674a228c6_001_1_aadhar_no",
+                        "value": "correct_redact",
+                        "confidence": "99.37",
+                        "n_redactions": "1",
+                        "checker_conf": "1.0",
+                        "aadhar_doc_cls_score": "0.2"
+                    }
+                ]
+            }
+        },
+        {
+            "doc_id": "aadhar (1).jpeg",
+            "doc_type": "aadhar",
+            "page_number": 2,
+            "page_data": {
+                "transaction_no": "002",
+                "values": [
+                    {
+                        "entity_name": "aadhar_no",
+                        "pred_ref_id": "a7009813-dd42-410f-a0c8-05e674a228c6_001_2_aadhar_no",
+                        "value": "correct_redact",
+                        "confidence": "99.371111",
+                        "n_redactions": "1",
+                        "checker_conf": "1.0",
+                        "aadhar_doc_cls_score": "0.3"
+                    }
+                ]
+            }
+        }
+    ]
+}
+
+page_number	entity_name	confidence	n_redactions	checker_confidence	value	
+1	aadhar_no	98.71	3	0.2						correct_redact	
+
+
