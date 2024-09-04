@@ -35,17 +35,14 @@ def main():
         data = load_json(file_path)
         df = extract_values(data)
         
-        # 设置可编辑列的选项
+        # 定义可编辑列的选项
         edit_options = ["correct_redact", "wrong_redact", "entity_not_found"]
         
-        # 显示编辑器
-        edited_df = st.experimental_data_editor(
-            df, 
-            num_rows="dynamic", 
-            columns={
-                'value': st.selectbox("选择", options=edit_options)
-            }
-        )
+        # 将下拉菜单应用到 value 列
+        df['value'] = df['value'].astype(pd.CategoricalDtype(categories=edit_options))
+        
+        # 使用st.data_editor 显示并编辑表格
+        edited_df = st.data_editor(df, num_rows="dynamic")
         
         # 提交按钮
         if st.button("提交"):
