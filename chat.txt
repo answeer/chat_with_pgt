@@ -1,64 +1,57 @@
-{
-    "header": {
-        "clientRefNumber": "NA",
-        "job_id": "a7009813-dd42-410f-a0c8-05e674a228c6",
-        "country": "IN",
-        "project_version": "1.0.0",
-        "project_id": "RTOB_DOC_REDACTION",
-        "input_type": "Image",
-        "doc_ids": [
-            "{aadhar (1).jpeg}"
-        ],
-        "doc_count": 1,
-        "total_pagecount": 1,
-        "status": "Completed",
-        "agent_execute_id": "",
-        "error_code": "200",
-        "error_description": ""
-    },
-    "extracted_values": [
-        {
-            "doc_id": "aadhar (1).jpeg",
-            "doc_type": "aadhar",
-            "page_number": 1,
-            "page_data": {
-                "transaction_no": "001",
-                "values": [
-                    {
-                        "entity_name": "aadhar_no",
-                        "pred_ref_id": "a7009813-dd42-410f-a0c8-05e674a228c6_001_1_aadhar_no",
-                        "value": "correct_redact",
-                        "confidence": "99.37",
-                        "n_redactions": "1",
-                        "checker_conf": "1.0",
-                        "aadhar_doc_cls_score": "0.2"
-                    }
-                ]
-            }
-        },
-        {
-            "doc_id": "aadhar (1).jpeg",
-            "doc_type": "aadhar",
-            "page_number": 2,
-            "page_data": {
-                "transaction_no": "002",
-                "values": [
-                    {
-                        "entity_name": "aadhar_no",
-                        "pred_ref_id": "a7009813-dd42-410f-a0c8-05e674a228c6_001_2_aadhar_no",
-                        "value": "correct_redact",
-                        "confidence": "99.371111",
-                        "n_redactions": "1",
-                        "checker_conf": "1.0",
-                        "aadhar_doc_cls_score": "0.3"
-                    }
-                ]
-            }
-        }
-    ]
-}
+import json
+import pandas as pd
+import streamlit as st
 
-page_number	entity_name	confidence	n_redactions	checker_confidence	value	
-1	aadhar_no	98.71	3	0.2						correct_redact	
+# Step 1: 读取JSON文件
+def load_json(file):
+    with open(file, 'r') as f:
+        data = json.load(f)
+    return data
 
+# Step 2: 提取extracted_values.page_data.values并转换为表格
+def extract_values(data):
+    extracted_values = []
+    for item in data['extracted_values']:
+        page_data = item['page_data']
+        for value in page_data['values']:
+            extracted_values.append({
+                'doc_id': item['doc_id'],
+                'page_number': item['page_number'],
+                'entity_name': value['entity_name'],
+                'pred_ref_id': value['pred_ref_id'],
+                'value': value['value'],
+                'confidence': value['confidence']
+            })
+    return pd.DataFrame(extracted_values)
 
+# Step 3: 在Streamlit中显示表格并设置可编辑列
+def main():
+    st.title("JSON数据处理与编辑")
+    
+    # 上传JSON文件
+    uploaded_file = st.file_uploader("上传JSON文件", type="json")
+    if uploaded_file is not None:
+        data = json.load(uploaded_file)
+        df = extract_values(data)
+        
+        # 提供下拉菜单供用户编辑value列
+        options = ["correct_redact", "wrong_redact", "entity_not_found"]
+        df['value'] = df['value'].apply(lambda x: st.selectbox('Select value', options, index=options.index(x)))
+        
+        # 提交按钮
+        if st.button("提交"):
+            # 更新原始数据中的values
+            for index, row in df.iterrows():
+                for item in data['extracted_values']:
+                    if item['doc_id'] == row['doc_id'] and item['page_number'] == row['page_number']:
+                        for value in item['page_data']['values']:
+                            if value['pred_ref_id'] == row['pred_ref_id']:
+                                value['value'] = row['value']
+            
+            # 保存为新的JSON文件
+            with open('updated_data.json', 'w') as f:
+                json.dump(data, f, indent=4)
+            st.success("数据已更新并保存为 updated_data.json")
+
+if __name__ == "__main__":
+    main()
