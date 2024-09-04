@@ -38,11 +38,13 @@ def main():
         # 定义可编辑列的选项
         edit_options = ["correct_redact", "wrong_redact", "entity_not_found"]
         
-        # 将下拉菜单应用到 value 列
+        # 将 value 列转换为可选的下拉菜单类型
         df['value'] = df['value'].astype(pd.CategoricalDtype(categories=edit_options))
         
-        # 使用st.data_editor 显示并编辑表格
-        edited_df = st.data_editor(df, num_rows="dynamic")
+        # 配置 st.data_editor 使得只有 value 列可编辑
+        edited_df = st.data_editor(df, 
+                                   num_rows="dynamic", 
+                                   disabled=['doc_id', 'page_number', 'entity_name', 'pred_ref_id', 'confidence'])  # 禁用其他列
         
         # 提交按钮
         if st.button("提交"):
