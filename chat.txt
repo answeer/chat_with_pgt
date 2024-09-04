@@ -35,25 +35,22 @@ def main():
         data = load_json(file_path)
         df = extract_values(data)
         
-        # 显示表格
-        st.write("数据表格：")
-        edited_values = []
-        for index, row in df.iterrows():
-            # 提供下拉菜单供用户编辑value列
-            selected_value = st.selectbox(
-                f'选择 {row["entity_name"]} 的值 (行 {index + 1})',
-                options=["correct_redact", "wrong_redact", "entity_not_found"],
-                index=["correct_redact", "wrong_redact", "entity_not_found"].index(row['value'])
-            )
-            edited_values.append(selected_value)
+        # 设置可编辑列的选项
+        edit_options = ["correct_redact", "wrong_redact", "entity_not_found"]
         
-        df['value'] = edited_values
-        st.dataframe(df)  # 显示编辑后的表格
+        # 显示编辑器
+        edited_df = st.experimental_data_editor(
+            df, 
+            num_rows="dynamic", 
+            columns={
+                'value': st.selectbox("选择", options=edit_options)
+            }
+        )
         
         # 提交按钮
         if st.button("提交"):
             # 更新原始数据中的values
-            for index, row in df.iterrows():
+            for index, row in edited_df.iterrows():
                 for item in data['extracted_values']:
                     if item['doc_id'] == row['doc_id'] and item['page_number'] == row['page_number']:
                         for value in item['page_data']['values']:
