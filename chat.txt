@@ -7,15 +7,20 @@ def estimate_digit_count(w, max_digit_width):
     # Estimate the number of digits based on the width of the bounding box
     return max(1, int(w / max_digit_width))
 
+def calculate_min_area(contours):
+    # Calculate the area of each contour and determine a dynamic min_area
+    areas = [cv2.contourArea(c) for c in contours]
+    if len(areas) == 0:
+        return 0
+    # Use the median of areas as min_area
+    return np.median(areas) * 0.5  # Threshold can be adjusted
+
 # 1. Read the Excel file
 excel_file = 'id_card_data.xlsx'  # Replace with the path to your Excel file
 df = pd.read_excel(excel_file)
 
 # 2. Read the image
 image = cv2.imread('id_card_image.jpg')  # Replace with the path to your ID card image
-
-# Define minimum area for filtering small contours
-min_area = 100  # Set a reasonable minimum area threshold
 
 # Iterate through each row in the Excel file and process only the rows with 12-digit numbers
 for index, row in df.iterrows():
@@ -35,7 +40,10 @@ for index, row in df.iterrows():
         # 5. Perform contour detection to find possible digit regions
         contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-        # 6. Filter contours by area and collect their widths
+        # 6. Calculate dynamic min_area based on contour areas
+        min_area = calculate_min_area(contours)
+
+        # 7. Filter contours by area and collect their widths
         widths = []
         candidates = []
         for contour in contours:
@@ -48,13 +56,13 @@ for index, row in df.iterrows():
         if len(widths) == 0:
             continue
 
-        # 7. Dynamically calculate the maximum width of a single digit (using the median width)
+        # 8. Dynamically calculate the maximum width of a single digit (using the median width)
         max_digit_width = np.median(widths)
 
-        # 8. Sort contours by x-coordinate
+        # 9. Sort contours by x-coordinate
         candidates = sorted(candidates, key=lambda c: c[0])  # Sort by x-coordinate
 
-        # 9. Extract coordinates for the first 8 digits from left to right
+        # 10. Extract coordinates for the first 8 digits from left to right
         digit_coordinates = []
         digit_total_count = 0
 
@@ -78,16 +86,16 @@ for index, row in df.iterrows():
                 digit_total_count += digit_count
 
         if len(digit_coordinates) > 0:
-            # 10. Calculate the overall bounding box for the first 8 digits
+            # 11. Calculate the overall bounding box for the first 8 digits
             min_x = min(coord[0] for coord in digit_coordinates)
             min_y = min(coord[1] for coord in digit_coordinates)
             max_x = max(coord[0] + coord[2] for coord in digit_coordinates)
             max_y = max(coord[1] + coord[3] for coord in digit_coordinates)
 
-            # 11. Draw the overall bounding box on the original image
+            # 12. Draw the overall bounding box on the original image
             cv2.rectangle(image, (min_x, min_y), (max_x, max_y), (0, 255, 0), 2)
 
-# 12. Display the result image
+# 13. Display the result image
 cv2.imshow('ID Card with Overall Bounding Box for Front 8 Digits', image)
 cv2.waitKey(0)
 cv2.destroyAllWindows()
