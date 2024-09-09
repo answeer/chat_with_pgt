@@ -83,4 +83,95 @@ class Profiler:
             policy_json = get_policy(policy)
             stmts = policy_json["Statement"]
 
-            for
+            for stmt in stmts:
+                actions.extend(stmt["Action"])
+
+        for action in actions:
+            b_skill, ai_skill = action.split(":")
+            b_skills.append(b_skill)
+
+            if ai_skill == "*":
+                ai_skills.extend(self.scanner_default[b_skill])
+            else:
+                ai_skills.append(ai_skill)
+
+        return b_skills, ai_skills
+
+    def get_agent_skills(self, agent_mfst):
+        """
+        Retrieves both business and AI skills from the agent manifest.
+
+        Parameters
+        ----------
+        agent_mfst : dict
+            The manifest file containing the agent's profile.
+
+        Returns
+        -------
+        tuple
+            A tuple containing two lists:
+            - b_skills: Business skills defined in the agent manifest.
+            - ai_skills: AI skills defined in the agent manifest.
+        """
+        b_skills = agent_mfst["profile"]["buz_skills"]
+        ai_skills = agent_mfst["profile"]["ai_skills"]
+
+        return b_skills, ai_skills
+
+    def validate_skill(self, agent_mfst_nm, usecase_mfst_nm, agent_nm="*"):
+        """
+        Validates whether the agent has the required business and AI skills
+        as defined by the use case manifest.
+
+        Parameters
+        ----------
+        agent_mfst_nm : str
+            The name of the agent manifest file.
+        usecase_mfst_nm : str
+            The name of the use case manifest file.
+        agent_nm : str, optional
+            The name of the agent to be validated (default is "*").
+
+        Returns
+        -------
+        bool
+            True if the agent possesses all required business and AI skills, False otherwise.
+        """
+        agent_mfst = get_agent_mfst(agent_mfst_nm)
+        usecase_mfst = get_usecase_mfst(usecase_mfst_nm)
+
+        agent_b_skills, agent_ai_skills = self.get_agent_skills(agent_mfst)
+        usecase_b_skills, usecase_ai_skills = self.get_usecase_policy_skills(
+            usecase_mfst, agent_nm
+        )
+
+        # validate_bskill
+        vald_bskill = set(usecase_b_skills).issubset(agent_b_skills)
+        if not vald_bskill:
+            print("The business skills in the use case manifest are not a subset of the agent's skills.")
+
+        # validate ai_skill
+        vald_aiskill = set(usecase_ai_skills).issubset(agent_ai_skills)
+        if not vald_aiskill:
+            print("The AI skills in the use case manifest are not a subset of the agent's skills.")
+
+        return all([vald_bskill, vald_aiskill])
+
+
+if __name__ == "__main__":
+    """
+    Entry point of the script that runs the profiler to validate the agent's skills 
+    against the use case manifest.
+
+    Example
+    -------
+    To run the profiler:
+        - Specify the agent manifest and use case manifest files.
+    """
+    agent = "agent1"
+    profiler_obj = Profiler()
+    profiler_result = profiler_obj.validate_skill(
+        "agent_manifest", "usecase_manifest", agent
+    )
+
+    print("Profiler result: ", profiler_result)
