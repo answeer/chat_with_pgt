@@ -1,41 +1,43 @@
 import cv2
+import pandas as pd
+import re
 
-# 读取图像
-image = cv2.imread('id_card_image.jpg')
+# 1. 读取 Excel 文件
+excel_file = 'id_card_data.xlsx'  # 替换为你的 Excel 文件路径
+df = pd.read_excel(excel_file)
 
-# 当前模型的 bounding box 坐标 (x_min, y_min, x_max, y_max)
-# 假设模型输出了卡号的完整 bounding box
-x_min, y_min, x_max, y_max = (100, 50, 400, 100)  # 替换为实际模型给出的坐标
+# 2. 读取图像
+image = cv2.imread('id_card_image.jpg')  # 替换为你的 ID 卡图像路径
 
-# 1. 提取卡号的图像区域
-card_number_region = image[y_min:y_max, x_min:x_max]
+# 遍历 Excel 中的每一行，并只处理包含12位数字的行
+for index, row in df.iterrows():
+    id_card_number = str(row['text'])  # 假设 'text' 列存储的是卡号文本
 
-# 2. 计算前8位数字的区域
-# 假设卡号是12位数字，按比例计算前8位数字的宽度
-total_width = x_max - x_min
-x_max_8_digits = x_min + int(8/12 * total_width)
+    # 只处理12位数字的行
+    if re.match(r'^\d{12}$', id_card_number):
+        x_min, y_min, x_max, y_max = row['x_min'], row['y_min'], row['x_max'], row['y_max']
 
-# 3. 使用 OpenCV 画出前8位数字的 bounding box
-new_bounding_box = (x_min, y_min, x_max_8_digits, y_max)
-cv2.rectangle(image, (x_min, y_min), (x_max_8_digits, y_max), (0, 255, 0), 2)
+        # 3. 提取卡号的 bounding box 区域
+        card_number_region = image[y_min:y_max, x_min:x_max]
 
-# 4. 处理卡号区域，使用阈值化和轮廓检测进一步分割数字
-gray = cv2.cvtColor(card_number_region, cv2.COLOR_BGR2GRAY)
-_, thresh = cv2.threshold(gray, 150, 255, cv2.THRESH_BINARY_INV)
+        # 4. 转换为灰度图像并二值化处理
+        gray = cv2.cvtColor(card_number_region, cv2.COLOR_BGR2GRAY)
+        _, thresh = cv2.threshold(gray, 150, 255, cv2.THRESH_BINARY_INV)
 
-# 检测轮廓
-contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        # 5. 进行轮廓检测，找到每个数字
+        contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-# 过滤并按 x 坐标排序轮廓
-contours = sorted(contours, key=lambda c: cv2.boundingRect(c)[0])
+        # 6. 过滤并按 x 坐标排序轮廓
+        contours = sorted(contours, key=lambda c: cv2.boundingRect(c)[0])
 
-# 提取前8个轮廓的 bounding box
-for i in range(min(8, len(contours))):
-    x, y, w, h = cv2.boundingRect(contours[i])
-    cv2.rectangle(card_number_region, (x, y), (x + w, y + h), (255, 0, 0), 2)
+        # 提取前8个轮廓的 bounding box 并绘制到原图像上
+        for i in range(min(8, len(contours))):
+            x, y, w, h = cv2.boundingRect(contours[i])
 
-# 显示前8位数字的轮廓
-cv2.imshow('8 Digits Bounding Box', image)
-cv2.imshow('8 Digits Details', card_number_region)
+            # 将前8位数字的 bounding box 绘制在原始图像上
+            cv2.rectangle(image, (x_min + x, y_min + y), (x_min + x + w, y_min + y + h), (0, 255, 0), 2)
+
+# 7. 显示结果图像
+cv2.imshow('ID Card with Front 8 Digits Bounding Box', image)
 cv2.waitKey(0)
 cv2.destroyAllWindows()
