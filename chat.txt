@@ -1,177 +1,101 @@
+from collections import defaultdict
 import os
-from llm_sanitation.utils.common import read_config
 from llm_sanitation.agent.utils.defaults import scanner_default
-from llm_sanitation.agent.utils.connectors import get_agent_mfst, get_usecase_mfst
-
+from llm_sanitation.agent.utils.connectors import get_usecase_mfst
 from llm_sanitation.agent.utils.common import (
     get_policy,
     get_usecase_data_policies,
 )
+from pprint import pprint
 
 
-class Profiler:
-    """
-    A class to represent the agent profiling process, which validates the business and AI skills
-    of agents against the policies defined in the use case manifest.
-
-    Attributes
-    ----------
-    scanner_default : dict
-        A dictionary containing default AI skills for different business skills.
-
-    Methods
-    -------
-    get_agent_bskills(agent_mfst):
-        Retrieves the business skills defined in the agent manifest.
-        
-    get_usecase_policy_skills(usecase_mfst, agent_nm):
-        Extracts the business and AI skills required by policies in the use case manifest.
-
-    get_agent_skills(agent_mfst):
-        Retrieves both the business and AI skills defined in the agent manifest.
-
-    validate_skill(agent_mfst_nm, usecase_mfst_nm, agent_nm="*"):
-        Validates whether the agent possesses the required business and AI skills defined in the use case manifest.
-    """
-
+class Planner:
     def __init__(self):
-        """
-        Initializes the Profiler with default scanner settings for AI skills.
-        """
         self.scanner_default = scanner_default
 
-    @staticmethod
-    def get_agent_bskills(agent_mfst):
-        """
-        Retrieves the business skills from the agent manifest.
+    def reorder_plan(self, execution_plan):
+        b_skill_order = ["payload_validator", "file_bounding", "numeric_bounding", "numeric_sanitation", "text_bounding", "text_data_sanitation", "image_bounding", "image_data_sanitation"]
+        reordered_execution_plan = {}
 
-        Parameters
-        ----------
-        agent_mfst : dict
-            The manifest file containing the agent's profile.
+        for b_skill in b_skill_order:
+            if b_skill in execution_plan:
+                reordered_execution_plan[b_skill] = execution_plan[b_skill]
 
-        Returns
-        -------
-        list
-            A list of business skills (buz_skills) associated with the agent.
-        """
-        return agent_mfst["profile"]["buz_skills"]
+        return reordered_execution_plan
 
-    def get_usecase_policy_skills(self, usecase_mfst, agent_nm):
-        """
-        Extracts the required business and AI skills from the use case manifest policies for a specific agent.
 
-        Parameters
-        ----------
-        usecase_mfst : dict
-            The manifest file containing the use case details and policies.
-        agent_nm : str
-            The name of the agent whose policy skills are being evaluated.
+    def get_exec_plan(self, usecase_mfst_nm, agent_nm="*"):
 
-        Returns
-        -------
-        tuple
-            A tuple containing two lists:
-            - b_skills: Business skills required by the use case.
-            - ai_skills: AI skills required by the use case.
-        """
+        usecase_mfst = get_usecase_mfst(usecase_mfst_nm)
         policies = get_usecase_data_policies(usecase_mfst, agent_nm)
         actions = []
+        no_actions = []
         ai_skills = []
         b_skills = []
+        execution_plan = {}
+
         for policy in policies:
             policy_json = get_policy(policy)
             stmts = policy_json["Statement"]
 
             for stmt in stmts:
-                actions.extend(stmt["Action"])
+                actions = stmt["Action"]
+                no_actions = stmt["NotAction"]
 
-        for action in actions:
-            b_skill, ai_skill = action.split(":")
-            b_skills.append(b_skill)
+                skills = defaultdict(lambda: [])
 
-            if ai_skill == "*":
-                ai_skills.extend(self.scanner_default[b_skill])
-            else:
-                ai_skills.append(ai_skill)
+                for action in actions:
+                    b_skill, ai_skill = action.split(":")
 
-        return b_skills, ai_skills
+                    if ai_skill == "*":
+                        skills[b_skill].extend(self.scanner_default[b_skill])
+                    else:
+                        skills[b_skill].append(ai_skill)
 
-    def get_agent_skills(self, agent_mfst):
-        """
-        Retrieves both business and AI skills from the agent manifest.
+                for no_action in no_actions:
+                    b_skill, ai_skill = no_action.split(":")
 
-        Parameters
-        ----------
-        agent_mfst : dict
-            The manifest file containing the agent's profile.
+                    try:
+                        if ai_skill == "*":
+                            skills[b_skill].remove(self.scanner_default[b_skill])
+                        else:
+                            skills[b_skill].remove(ai_skill)
+                    except ValueError:
+                        pass
 
-        Returns
-        -------
-        tuple
-            A tuple containing two lists:
-            - b_skills: Business skills defined in the agent manifest.
-            - ai_skills: AI skills defined in the agent manifest.
-        """
-        b_skills = agent_mfst["profile"]["buz_skills"]
-        ai_skills = agent_mfst["profile"]["ai_skills"]
+                skills = dict(skills)
+                b_skills = skills.keys()
+                for b_skill in b_skills:
+                    ai_skills = skills[b_skill]
+                    for ai_skill in ai_skills:
+                        if b_skill not in execution_plan:
+                            execution_plan[b_skill] = {}
+                        execution_plan[b_skill][ai_skill] = stmt["Condition"].get(ai_skill, {})
+                        # execution_plan[ai_skill] = stmt["Condition"].get(ai_skill, {})
 
-        return b_skills, ai_skills
+        pprint(self.reorder_plan(execution_plan))
 
-    def validate_skill(self, agent_mfst_nm, usecase_mfst_nm, agent_nm="*"):
-        """
-        Validates whether the agent has the required business and AI skills
-        as defined by the use case manifest.
-
-        Parameters
-        ----------
-        agent_mfst_nm : str
-            The name of the agent manifest file.
-        usecase_mfst_nm : str
-            The name of the use case manifest file.
-        agent_nm : str, optional
-            The name of the agent to be validated (default is "*").
-
-        Returns
-        -------
-        bool
-            True if the agent possesses all required business and AI skills, False otherwise.
-        """
-        agent_mfst = get_agent_mfst(agent_mfst_nm)
-        usecase_mfst = get_usecase_mfst(usecase_mfst_nm)
-
-        agent_b_skills, agent_ai_skills = self.get_agent_skills(agent_mfst)
-        usecase_b_skills, usecase_ai_skills = self.get_usecase_policy_skills(
-            usecase_mfst, agent_nm
-        )
-
-        # validate_bskill
-        vald_bskill = set(usecase_b_skills).issubset(agent_b_skills)
-        if not vald_bskill:
-            print("The business skills in the use case manifest are not a subset of the agent's skills.")
-
-        # validate ai_skill
-        vald_aiskill = set(usecase_ai_skills).issubset(agent_ai_skills)
-        if not vald_aiskill:
-            print("The AI skills in the use case manifest are not a subset of the agent's skills.")
-
-        return all([vald_bskill, vald_aiskill])
+        return self.reorder_plan(execution_plan)
 
 
 if __name__ == "__main__":
-    """
-    Entry point of the script that runs the profiler to validate the agent's skills 
-    against the use case manifest.
-
-    Example
-    -------
-    To run the profiler:
-        - Specify the agent manifest and use case manifest files.
-    """
     agent = "agent1"
-    profiler_obj = Profiler()
-    profiler_result = profiler_obj.validate_skill(
-        "agent_manifest", "usecase_manifest", agent
-    )
+    planner_obj = Planner()
+    execution_plan = planner_obj.get_exec_plan("usecase_manifest", agent)
+    pprint(execution_plan)
 
-    print("Profiler result: ", profiler_result)
+    # {
+
+    #     "payload_validator": {
+    #         "JsonValidator" : {
+    #                 "mandate_keys": {
+    #                     "clientData.appName": [
+    #                         "seige_v3"
+    #                     ],
+    #                     "clientData.country": [
+    #                         "IN"
+    #                     ]
+    #                 }
+    #             }
+    #     }
+    # }
