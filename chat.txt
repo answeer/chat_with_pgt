@@ -1,6 +1,7 @@
 import cv2
 import pandas as pd
 import re
+import numpy as np
 
 def calculate_confidence(w, h, min_area=100):
     # 计算宽高比
@@ -19,12 +20,47 @@ def calculate_confidence(w, h, min_area=100):
 
     return 0  # 如果宽高比不合理，置信度为0
 
+def split_large_contour(card_number_region, contour, x_min, y_min, max_digit_width):
+    # 对包含多个数字的轮廓进行水平投影分割
+    x, y, w, h = cv2.boundingRect(contour)
+    
+    # 如果轮廓宽度大于典型的单个数字宽度的阈值，尝试分割
+    if w > max_digit_width:
+        region = card_number_region[y:y+h, x:x+w]
+        
+        # 水平投影分析，计算每列的黑色像素数
+        horizontal_projection = np.sum(region, axis=0)
+        
+        # 寻找黑色像素较少的地方（即可能是字符间的空隙）
+        split_points = []
+        for i in range(1, len(horizontal_projection) - 1):
+            if horizontal_projection[i] == 0 and horizontal_projection[i - 1] > 0 and horizontal_projection[i + 1] > 0:
+                split_points.append(i)
+        
+        # 如果找到分割点，按照分割点将轮廓分成多个子区域
+        sub_contours = []
+        prev_x = 0
+        for split_point in split_points:
+            sub_contours.append((x + prev_x, y, split_point - prev_x, h))
+            prev_x = split_point
+        
+        # 添加最后一个分割区域
+        if prev_x < w:
+            sub_contours.append((x + prev_x, y, w - prev_x, h))
+        
+        return sub_contours
+
+    return [(x, y, w, h)]  # 如果宽度不大，则不进行分割
+
 # 1. 读取 Excel 文件
 excel_file = 'id_card_data.xlsx'  # 替换为你的 Excel 文件路径
 df = pd.read_excel(excel_file)
 
 # 2. 读取图像
 image = cv2.imread('id_card_image.jpg')  # 替换为你的 ID 卡图像路径
+
+# 定义单个数字的最大宽度
+max_digit_width = 50  # 根据实际情况调整此值
 
 # 遍历 Excel 中的每一行，并只处理包含12位数字的行
 for index, row in df.iterrows():
@@ -52,7 +88,10 @@ for index, row in df.iterrows():
             # 计算置信度并过滤掉太小的轮廓
             confidence = calculate_confidence(w, h, min_area=100)  # 设置最小面积
             if confidence > 0:  # 只保留有置信度的轮廓
-                candidates.append((x, y, w, h, confidence))
+                # 如果轮廓包含多个数字，进行分割
+                sub_contours = split_large_contour(card_number_region, contour, x_min, y_min, max_digit_width)
+                for sub_x, sub_y, sub_w, sub_h in sub_contours:
+                    candidates.append((sub_x, sub_y, sub_w, sub_h, confidence))
 
         # 7. 根据置信度排序并假设前12个轮廓是数字
         candidates = sorted(candidates, key=lambda c: (c[0], -c[4]))  # 按 x 坐标排序，置信度作为次要排序
