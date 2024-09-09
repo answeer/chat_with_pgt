@@ -10,13 +10,71 @@ from llm_sanitation.agent.utils.common import (
 
 
 class Profiler:
+    """
+    A class to represent the agent profiling process, which validates the business and AI skills
+    of agents against the policies defined in the use case manifest.
+
+    Attributes
+    ----------
+    scanner_default : dict
+        A dictionary containing default AI skills for different business skills.
+
+    Methods
+    -------
+    get_agent_bskills(agent_mfst):
+        Retrieves the business skills defined in the agent manifest.
+        
+    get_usecase_policy_skills(usecase_mfst, agent_nm):
+        Extracts the business and AI skills required by policies in the use case manifest.
+
+    get_agent_skills(agent_mfst):
+        Retrieves both the business and AI skills defined in the agent manifest.
+
+    validate_skill(agent_mfst_nm, usecase_mfst_nm, agent_nm="*"):
+        Validates whether the agent possesses the required business and AI skills defined in the use case manifest.
+    """
+
     def __init__(self):
+        """
+        Initializes the Profiler with default scanner settings for AI skills.
+        """
         self.scanner_default = scanner_default
 
+    @staticmethod
     def get_agent_bskills(agent_mfst):
+        """
+        Retrieves the business skills from the agent manifest.
+
+        Parameters
+        ----------
+        agent_mfst : dict
+            The manifest file containing the agent's profile.
+
+        Returns
+        -------
+        list
+            A list of business skills (buz_skills) associated with the agent.
+        """
         return agent_mfst["profile"]["buz_skills"]
 
     def get_usecase_policy_skills(self, usecase_mfst, agent_nm):
+        """
+        Extracts the required business and AI skills from the use case manifest policies for a specific agent.
+
+        Parameters
+        ----------
+        usecase_mfst : dict
+            The manifest file containing the use case details and policies.
+        agent_nm : str
+            The name of the agent whose policy skills are being evaluated.
+
+        Returns
+        -------
+        tuple
+            A tuple containing two lists:
+            - b_skills: Business skills required by the use case.
+            - ai_skills: AI skills required by the use case.
+        """
         policies = get_usecase_data_policies(usecase_mfst, agent_nm)
         actions = []
         ai_skills = []
@@ -25,54 +83,4 @@ class Profiler:
             policy_json = get_policy(policy)
             stmts = policy_json["Statement"]
 
-            for stmt in stmts:
-                actions.extend(stmt["Action"])
-
-        for action in actions:
-            b_skill, ai_skill = action.split(":")
-            b_skills.append(b_skill)
-
-            if ai_skill == "*":
-                ai_skills.extend(self.scanner_default[b_skill])
-            else:
-                ai_skills.append(ai_skill)
-
-        return b_skills, ai_skills
-
-    def get_agent_skills(self, agent_mfst):
-        b_skills = agent_mfst["profile"]["buz_skills"]
-        ai_skills = agent_mfst["profile"]["ai_skills"]
-
-        return b_skills, ai_skills
-
-    def validate_skill(self, agent_mfst_nm, usecase_mfst_nm, agent_nm="*"):
-
-        agent_mfst = get_agent_mfst(agent_mfst_nm)
-        usecase_mfst = get_usecase_mfst(usecase_mfst_nm)
-
-        agent_b_skills, agent_ai_skills = self.get_agent_skills(agent_mfst)
-        usecase_b_skills, usecase_ai_skills = self.get_usecase_policy_skills(
-            usecase_mfst, agent_nm
-        )
-
-        # validate_bskill
-        vald_bskill = set(usecase_b_skills).issubset(agent_b_skills)
-        if not vald_bskill:
-            print("the bskills in usecase manifest is not an agent skill")
-
-        # validate ai_skill
-        vald_aiskill = set(usecase_ai_skills).issubset(agent_ai_skills)
-        if not vald_aiskill:
-            print("the ai skills in usecase manifest is not an agent skill")
-
-        return all([vald_bskill, vald_aiskill])
-
-
-if __name__ == "__main__":
-    agent = "agent1"
-    profiler_obj = Profiler()
-    profiler_result = profiler_obj.validate_skill(
-        "agent_manifest", "usecase_manifest", agent
-    )
-
-    print("Profiler result : ", profiler_result)
+            for
