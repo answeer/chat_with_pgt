@@ -2,15 +2,22 @@ import cv2
 import pandas as pd
 import re
 
-def calculate_confidence(w, h):
-    # 简单的置信度计算：面积越大，宽高比越合理，置信度越高
+def calculate_confidence(w, h, min_area=100):
+    # 计算宽高比
     aspect_ratio = w / float(h)
     area = w * h
 
-    # 根据面积和宽高比计算置信度，假设数字的宽高比在 0.2 到 1.0 之间
+    # 确保面积足够大，避免太小的区域
+    if area < min_area:
+        return 0  # 如果面积太小，置信度为0
+
+    # 根据宽高比和面积计算置信度
+    # 理想宽高比应该在0.2到1之间，面积越大，置信度越高
     if 0.2 < aspect_ratio < 1.0:
-        return area
-    return 0  # 如果不符合宽高比，则置信度为0
+        confidence = area  # 使用面积作为置信度的主要衡量标准
+        return confidence
+
+    return 0  # 如果宽高比不合理，置信度为0
 
 # 1. 读取 Excel 文件
 excel_file = 'id_card_data.xlsx'  # 替换为你的 Excel 文件路径
@@ -43,7 +50,7 @@ for index, row in df.iterrows():
             x, y, w, h = cv2.boundingRect(contour)
             
             # 计算置信度并过滤掉太小的轮廓
-            confidence = calculate_confidence(w, h)
+            confidence = calculate_confidence(w, h, min_area=100)  # 设置最小面积
             if confidence > 0:  # 只保留有置信度的轮廓
                 candidates.append((x, y, w, h, confidence))
 
