@@ -1,71 +1,118 @@
+from llm_sanitation.agent.profiling import Profiler
+from llm_sanitation.agent.planning import Planner
+from llm_sanitation.agent.utils.common import get_agents
+from llm_sanitation.agent.utils.connectors import (
+    get_agent_mfst,
+    get_usecase_mfst,
+    get_raw_data,
+)
+from llm_sanitation.logging.logging_setup import LogUtil, LogType, LogLevel
+import argparse
+from pprint import pprint
 import json
-import os
-import pandas as pd
-import streamlit as st
+from llm_sanitation.logging.logging_setup import LogUtil, LogType, LogLevel
 
-# Step 1: 读取JSON文件
-def load_json(file_path):
-    with open(file_path, 'r') as f:
-        data = json.load(f)
-    return data
+class AgentPipeline:
+    def __init__(self):
+        self.agent_result = {}
 
-# Step 2: 提取extracted_values.page_data.values并转换为表格
-def extract_values(data):
-    extracted_values = []
-    for item in data['extracted_values']:
-        page_data = item['page_data']
-        for value in page_data['values']:
-            extracted_values.append({
-                'doc_id': item['doc_id'],
-                'page_number': item['page_number'],
-                'entity_name': value['entity_name'],
-                'pred_ref_id': value['pred_ref_id'],
-                'value': value['value'],
-                'confidence': value['confidence']
-            })
-    return pd.DataFrame(extracted_values)
+    def run_profiler(self, agent_manifest_nm, usecase_manifest_nm, agent):
+        profiler_obj = Profiler()
+        profiler_result = {}
+        try:
+            profiler_result = profiler_obj.validate_skill(
+                agent_manifest_nm, usecase_manifest_nm, agent
+            )
+        except Exception as e:
+            LogUtil.log(LogType.ERROR, LogLevel.ERROR, e)
+        return profiler_result
 
-# Step 3: 在Streamlit中显示表格并设置可编辑列
-def main():
-    st.title("JSON数据处理与编辑")
-    
-    # 输入JSON文件路径
-    file_path = st.text_input("输入JSON文件路径")
-    if file_path:
-        data = load_json(file_path)
-        df = extract_values(data)
-        
-        # 定义可编辑列的选项，确保没有None值
-        edit_options = ["correct_redact", "wrong_redact", "entity_not_found"]
-        
-        # 将 value 列转换为可选的下拉菜单类型，并避免None值
-        df['value'] = pd.Categorical(df['value'], categories=edit_options, ordered=True)
-        
-        # 使用st.data_editor显示表格，仅允许编辑value列
-        edited_df = st.data_editor(
-            df, 
-            num_rows="dynamic", 
-            disabled=['doc_id', 'page_number', 'entity_name', 'pred_ref_id', 'confidence']
-        )
-        
-        # 提交按钮
-        if st.button("提交"):
-            # 更新原始数据中的values
-            for index, row in edited_df.iterrows():
-                for item in data['extracted_values']:
-                    if item['doc_id'] == row['doc_id'] and item['page_number'] == row['page_number']:
-                        for value in item['page_data']['values']:
-                            if value['pred_ref_id'] == row['pred_ref_id']:
-                                value['value'] = row['value']
-            
-            # 获取保存路径（与输入文件同级目录）
-            dir_name = os.path.dirname(file_path)
-            save_path = os.path.join(dir_name, 'updated_data.json')
-            
-            # 保存为新的JSON文件
-            with open(save_path, 'w') as f:
-                json.dump(data, f, indent=4)
-            st.success(f"数据已更新并保存为 {save_path}")
+    def run_planner(self, usecase_manifest_nm, agent):
+        planner_obj = Planner()
+        execution_plan = {}
+        try:
+            execution_plan = planner_obj.get_exec_plan(usecase_manifest_nm, agent)
+        except Exception as e:
+            LogUtil.log(LogType.ERROR, LogLevel.ERROR, e)
+        return execution_plan
+
+    def get_agent_result(self):
+        return self.agent_result
+
+    def run_pipeline(self, agent_manifest_nm, usecase_manifest_nm, payload):
+        execution_plans = []
+        LogUtil.log(LogType.TRANSACTION, LogLevel.INFO," Start to get {}".format(usecase_manifest_nm))
+        usecase_mfst = get_usecase_mfst(usecase_manifest_nm)
+        LogUtil.log(LogType.TRANSACTION, LogLevel.INFO," Start to get the agents")
+        agents = get_agents(usecase_mfst)
+
+        for agent in agents:
+
+            self.agent_result[agent] = {}
+
+            # run profiler
+            LogUtil.log(LogType.TRANSACTION, LogLevel.INFO," Start to run profiler for the agent: {}".format(agent))
+            if not self.run_profiler(agent_manifest_nm, usecase_manifest_nm, agent):
+                LogUtil.log(LogType.TRANSACTION, LogLevel.INFO," Profiling failed for the agent: {}".format(agent))
+                continue
+            else:
+                LogUtil.log(LogType.TRANSACTION, LogLevel.INFO," Profiling Successful for the agent: {}".format(agent))
+
+            # run planner
+            LogUtil.log(LogType.TRANSACTION, LogLevel.INFO," Start to run planner for the agent: {}".format(agent))
+            execution_plans.append(self.run_planner(usecase_manifest_nm, agent))
+            LogUtil.log(LogType.TRANSACTION, LogLevel.INFO," Finish to run planner for the agent: {}".format(agent))
+        LogUtil.log(LogType.TRANSACTION, LogLevel.INFO," Get the execution plans successfully!")
+        return execution_plans
+
 
 if __name__ == "__main__":
-    main()
+    # parser = argparse.ArgumentParser(description="Input and Output Sanitation Agent")
+    # parser.add_argument(
+    #     "-um", "--usecase_manifest_name", help="Usecase Manifest File name", required=True
+    # )
+    # parser.add_argument(
+    #     "-am", "--agent_manifest_name", help="Agent Manifest File name", required=True
+    # )
+    # parser.add_argument(
+    #     "-pl", "--payload", help="Payload", required=True
+    # )
+
+    # args = vars(parser.parse_args())
+    # Usage
+    # agent_manifest_nm = args["agent_manifest_nm"]
+    # usecase_manifest_nm = args["usecase_manifest_nm"]
+    # payload = args["payload"]
+    agent_manifest_nm = "agent_manifest"
+    usecase_manifest_nm = "usecase_manifest"
+    payload = {
+        "clientData": {
+            "clientRefNumber": "AP39HN7997",
+            "country": "IN",
+            "appName": "seige_v3",
+        },
+        "requestData": {
+            "properties": {
+                "osname_key": "STORM_GDCE",
+                "docClassName": "OTTDoc",
+                "filenet_download_params": {
+                    "documentids": [
+                        {"documentid": "{8032588F-0000-CE33-B3D2-57C34E6FFFF0}"}
+                    ]
+                },
+            }
+        },
+        "params": {
+            "callback_url": "https://swoosh-dev-infox-v1.apps.swoosh-np.ocp.dev.net/api/v1/infox/executeflow",
+            "service_name": "identify_pii",
+            "safee_id": "SAFEE_SEIGE_03_IN",
+            "doc_type": "Invoice",
+            "user_name": "1657852",
+            "pii_keys": {},
+            "args": {"texture_ext_method": "model", "extraction_speed": "fast"},
+        },
+    }
+
+    agent_pipe_obj = AgentPipeline()
+    agent_pipe_obj.run_pipeline(agent_manifest_nm, usecase_manifest_nm, payload)
+    print("Agent Pipeline completed")
