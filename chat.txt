@@ -77,12 +77,17 @@ for index, row in df.iterrows():
                     digit_coordinates.append((x_min + x + i * single_digit_width, y_min + y, single_digit_width, h))
                 digit_total_count += digit_count
 
-        # 10. 绘制前8位数字的 bounding box 到原始图像上
-        for coord in digit_coordinates:
-            x, y, w, h = coord
-            cv2.rectangle(image, (x, y), (x + w, y + h), (0, 255, 0), 2)
+        if len(digit_coordinates) > 0:
+            # 10. 计算前8个坐标的最小和最大 x, y 值
+            min_x = min(coord[0] for coord in digit_coordinates)
+            min_y = min(coord[1] for coord in digit_coordinates)
+            max_x = max(coord[0] + coord[2] for coord in digit_coordinates)
+            max_y = max(coord[1] + coord[3] for coord in digit_coordinates)
 
-# 11. 显示结果图像
-cv2.imshow('ID Card with Front 8 Digits Bounding Box', image)
+            # 11. 绘制整体的 bounding box
+            cv2.rectangle(image, (min_x, min_y), (max_x, max_y), (0, 255, 0), 2)
+
+# 12. 显示结果图像
+cv2.imshow('ID Card with Overall Bounding Box for Front 8 Digits', image)
 cv2.waitKey(0)
 cv2.destroyAllWindows()
