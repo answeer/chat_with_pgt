@@ -2,6 +2,16 @@ import cv2
 import pandas as pd
 import re
 
+def calculate_confidence(w, h):
+    # 简单的置信度计算：面积越大，宽高比越合理，置信度越高
+    aspect_ratio = w / float(h)
+    area = w * h
+
+    # 根据面积和宽高比计算置信度，假设数字的宽高比在 0.2 到 1.0 之间
+    if 0.2 < aspect_ratio < 1.0:
+        return area
+    return 0  # 如果不符合宽高比，则置信度为0
+
 # 1. 读取 Excel 文件
 excel_file = 'id_card_data.xlsx'  # 替换为你的 Excel 文件路径
 df = pd.read_excel(excel_file)
@@ -27,17 +37,32 @@ for index, row in df.iterrows():
         # 5. 进行轮廓检测，找到每个数字
         contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-        # 6. 过滤并按 x 坐标排序轮廓
-        contours = sorted(contours, key=lambda c: cv2.boundingRect(c)[0])
+        # 6. 对轮廓计算置信度并过滤掉小轮廓
+        candidates = []
+        for contour in contours:
+            x, y, w, h = cv2.boundingRect(contour)
+            
+            # 计算置信度并过滤掉太小的轮廓
+            confidence = calculate_confidence(w, h)
+            if confidence > 0:  # 只保留有置信度的轮廓
+                candidates.append((x, y, w, h, confidence))
 
-        # 提取前8个轮廓的 bounding box 并绘制到原图像上
-        for i in range(min(8, len(contours))):
-            x, y, w, h = cv2.boundingRect(contours[i])
+        # 7. 根据置信度排序并假设前12个轮廓是数字
+        candidates = sorted(candidates, key=lambda c: (c[0], -c[4]))  # 按 x 坐标排序，置信度作为次要排序
 
-            # 将前8位数字的 bounding box 绘制在原始图像上
-            cv2.rectangle(image, (x_min + x, y_min + y), (x_min + x + w, y_min + y + h), (0, 255, 0), 2)
+        # 只取前12个区域
+        if len(candidates) >= 12:
+            candidates = candidates[:12]
 
-# 7. 显示结果图像
+            # 根据 x 坐标排序后，提取前8个数字的 bounding box
+            front_8_digits = candidates[:8]
+
+            # 8. 绘制前8位数字的 bounding box 到原始图像上
+            for candidate in front_8_digits:
+                x, y, w, h, _ = candidate
+                cv2.rectangle(image, (x_min + x, y_min + y), (x_min + x + w, y_min + y + h), (0, 255, 0), 2)
+
+# 9. 显示结果图像
 cv2.imshow('ID Card with Front 8 Digits Bounding Box', image)
 cv2.waitKey(0)
 cv2.destroyAllWindows()
