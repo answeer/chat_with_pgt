@@ -1,145 +1,41 @@
-from collections import defaultdict
-import os
-from llm_sanitation.agent.utils.defaults import scanner_default
-from llm_sanitation.agent.utils.connectors import get_usecase_mfst
-from llm_sanitation.agent.utils.common import (
-    get_policy,
-    get_usecase_data_policies,
-)
-from pprint import pprint
+import cv2
 
+# 读取图像
+image = cv2.imread('id_card_image.jpg')
 
-class Planner:
-    """
-    A class to represent the planning process for executing business and AI skills 
-    based on the policies defined in the use case manifest.
+# 当前模型的 bounding box 坐标 (x_min, y_min, x_max, y_max)
+# 假设模型输出了卡号的完整 bounding box
+x_min, y_min, x_max, y_max = (100, 50, 400, 100)  # 替换为实际模型给出的坐标
 
-    Attributes
-    ----------
-    scanner_default : dict
-        A dictionary containing default AI skills for various business skills.
+# 1. 提取卡号的图像区域
+card_number_region = image[y_min:y_max, x_min:x_max]
 
-    Methods
-    -------
-    reorder_plan(execution_plan):
-        Reorders the execution plan according to a predefined order of business skills.
-    
-    get_exec_plan(usecase_mfst_nm, agent_nm="*"):
-        Generates an execution plan by extracting business and AI skills from the use case manifest.
-    """
+# 2. 计算前8位数字的区域
+# 假设卡号是12位数字，按比例计算前8位数字的宽度
+total_width = x_max - x_min
+x_max_8_digits = x_min + int(8/12 * total_width)
 
-    def __init__(self):
-        """
-        Initializes the Planner with default AI skill configurations for various business skills.
-        """
-        self.scanner_default = scanner_default
+# 3. 使用 OpenCV 画出前8位数字的 bounding box
+new_bounding_box = (x_min, y_min, x_max_8_digits, y_max)
+cv2.rectangle(image, (x_min, y_min), (x_max_8_digits, y_max), (0, 255, 0), 2)
 
-    def reorder_plan(self, execution_plan):
-        """
-        Reorders the execution plan according to a predefined sequence of business skills.
+# 4. 处理卡号区域，使用阈值化和轮廓检测进一步分割数字
+gray = cv2.cvtColor(card_number_region, cv2.COLOR_BGR2GRAY)
+_, thresh = cv2.threshold(gray, 150, 255, cv2.THRESH_BINARY_INV)
 
-        Parameters
-        ----------
-        execution_plan : dict
-            A dictionary containing business skills as keys and associated AI skills as values.
+# 检测轮廓
+contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-        Returns
-        -------
-        dict
-            The reordered execution plan with business skills in a specific predefined order.
-        """
-        b_skill_order = ["payload_validator", "file_bounding", "numeric_bounding", "numeric_sanitation", 
-                         "text_bounding", "text_data_sanitation", "image_bounding", "image_data_sanitation"]
-        reordered_execution_plan = {}
+# 过滤并按 x 坐标排序轮廓
+contours = sorted(contours, key=lambda c: cv2.boundingRect(c)[0])
 
-        for b_skill in b_skill_order:
-            if b_skill in execution_plan:
-                reordered_execution_plan[b_skill] = execution_plan[b_skill]
+# 提取前8个轮廓的 bounding box
+for i in range(min(8, len(contours))):
+    x, y, w, h = cv2.boundingRect(contours[i])
+    cv2.rectangle(card_number_region, (x, y), (x + w, y + h), (255, 0, 0), 2)
 
-        return reordered_execution_plan
-
-
-    def get_exec_plan(self, usecase_mfst_nm, agent_nm="*"):
-        """
-        Generates an execution plan for the given agent by analyzing the use case manifest policies.
-
-        Parameters
-        ----------
-        usecase_mfst_nm : str
-            The name of the use case manifest file.
-        agent_nm : str, optional
-            The name of the agent (default is "*", meaning all agents).
-
-        Returns
-        -------
-        dict
-            A dictionary representing the execution plan, where business skills are mapped to AI skills 
-            and their conditions defined in the policies.
-        """
-        usecase_mfst = get_usecase_mfst(usecase_mfst_nm)
-        policies = get_usecase_data_policies(usecase_mfst, agent_nm)
-        actions = []
-        no_actions = []
-        ai_skills = []
-        b_skills = []
-        execution_plan = {}
-
-        for policy in policies:
-            policy_json = get_policy(policy)
-            stmts = policy_json["Statement"]
-
-            for stmt in stmts:
-                actions = stmt["Action"]
-                no_actions = stmt["NotAction"]
-
-                skills = defaultdict(lambda: [])
-
-                # Process Actions
-                for action in actions:
-                    b_skill, ai_skill = action.split(":")
-
-                    if ai_skill == "*":
-                        skills[b_skill].extend(self.scanner_default[b_skill])
-                    else:
-                        skills[b_skill].append(ai_skill)
-
-                # Process NotActions
-                for no_action in no_actions:
-                    b_skill, ai_skill = no_action.split(":")
-                    try:
-                        if ai_skill == "*":
-                            skills[b_skill].remove(self.scanner_default[b_skill])
-                        else:
-                            skills[b_skill].remove(ai_skill)
-                    except ValueError:
-                        pass
-
-                # Add conditions to the execution plan
-                skills = dict(skills)
-                b_skills = skills.keys()
-                for b_skill in b_skills:
-                    ai_skills = skills[b_skill]
-                    for ai_skill in ai_skills:
-                        if b_skill not in execution_plan:
-                            execution_plan[b_skill] = {}
-                        execution_plan[b_skill][ai_skill] = stmt["Condition"].get(ai_skill, {})
-
-        # Print and return the reordered execution plan
-        pprint(self.reorder_plan(execution_plan))
-        return self.reorder_plan(execution_plan)
-
-
-if __name__ == "__main__":
-    """
-    Entry point of the script to generate and display the execution plan 
-    for a specified agent based on the use case manifest.
-
-    Example
-    -------
-    To generate an execution plan:
-        - Specify the agent manifest and use case manifest files.
-    """
-    agent = "agent1"
-    planner_obj = Planner()
-    execution_plan = planner_obj.get_exec_plan("usecase_manifest", agent)
-    pprint(execution_plan)
+# 显示前8位数字的轮廓
+cv2.imshow('8 Digits Bounding Box', image)
+cv2.imshow('8 Digits Details', card_number_region)
+cv2.waitKey(0)
+cv2.destroyAllWindows()
