@@ -1,56 +1,11 @@
 import cv2
 import pandas as pd
-import re
 import numpy as np
+import re
 
-def calculate_confidence(w, h, min_area=100):
-    # 计算宽高比
-    aspect_ratio = w / float(h)
-    area = w * h
-
-    # 确保面积足够大，避免太小的区域
-    if area < min_area:
-        return 0  # 如果面积太小，置信度为0
-
-    # 根据宽高比和面积计算置信度
-    # 理想宽高比应该在0.2到1之间，面积越大，置信度越高
-    if 0.2 < aspect_ratio < 1.0:
-        confidence = area  # 使用面积作为置信度的主要衡量标准
-        return confidence
-
-    return 0  # 如果宽高比不合理，置信度为0
-
-def split_large_contour(card_number_region, contour, x_min, y_min, max_digit_width):
-    # 对包含多个数字的轮廓进行水平投影分割
-    x, y, w, h = cv2.boundingRect(contour)
-    
-    # 如果轮廓宽度大于典型的单个数字宽度的阈值，尝试分割
-    if w > max_digit_width:
-        region = card_number_region[y:y+h, x:x+w]
-        
-        # 水平投影分析，计算每列的黑色像素数
-        horizontal_projection = np.sum(region, axis=0)
-        
-        # 寻找黑色像素较少的地方（即可能是字符间的空隙）
-        split_points = []
-        for i in range(1, len(horizontal_projection) - 1):
-            if horizontal_projection[i] == 0 and horizontal_projection[i - 1] > 0 and horizontal_projection[i + 1] > 0:
-                split_points.append(i)
-        
-        # 如果找到分割点，按照分割点将轮廓分成多个子区域
-        sub_contours = []
-        prev_x = 0
-        for split_point in split_points:
-            sub_contours.append((x + prev_x, y, split_point - prev_x, h))
-            prev_x = split_point
-        
-        # 添加最后一个分割区域
-        if prev_x < w:
-            sub_contours.append((x + prev_x, y, w - prev_x, h))
-        
-        return sub_contours
-
-    return [(x, y, w, h)]  # 如果宽度不大，则不进行分割
+def estimate_digit_count(w, max_digit_width):
+    # 根据区域宽度估计数字数量
+    return max(1, int(w / max_digit_width))
 
 # 1. 读取 Excel 文件
 excel_file = 'id_card_data.xlsx'  # 替换为你的 Excel 文件路径
@@ -59,8 +14,8 @@ df = pd.read_excel(excel_file)
 # 2. 读取图像
 image = cv2.imread('id_card_image.jpg')  # 替换为你的 ID 卡图像路径
 
-# 定义单个数字的最大宽度
-max_digit_width = 50  # 根据实际情况调整此值
+# 定义最小面积
+min_area = 100  # 设置一个合理的最小面积阈值
 
 # 遍历 Excel 中的每一行，并只处理包含12位数字的行
 for index, row in df.iterrows():
@@ -77,38 +32,57 @@ for index, row in df.iterrows():
         gray = cv2.cvtColor(card_number_region, cv2.COLOR_BGR2GRAY)
         _, thresh = cv2.threshold(gray, 150, 255, cv2.THRESH_BINARY_INV)
 
-        # 5. 进行轮廓检测，找到每个数字
+        # 5. 进行轮廓检测，找到每个数字或多个数字的区域
         contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-        # 6. 对轮廓计算置信度并过滤掉小轮廓
+        # 6. 对轮廓进行面积过滤，并统计宽度
+        widths = []
         candidates = []
         for contour in contours:
             x, y, w, h = cv2.boundingRect(contour)
+            area = w * h
+            if area >= min_area:  # 过滤掉面积太小的区域
+                widths.append(w)  # 收集所有轮廓的宽度
+                candidates.append((x, y, w, h))
+
+        if len(widths) == 0:
+            continue
+
+        # 7. 动态计算单个数字的最大宽度（取宽度的中位数）
+        max_digit_width = np.median(widths)
+
+        # 8. 根据 x 坐标排序
+        candidates = sorted(candidates, key=lambda c: c[0])  # 按 x 坐标排序
+
+        # 9. 从左到右提取前8位数字的坐标
+        digit_coordinates = []
+        digit_total_count = 0
+
+        for candidate in candidates:
+            x, y, w, h = candidate
+            digit_count = estimate_digit_count(w, max_digit_width)
             
-            # 计算置信度并过滤掉太小的轮廓
-            confidence = calculate_confidence(w, h, min_area=100)  # 设置最小面积
-            if confidence > 0:  # 只保留有置信度的轮廓
-                # 如果轮廓包含多个数字，进行分割
-                sub_contours = split_large_contour(card_number_region, contour, x_min, y_min, max_digit_width)
-                for sub_x, sub_y, sub_w, sub_h in sub_contours:
-                    candidates.append((sub_x, sub_y, sub_w, sub_h, confidence))
+            if digit_total_count + digit_count > 8:
+                # 如果加上这个区域会超过8个数字，则只取剩余的部分
+                remaining_digits = 8 - digit_total_count
+                # 按照平均宽度划分该区域
+                for i in range(remaining_digits):
+                    single_digit_width = w // digit_count
+                    digit_coordinates.append((x_min + x + i * single_digit_width, y_min + y, single_digit_width, h))
+                break
+            else:
+                # 完全使用这个区域
+                single_digit_width = w // digit_count
+                for i in range(digit_count):
+                    digit_coordinates.append((x_min + x + i * single_digit_width, y_min + y, single_digit_width, h))
+                digit_total_count += digit_count
 
-        # 7. 根据置信度排序并假设前12个轮廓是数字
-        candidates = sorted(candidates, key=lambda c: (c[0], -c[4]))  # 按 x 坐标排序，置信度作为次要排序
+        # 10. 绘制前8位数字的 bounding box 到原始图像上
+        for coord in digit_coordinates:
+            x, y, w, h = coord
+            cv2.rectangle(image, (x, y), (x + w, y + h), (0, 255, 0), 2)
 
-        # 只取前12个区域
-        if len(candidates) >= 12:
-            candidates = candidates[:12]
-
-            # 根据 x 坐标排序后，提取前8个数字的 bounding box
-            front_8_digits = candidates[:8]
-
-            # 8. 绘制前8位数字的 bounding box 到原始图像上
-            for candidate in front_8_digits:
-                x, y, w, h, _ = candidate
-                cv2.rectangle(image, (x_min + x, y_min + y), (x_min + x + w, y_min + y + h), (0, 255, 0), 2)
-
-# 9. 显示结果图像
+# 11. 显示结果图像
 cv2.imshow('ID Card with Front 8 Digits Bounding Box', image)
 cv2.waitKey(0)
 cv2.destroyAllWindows()
