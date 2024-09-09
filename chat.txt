@@ -4,57 +4,57 @@ import numpy as np
 import re
 
 def estimate_digit_count(w, max_digit_width):
-    # 根据区域宽度估计数字数量
+    # Estimate the number of digits based on the width of the bounding box
     return max(1, int(w / max_digit_width))
 
-# 1. 读取 Excel 文件
-excel_file = 'id_card_data.xlsx'  # 替换为你的 Excel 文件路径
+# 1. Read the Excel file
+excel_file = 'id_card_data.xlsx'  # Replace with the path to your Excel file
 df = pd.read_excel(excel_file)
 
-# 2. 读取图像
-image = cv2.imread('id_card_image.jpg')  # 替换为你的 ID 卡图像路径
+# 2. Read the image
+image = cv2.imread('id_card_image.jpg')  # Replace with the path to your ID card image
 
-# 定义最小面积
-min_area = 100  # 设置一个合理的最小面积阈值
+# Define minimum area for filtering small contours
+min_area = 100  # Set a reasonable minimum area threshold
 
-# 遍历 Excel 中的每一行，并只处理包含12位数字的行
+# Iterate through each row in the Excel file and process only the rows with 12-digit numbers
 for index, row in df.iterrows():
-    id_card_number = str(row['text'])  # 假设 'text' 列存储的是卡号文本
+    id_card_number = str(row['text'])  # Assuming the 'text' column contains the card number
 
-    # 只处理12位数字的行
+    # Process only rows with a 12-digit number
     if re.match(r'^\d{12}$', id_card_number):
         x_min, y_min, x_max, y_max = row['x_min'], row['y_min'], row['x_max'], row['y_max']
 
-        # 3. 提取卡号的 bounding box 区域
+        # 3. Extract the bounding box region for the card number
         card_number_region = image[y_min:y_max, x_min:x_max]
 
-        # 4. 转换为灰度图像并二值化处理
+        # 4. Convert to grayscale and apply binary thresholding
         gray = cv2.cvtColor(card_number_region, cv2.COLOR_BGR2GRAY)
         _, thresh = cv2.threshold(gray, 150, 255, cv2.THRESH_BINARY_INV)
 
-        # 5. 进行轮廓检测，找到每个数字或多个数字的区域
+        # 5. Perform contour detection to find possible digit regions
         contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-        # 6. 对轮廓进行面积过滤，并统计宽度
+        # 6. Filter contours by area and collect their widths
         widths = []
         candidates = []
         for contour in contours:
             x, y, w, h = cv2.boundingRect(contour)
             area = w * h
-            if area >= min_area:  # 过滤掉面积太小的区域
-                widths.append(w)  # 收集所有轮廓的宽度
+            if area >= min_area:  # Filter out too small contours
+                widths.append(w)  # Collect all contour widths
                 candidates.append((x, y, w, h))
 
         if len(widths) == 0:
             continue
 
-        # 7. 动态计算单个数字的最大宽度（取宽度的中位数）
+        # 7. Dynamically calculate the maximum width of a single digit (using the median width)
         max_digit_width = np.median(widths)
 
-        # 8. 根据 x 坐标排序
-        candidates = sorted(candidates, key=lambda c: c[0])  # 按 x 坐标排序
+        # 8. Sort contours by x-coordinate
+        candidates = sorted(candidates, key=lambda c: c[0])  # Sort by x-coordinate
 
-        # 9. 从左到右提取前8位数字的坐标
+        # 9. Extract coordinates for the first 8 digits from left to right
         digit_coordinates = []
         digit_total_count = 0
 
@@ -63,31 +63,31 @@ for index, row in df.iterrows():
             digit_count = estimate_digit_count(w, max_digit_width)
             
             if digit_total_count + digit_count > 8:
-                # 如果加上这个区域会超过8个数字，则只取剩余的部分
+                # If adding this region exceeds 8 digits, only take the remaining part
                 remaining_digits = 8 - digit_total_count
-                # 按照平均宽度划分该区域
+                # Divide this region based on average width
                 for i in range(remaining_digits):
                     single_digit_width = w // digit_count
                     digit_coordinates.append((x_min + x + i * single_digit_width, y_min + y, single_digit_width, h))
                 break
             else:
-                # 完全使用这个区域
+                # Use the entire region
                 single_digit_width = w // digit_count
                 for i in range(digit_count):
                     digit_coordinates.append((x_min + x + i * single_digit_width, y_min + y, single_digit_width, h))
                 digit_total_count += digit_count
 
         if len(digit_coordinates) > 0:
-            # 10. 计算前8个坐标的最小和最大 x, y 值
+            # 10. Calculate the overall bounding box for the first 8 digits
             min_x = min(coord[0] for coord in digit_coordinates)
             min_y = min(coord[1] for coord in digit_coordinates)
             max_x = max(coord[0] + coord[2] for coord in digit_coordinates)
             max_y = max(coord[1] + coord[3] for coord in digit_coordinates)
 
-            # 11. 绘制整体的 bounding box
+            # 11. Draw the overall bounding box on the original image
             cv2.rectangle(image, (min_x, min_y), (max_x, max_y), (0, 255, 0), 2)
 
-# 12. 显示结果图像
+# 12. Display the result image
 cv2.imshow('ID Card with Overall Bounding Box for Front 8 Digits', image)
 cv2.waitKey(0)
 cv2.destroyAllWindows()
