@@ -1,27 +1,103 @@
 import cv2
 import numpy as np
+import matplotlib.pyplot as plt
 
-def denoise_watermarked_document(image_path):
-    # 读取文档图片
+def read_image(image_path):
     image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
+    if image is None:
+        raise FileNotFoundError(f"无法找到或读取图像: {image_path}")
+    return image
 
-    # 步骤 1: 应用双边滤波去除噪声
-    # 双边滤波器能保留边缘，同时对平滑区域进行降噪处理
+def compute_fft(image):
+    dft = cv2.dft(np.float32(image), flags=cv2.DFT_COMPLEX_OUTPUT)
+    dft_shift = np.fft.fftshift(dft)
+    return dft_shift
+
+def show_magnitude_spectrum(dft_shift):
+    magnitude_spectrum = 20 * np.log(cv2.magnitude(dft_shift[:,:,0], dft_shift[:,:,1]) + 1)
+    plt.figure(figsize=(8,8))
+    plt.imshow(magnitude_spectrum, cmap='gray')
+    plt.title('幅度谱')
+    plt.axis('off')
+    plt.show()
+
+def create_notch_filter(shape, notch_centers, radius=10):
+    rows, cols = shape
+    mask = np.ones((rows, cols, 2), np.float32)
+    for center in notch_centers:
+        cv2.circle(mask, center, radius, (0,0), thickness=-1)
+        symmetric_center = (cols - center[0], rows - center[1])
+        cv2.circle(mask, symmetric_center, radius, (0,0), thickness=-1)
+    return mask
+
+def apply_notch_filter(dft_shift, mask):
+    fshift_filtered = dft_shift * mask
+    return fshift_filtered
+
+def compute_ifft(fshift_filtered):
+    f_ishift = np.fft.ifftshift(fshift_filtered)
+    img_back = cv2.idft(f_ishift)
+    img_back = cv2.magnitude(img_back[:,:,0], img_back[:,:,1])
+    cv2.normalize(img_back, img_back, 0, 255, cv2.NORM_MINMAX)
+    img_back = np.uint8(img_back)
+    return img_back
+
+def denoise_image(image):
     denoised = cv2.bilateralFilter(image, d=9, sigmaColor=75, sigmaSpace=75)
-
-    # 步骤 2: 自适应阈值增强对比度，使文档清晰
-    final = cv2.adaptiveThreshold(denoised, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
-
-    # 步骤 3: 如果需要，进一步处理水印区域 (可以自定义水印位置的处理逻辑)
-
+    final = cv2.adaptiveThreshold(denoised, 255, 
+                                  cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+                                  cv2.THRESH_BINARY, 11, 2)
     return final
 
-# 运行示例
-image_path = 'watermarked_document.jpg'
-denoised_image = denoise_watermarked_document(image_path)
+def denoise_watermarked_document(image_path, notch_centers, radius=10, save_path='denoised_document.png'):
+    # 读取图像
+    image = read_image(image_path)
+    
+    # 计算傅里叶变换
+    dft_shift = compute_fft(image)
+    
+    # 显示幅度谱
+    show_magnitude_spectrum(dft_shift)
+    
+    # 创建陷波滤波器
+    mask = create_notch_filter(image.shape, notch_centers, radius)
+    
+    # 显示掩膜
+    plt.figure(figsize=(6,6))
+    plt.imshow(mask[:,:,0], cmap='gray')
+    plt.title('陷波滤波器掩膜')
+    plt.axis('off')
+    plt.show()
+    
+    # 应用陷波滤波器
+    fshift_filtered = apply_notch_filter(dft_shift, mask)
+    
+    # 逆傅里叶变换回空间域
+    image_filtered = compute_ifft(fshift_filtered)
+    
+    # 显示处理后的图像
+    plt.figure(figsize=(6,6))
+    plt.imshow(image_filtered, cmap='gray')
+    plt.title('去除水印后的图像')
+    plt.axis('off')
+    plt.show()
+    
+    # 应用降噪
+    final_image = denoise_image(image_filtered)
+    
+    # 显示最终图像
+    plt.figure(figsize=(6,6))
+    plt.imshow(final_image, cmap='gray')
+    plt.title('最终降噪后的文档图像')
+    plt.axis('off')
+    plt.show()
+    
+    # 保存结果
+    cv2.imwrite(save_path, final_image)
+    print(f"降噪后的图像已保存至: {save_path}")
 
-# 显示降噪后的文档
-cv2.imshow('Denoised Document', denoised_image)
-cv2.imwrite('denoised_watermarked_document.png', denoised_image)
-cv2.waitKey(0)
-cv2.destroyAllWindows()
+# 使用示例
+# 请根据你的图像实际情况调整 notch_centers 的坐标
+image_path = 'watermarked_document.jpg'
+notch_centers = [(300, 300), (100, 100)]  # 示例坐标，请替换为实际频率点
+denoise_watermarked_document(image_path, notch_centers, radius=10, save_path='denoised_watermarked_document.png')
