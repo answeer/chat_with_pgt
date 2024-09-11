@@ -1,43 +1,27 @@
 import cv2
 import numpy as np
 
-def denoise_document(image_path):
-    # 读取图像（灰度模式）
+def denoise_watermarked_document(image_path):
+    # 读取文档图片
     image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
 
-    # 步骤 1: 使用中值滤波器去除小噪声点
-    denoised = cv2.medianBlur(image, 5)
+    # 步骤 1: 应用双边滤波去除噪声
+    # 双边滤波器能保留边缘，同时对平滑区域进行降噪处理
+    denoised = cv2.bilateralFilter(image, d=9, sigmaColor=75, sigmaSpace=75)
 
-    # 步骤 2: 使用形态学操作去除较大块的噪声
-    # 先腐蚀再膨胀（开运算）
-    kernel = np.ones((3,3), np.uint8)
-    morph = cv2.morphologyEx(denoised, cv2.MORPH_OPEN, kernel)
+    # 步骤 2: 自适应阈值增强对比度，使文档清晰
+    final = cv2.adaptiveThreshold(denoised, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
 
-    # 确保 morph 是单通道灰度图像（它本身已经是单通道，但为了安全，确保它是灰度的）
-    if len(morph.shape) != 2:
-        morph = cv2.cvtColor(morph, cv2.COLOR_BGR2GRAY)
-
-    # 步骤 3: 去除孤立的小区域（噪声块）
-    # 找到所有的连接组件并过滤掉小面积的区域
-    num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(morph, connectivity=8)
-
-    # 遍历所有组件，保留较大的区域
-    for i in range(1, num_labels):  # 0 是背景，所以从 1 开始
-        area = stats[i, cv2.CC_STAT_AREA]
-        if area < 500:  # 设定一个面积阈值，小于这个值的认为是噪声
-            morph[labels == i] = 0  # 将噪声区域置为黑色
-
-    # 步骤 4: 可选 - 使用自适应阈值增强对比度，使文档清晰
-    final = cv2.adaptiveThreshold(morph, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
+    # 步骤 3: 如果需要，进一步处理水印区域 (可以自定义水印位置的处理逻辑)
 
     return final
 
 # 运行示例
-image_path = 'document_with_noise.jpg'
-denoised_image = denoise_document(image_path)
+image_path = 'watermarked_document.jpg'
+denoised_image = denoise_watermarked_document(image_path)
 
 # 显示降噪后的文档
 cv2.imshow('Denoised Document', denoised_image)
-cv2.imwrite('denoised_document.png', denoised_image)
+cv2.imwrite('denoised_watermarked_document.png', denoised_image)
 cv2.waitKey(0)
 cv2.destroyAllWindows()
