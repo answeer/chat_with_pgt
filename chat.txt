@@ -2,17 +2,20 @@ import cv2
 import numpy as np
 
 def denoise_document(image_path):
-    # 读取图像
+    # 读取图像（灰度模式）
     image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
 
     # 步骤 1: 使用中值滤波器去除小噪声点
-    # 这个方法对椒盐噪声（黑白点）很有效
     denoised = cv2.medianBlur(image, 5)
 
     # 步骤 2: 使用形态学操作去除较大块的噪声
-    # 先腐蚀再膨胀（开运算）去掉较大的孤立噪声块
+    # 先腐蚀再膨胀（开运算）
     kernel = np.ones((3,3), np.uint8)
     morph = cv2.morphologyEx(denoised, cv2.MORPH_OPEN, kernel)
+
+    # 确保 morph 是单通道灰度图像（它本身已经是单通道，但为了安全，确保它是灰度的）
+    if len(morph.shape) != 2:
+        morph = cv2.cvtColor(morph, cv2.COLOR_BGR2GRAY)
 
     # 步骤 3: 去除孤立的小区域（噪声块）
     # 找到所有的连接组件并过滤掉小面积的区域
@@ -38,4 +41,3 @@ cv2.imshow('Denoised Document', denoised_image)
 cv2.imwrite('denoised_document.png', denoised_image)
 cv2.waitKey(0)
 cv2.destroyAllWindows()
-cv2.error: OpenCV(4.10.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
