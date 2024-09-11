@@ -12,16 +12,21 @@ bg_gray = cv2.cvtColor(bg_img, cv2.COLOR_BGR2GRAY)
 # 计算图片差异
 diff = cv2.absdiff(doc_gray, bg_gray)
 
-# 二值化差异图像，生成遮罩
-_, mask = cv2.threshold(diff, 30, 255, cv2.THRESH_BINARY)
+# 使用 OTSU 方法来自动选择阈值
+_, mask = cv2.threshold(diff, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
 
 # 创建三通道遮罩
 mask_3ch = cv2.merge([mask, mask, mask])
 
-# 应用遮罩，保留文档前景
+# 应用遮罩，将背景部分设置为白色或透明
 foreground = cv2.bitwise_and(doc_img, mask_3ch)
 
-# 显示结果
-cv2.imshow('Foreground', foreground)
+# 将背景部分设置为白色（可以设置为其他颜色或透明）
+background = np.full_like(doc_img, 255)  # 背景白色
+result = np.where(mask_3ch == 0, background, foreground)
+
+# 保存或显示结果
+cv2.imwrite('result.png', result)
+cv2.imshow('Result', result)
 cv2.waitKey(0)
 cv2.destroyAllWindows()
