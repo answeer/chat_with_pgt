@@ -38,3 +38,4 @@ cv2.imshow('Denoised Document', denoised_image)
 cv2.imwrite('denoised_document.png', denoised_image)
 cv2.waitKey(0)
 cv2.destroyAllWindows()
+cv2.error: OpenCV(4.10.0) D:\a\opencv-python\opencv-python\opencv\modules\imgproc\src\connectedcomponents.cpp:5623: error: (-215:Assertion failed) L.channels() == 1 && I.channels() == 1 in function 'cv::connectedComponents_sub1'
