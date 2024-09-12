@@ -1,16 +1,69 @@
-Subject: Block Leave Request
+import cv2 
+import numpy as np
 
-Dear [Manager's Name],
+def denoise_document(image):
 
-I hope this message finds you well. I am writing to formally request block leave from [start date] to [end date]. During this period, I will be away from work and unavailable to respond to emails or attend meetings.
+    # 步骤 1: 使用中值滤波器去除小噪声点
+    denoised = cv2.medianBlur(image, 3)
 
-I have ensured that all my ongoing projects and responsibilities will be up to date before my leave begins. Additionally, I will work with my team to ensure a smooth transition and hand over any tasks that may require attention during my absence.
+    # 步骤 2: 使用形态学操作去除较大块的噪声
+    # 先腐蚀再膨胀（开运算）
+    kernel = np.ones((2,2), np.uint8)
+    morph = cv2.morphologyEx(denoised, cv2.MORPH_OPEN, kernel)
 
-Please let me know if you need any further information or if there are any concerns regarding my leave request. I would appreciate your confirmation at your earliest convenience.
+    # 确保 morph 是单通道灰度图像（它本身已经是单通道，但为了安全，确保它是灰度的）
+    if len(morph.shape) != 2:
+        morph = cv2.cvtColor(morph, cv2.COLOR_BGR2GRAY)
 
-Thank you for your understanding and support.
+    # 步骤 3: 去除孤立的小区域（噪声块）
+    # 找到所有的连接组件并过滤掉小面积的区域
+    num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(morph, connectivity=8)
 
-Best regards,
-[Your Full Name]
-[Your Job Title]
-[Your Contact Information]
+    # 遍历所有组件，保留较大的区域
+    for i in range(1, num_labels):  # 0 是背景，所以从 1 开始
+        area = stats[i, cv2.CC_STAT_AREA]
+        if area < 500:  # 设定一个面积阈值，小于这个值的认为是噪声
+            morph[labels == i] = 0  # 将噪声区域置为黑色
+
+    # 步骤 4: 可选 - 使用自适应阈值增强对比度，使文档清晰
+    final = cv2.adaptiveThreshold(morph, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
+
+    return final
+
+
+def img_denoise(doc_img_path,texture_img_path):
+
+    # 加载文档图片和背景图片
+    doc_img = cv2.imread(doc_img_path)
+    bg_img = cv2.imread(texture_img_path)
+
+    # 将两张图片转换为灰度图
+    doc_gray = cv2.cvtColor(doc_img, cv2.COLOR_BGR2GRAY)
+    bg_gray = cv2.cvtColor(bg_img, cv2.COLOR_BGR2GRAY)
+
+    # 计算图片差异
+    diff = cv2.absdiff(doc_gray, bg_gray)
+
+    # 使用 OTSU 方法来自动选择阈值
+    _, mask = cv2.threshold(diff, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
+    # 创建三通道遮罩
+    mask_3ch = cv2.merge([mask, mask, mask])
+
+    # 应用遮罩，将背景部分设置为白色或透明
+    foreground = cv2.bitwise_and(doc_img, mask_3ch)
+
+    # 将背景部分设置为白色（可以设置为其他颜色或透明）
+    background = np.full_like(doc_img, 255)  # 背景白色
+    result = np.where(mask_3ch == 0, background, foreground)
+    final = denoise_document(result)
+
+    return final
+
+
+if __name__ == '__main__':
+    
+    doc_img = r"denoise\EEB69405-6BBC-40AB-AB1C-301DBCC47730.tif_font_default_synth.tif_gen1.tif_page15_image.png"
+    texture_img = r"denoise\texture.png"
+    denoise_img = img_denoise(doc_img,texture_img)
+    cv2.imwrite('denoise_img.jpg',denoise_img)
