@@ -1,76 +1,156 @@
-import cv2 
-import numpy as np
+from llm_sanitation.utils.callback import Callback
+from llm_sanitation.utils.checks import Checks
+from llm_sanitation.utils.error_codes import ERROR_CODE_DICT
 
-def denoise_document(image):
+class Action:
+    def __init__(self):
+        self.combined_result = []
+        self.nstp_result = []
 
-    # Step 1: Use a median filter to remove small noise points
-    denoised = cv2.medianBlur(image, 3)
-
-    # Step 2: Use morphological operations to remove larger noise patches
-    # Perform opening operation (erosion followed by dilation)
-    kernel = np.ones((2, 2), np.uint8)
-    morph = cv2.morphologyEx(denoised, cv2.MORPH_OPEN, kernel)
-
-    # Ensure 'morph' is a single-channel grayscale image 
-    # (it should already be single-channel, but this is to ensure safety)
-    if len(morph.shape) != 2:
-        morph = cv2.cvtColor(morph, cv2.COLOR_BGR2GRAY)
-
-    # Step 3: Remove isolated small regions (noise patches)
-    # Find all connected components and filter out small areas
-    num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(morph, connectivity=8)
-
-    # Iterate through all components and keep only larger regions
-    for i in range(1, num_labels):  # 0 is the background, so we start from 1
-        area = stats[i, cv2.CC_STAT_AREA]
-        if area < 500:  # Set an area threshold, smaller areas are considered noise
-            morph[labels == i] = 0  # Set noise regions to black
-
-    # Step 4 (optional): Use adaptive thresholding to enhance contrast and make the document clearer
-    final = cv2.adaptiveThreshold(morph, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
-
-    return final
-
-
-def img_denoise(doc_img_path, texture_img_path):
-
-    # Load the document image and background texture image
-    doc_img = cv2.imread(doc_img_path)
-    bg_img = cv2.imread(texture_img_path)
-
-    # Convert both images to grayscale
-    doc_gray = cv2.cvtColor(doc_img, cv2.COLOR_BGR2GRAY)
-    bg_gray = cv2.cvtColor(bg_img, cv2.COLOR_BGR2GRAY)
-
-    # Calculate the difference between the images
-    diff = cv2.absdiff(doc_gray, bg_gray)
-
-    # Use OTSU method to automatically select a threshold
-    _, mask = cv2.threshold(diff, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-
-    # Create a three-channel mask
-    mask_3ch = cv2.merge([mask, mask, mask])
-
-    # Apply the mask to keep the document part and set the background to white or transparent
-    foreground = cv2.bitwise_and(doc_img, mask_3ch)
-
-    # Set the background part to white (you can set it to other colors or make it transparent)
-    background = np.full_like(doc_img, 255)  # Background is white
-    result = np.where(mask_3ch == 0, background, foreground)
+    def run_scanner(self, data, scanner_nm, param, **kwargs):
+        scanners = __import__("llm_sanitation.scanners", fromlist=scanner_nm)
+        scanner = getattr(scanners, scanner_nm)
     
-    # Apply denoising to the resulting image
-    final = denoise_document(result)
+        scanner_obj = scanner(**param)
+        self.response.start_time_analysis(scanner_nm)
+        result = scanner_obj.validate(data,**kwargs)
+        self.response.end_time_analysis(scanner_nm)
+        self.combined_result.append(result)
+        self.nstp_result.append(result["NSTP"])
 
-    return final
+        return result
 
 
-if __name__ == '__main__':
-    
-    doc_img = r"denoise\EEB69405-6BBC-40AB-AB1C-301DBCC47730.tif_font_default_synth.tif_gen1.tif_page15_image.png"
-    texture_img = r"denoise\texture.png"
-    
-    # Perform denoising on the document
-    denoise_img = img_denoise(doc_img, texture_img)
-    
-    # Save the denoised image
-    cv2.imwrite('denoise_img.jpg', denoise_img)
+    def get_result(self):
+        return self.combined_result
+
+    def get_nstp_result(self):
+        return self.nstp_result
+
+    def run_action(self, execution_plan, data, scanner_type, save_path,**kwargs):
+        try:
+            # create callback
+            self.response = Callback(scanner_type, save_path,**kwargs)
+            check = Checks(self.response)
+
+            if scanner_type == "file_bounding":
+                check.file_exists(data)
+                if self.response.status == "failed":
+                    response_json = self.response.return_response()
+                    error_code = response_json["scanner_info"]["error_code"]
+                    error_message = response_json["scanner_info"]["error_message"]
+                    return None, error_code, error_message
+                
+            elif scanner_type == "image_bounding":
+                check.check_image(data)
+                if self.response.status == "failed":
+                    response_json = self.response.return_response()
+                    error_code = response_json["scanner_info"]["error_code"]
+                    error_message = response_json["scanner_info"]["error_message"]
+                    return None, error_code, error_message
+                
+            elif scanner_type == "numeric_bounding":
+                check.check_numeric(data)
+                if self.response.status == "failed":
+                    response_json = self.response.return_response()
+                    error_code = response_json["scanner_info"]["error_code"]
+                    error_message = response_json["scanner_info"]["error_message"]
+                    return None, error_code, error_message
+                
+            elif scanner_type == "text_bounding":
+                check.check_text(data)
+                if self.response.status == "failed":
+                    response_json = self.response.return_response()
+                    error_code = response_json["scanner_info"]["error_code"]
+                    error_message = response_json["scanner_info"]["error_message"]
+                    return None, error_code, error_message
+            else:
+                err_code = "FRDIOS0005"
+                error_message = ERROR_CODE_DICT[err_code].format(str(scanner_type))
+
+            for scanner_nm in execution_plan:
+                param = execution_plan[scanner_nm]
+                result = self.run_scanner(data, scanner_nm, param, **kwargs)
+                data = (
+                    data if result["sanitized_data"] is None else result["sanitized_data"]
+                )
+            self.response.form_response()
+            self.response.return_response()
+        except Exception as e:
+            err_code = "FRDIOS9000"
+            error_message = ERROR_CODE_DICT[err_code].format(str(e))
+            self.response.form_response(err_code, error_message)
+            self.response.return_response()
+            return None, err_code, error_message
+
+
+if __name__ == "__main__":
+
+    # text_data = """what is the arbitrary code execution mean? <link rel="shortcut icon" href="/favicon.ico" mce_href="/favicon.ico" type="image/x-icon"/>"""
+    # execution_plan_for_text = {
+    #     "ProfanityCheck":{},
+    #     "HarmfulString": {"case_sensitive":False},
+    #     "TokenLimit": {'token_limit': 100,'token_method':'nltk'},
+    #     "ExecutableScript":{}
+    # }
+
+    # image_data = r"llm_sanitation\scanners\image_bounding\image_dimension_check\tests\image_dimension_check_test.jpg"
+    # execution_plan_for_image = {
+    #     "ImageBlurCheck":{'score_thresh': 0.6, "save_folder":"save_folder"},
+    #     "ImageDPICheck": {'x_dpi_thresh': 20, 'y_dpi_thresh': 20, "save_folder":"save_folder"},
+    #     "ImageDimCheck":{'img_dim_thresh': (1024, 1024)},
+    #     "ImageMemoryCheck":{'max_size':4096,'min_size':2048}
+    # }
+
+    # file_data = r"llm_sanitation\scanners\file_bounding\software_check\tests\LIME.pdf"
+    # execution_plan_for_file = {
+    #     "EncryptionDetector":{},
+    #     "FormatCheck": {'format_list':['jpg','png','jpeg','PNG','pdf']},
+    #     "SoftwareCheck":{'software_blacklist': ["","Photoshop","Corel","PhotoScape","PhotoPlus","GIMP","Pixelmator","Illustrator","Windows Photo Editor","ilovepdf"]}
+    # }
+
+    # numeric_data = 90
+    # execution_plan_for_numeric = {
+    #     "BinTransform":{'catagories':[{"name": "high", "range": [70, 100]},{"name": "medium", "range": [40, 60]},{"name": "low", "range": [0, 39]},],
+    #                     'default':"undefined"}
+    # }
+
+
+    payload = {
+    "job_params": {
+        "jobid": "JID-54ca58ba-c495-11ed-b20c-0a586e830578",
+        "app_name": "synthesizer",
+        "use_case": "aadhar_redact",
+        "save_path": r"C:\Users\1657820\Desktop\51433-swoosh-io-bounding",
+    },
+    "service_params": {
+        "callback_url": "http://service-swoosh-orchestrator.swoosh-dev.svc.cluster.local:8889/api/v1/callback",
+        "job_object": {
+            "io": "i",
+            "policy_id": "policy_00001",
+            "scanner_type":"file_bounding",
+            "execution_plan": {
+        "EncryptionDetector":{},
+        "FormatCheck": {'format_list':['jpg','png','jpeg','PNG','pdf']},
+        "SoftwareCheck":{'software_blacklist': ["","Photoshop","Corel","PhotoScape","PhotoPlus","GIMP","Pixelmator","Illustrator","Windows Photo Editor","ilovepdf"]}},
+            "data": r"llm_sanitation\scanners\file_bounding\software_check\tests\LIME.pdf"
+        }
+    }
+}
+
+    kwargs = {
+        "job_id" : payload["job_params"].get("jobid", "NA"),
+        "use_case" : payload["job_params"].get("use_case", "NA"),
+        "io" : payload["service_params"].get("job_object", {}).get("io", "NA"),
+        "policy_id" : payload["service_params"].get("job_object", {}).get("policy_id", "NA"),
+    }
+
+    execution_plan = payload["service_params"].get("job_object", {}).get("execution_plan", {})
+    data = payload["service_params"].get("job_object", {}).get("data", "")
+    save_path = payload["job_params"].get("save_path", "NA")
+    scanner_type = payload["service_params"].get("job_object", {}).get("scanner_type", "NA")
+
+    action_obj = Action()
+    action_obj.run_action(execution_plan, data, scanner_type, save_path,**kwargs)
+    print("Action completed")
+    print(action_obj.get_result())
