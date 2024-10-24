@@ -13,10 +13,28 @@ class EvalDataset:
         self.data_path = data_path
         self.tokenizer = AutoTokenizer.from_pretrained('roberta-large')  # 用于计算token数
 
-    def load_dataset(self):
-        df = pd.read_excel(self.data_path)
-        context_list = df['Context'].tolist()
-        response_list = df['answer'].tolist()
+    def load_dataset(self, sheet_names):
+        # 存放所有 sheet 的数据
+        all_data = []
+
+        for sheet_name in sheet_names:
+            # 读取每个 sheet 的数据
+            df = pd.read_excel(self.data_path, sheet_name=sheet_name)
+
+            # 检查并确保 'Context' 和 'answer' 列为字符串类型
+            df['Context'] = df['Context'].apply(lambda x: str(x) if not isinstance(x, str) else x)
+            df['answer'] = df['answer'].apply(lambda x: str(x) if not isinstance(x, str) else x)
+
+            # 将当前 sheet 的数据添加到列表中
+            all_data.append(df)
+
+        # 将所有 sheet 的数据合并成一个 DataFrame
+        merged_df = pd.concat(all_data, ignore_index=True)
+
+        # 转换为列表
+        context_list = merged_df['Context'].tolist()
+        response_list = merged_df['answer'].tolist()
+
         return context_list, response_list
 
     def count_tokens(self, context, response):
@@ -24,14 +42,11 @@ class EvalDataset:
         return len(inputs['input_ids'][0])  # 返回token数
 
     def run(self, model_nm):
-        context_list, response_list = self.load_dataset()
+        context_list, response_list = self.load_dataset(sheet_names=['Sheet1', 'Sheet2', 'Sheet3'])
         all_labels = [1] * len(response_list)  # 假设所有标签都是1
 
-        total_correct = 0
         inference_times = []
         token_counts = []
-
-        start_time = time.time()
 
         # 使用 tqdm 来显示进度
         for context, response in tqdm.tqdm(zip(context_list, response_list), total=len(context_list)):
@@ -60,24 +75,22 @@ class EvalDataset:
                 # 记录推理时间
                 inference_times.append(end_inference - start_inference)
 
-                # 计算精度
-                if pred_label == 1:
-                    total_correct += 1
-
             except Exception as e:
                 print(f"Error occurred for model {model_nm}: {e}")
                 inference_times.append(0)  # 错误情况下设推理时间为0
 
-        accuracy = total_correct / len(context_list)
-        print(f"Accuracy for {model_nm}: {accuracy * 100:.2f}%")
-        print(f"Total time for {model_nm}: {time.time() - start_time:.2f} seconds")
-
         return inference_times, token_counts
 
-    def plot_results(self, inference_times, token_counts):
+    def plot_results(self, results):
         plt.figure(figsize=(10, 6))
-        plt.scatter(token_counts, inference_times, color='blue', label='Inference Time')
-        plt.title('Token Count vs Inference Time')
+
+        # 使用不同颜色和图例来区分每个模型
+        colors = {'minicheck': 'blue', 'hhem': 'green', 'factual_consistency': 'red'}
+
+        for model_nm, (inference_times, token_counts) in results.items():
+            plt.scatter(token_counts, inference_times, color=colors[model_nm], label=model_nm)
+
+        plt.title('Token Count vs Inference Time for Different Models')
         plt.xlabel('Token Count')
         plt.ylabel('Inference Time (seconds)')
         plt.legend()
@@ -89,7 +102,13 @@ if __name__ == "__main__":
     model_list = ['minicheck', 'hhem', 'factual_consistency']
     eval_dataset = EvalDataset()
 
+    # 存放每个模型的推理时间和token数的结果
+    results = {}
+
     for model_nm in model_list:
         print(f"Running evaluation for {model_nm}...")
         inference_times, token_counts = eval_dataset.run(model_nm)
-        eval_dataset.plot_results(inference_times, token_counts)
+        results[model_nm] = (inference_times, token_counts)
+
+    # 所有模型跑完之后，统一绘制结果
+    eval_dataset.plot_results(results)
