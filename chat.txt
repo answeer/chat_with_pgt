@@ -1,46 +1,95 @@
-from transformers import AutoModelForSequenceClassification
-from minicheck.minicheck import MiniCheck
-from llm_guard.output_scanners import FactualConsistency
-
 import os
 import time
 import tqdm
 import pandas as pd
+import matplotlib.pyplot as plt
+from transformers import AutoTokenizer, AutoModelForSequenceClassification
+from minicheck.minicheck import MiniCheck
+from llm_guard.output_scanners import FactualConsistency
 
 
-class EvalDataset():
-    def __init__(self,data_path='Consolidated.xlsx'):
+class EvalDataset:
+    def __init__(self, data_path='Consolidated.xlsx'):
         self.data_path = data_path
+        self.tokenizer = AutoTokenizer.from_pretrained('roberta-large')  # 用于计算token数
 
     def load_dataset(self):
         df = pd.read_excel(self.data_path)
         context_list = df['Context'].tolist()
-        respose_list = df['answer'].tolist()
-        return context_list,respose_list
+        response_list = df['answer'].tolist()
+        return context_list, response_list
 
-    def draw_plot(self):
-        pass
-    
-    def timepiece(self):
-        pass
+    def count_tokens(self, context, response):
+        inputs = self.tokenizer(context, response, return_tensors='pt', truncation=True)
+        return len(inputs['input_ids'][0])  # 返回token数
 
-    def run(self,model_nm):
-        context_list,respose_list = self.load_dataset()
-        for context, response in zip(context_list,respose_list):
-            if model_nm == "minicheck":
-                scorer = MiniCheck(model_name='roberta-large', cache_dir='./ckpts')
-                pred_label, raw_prob, _, _ = scorer.score(docs=[context], claims=[response])
-            elif model_nm == "hhem":
-                model = AutoModelForSequenceClassification.from_pretrained('models\hallucination_evaluation_model', trust_remote_code=True)
-                pair = [(context,response)]
-                score = model.predict(pair)
-            elif model_nm == 'factual_consistency':
-                model = FactualConsistency(minimum_score=0.5)
-                sanitized_output, is_valid, risk_score = model.scan(context, response)
+    def run(self, model_nm):
+        context_list, response_list = self.load_dataset()
+        all_labels = [1] * len(response_list)  # 假设所有标签都是1
+
+        total_correct = 0
+        inference_times = []
+        token_counts = []
+
+        start_time = time.time()
+
+        # 使用 tqdm 来显示进度
+        for context, response in tqdm.tqdm(zip(context_list, response_list), total=len(context_list)):
+            tokens = self.count_tokens(context, response)
+            token_counts.append(tokens)
+
+            try:
+                start_inference = time.time()
+                if model_nm == "minicheck":
+                    scorer = MiniCheck(model_name='roberta-large', cache_dir='./ckpts')
+                    pred_label, _, _, _ = scorer.score(docs=[context], claims=[response])
+                    pred_label = int(pred_label[0])  # 获取模型预测的标签（假设输出为0或1）
+                
+                elif model_nm == "hhem":
+                    model = AutoModelForSequenceClassification.from_pretrained('models/hallucination_evaluation_model', trust_remote_code=True)
+                    pair = [(context, response)]
+                    pred_label = model.predict(pair)  # 根据模型 API 实际返回的结构更新
+                    
+                elif model_nm == 'factual_consistency':
+                    model = FactualConsistency(minimum_score=0.5)
+                    _, is_valid, _ = model.scan(context, response)
+                    pred_label = int(is_valid)  # 有效性判断 (1 for True, 0 for False)
+                
+                end_inference = time.time()
+
+                # 记录推理时间
+                inference_times.append(end_inference - start_inference)
+
+                # 计算精度
+                if pred_label == 1:
+                    total_correct += 1
+
+            except Exception as e:
+                print(f"Error occurred for model {model_nm}: {e}")
+                inference_times.append(0)  # 错误情况下设推理时间为0
+
+        accuracy = total_correct / len(context_list)
+        print(f"Accuracy for {model_nm}: {accuracy * 100:.2f}%")
+        print(f"Total time for {model_nm}: {time.time() - start_time:.2f} seconds")
+
+        return inference_times, token_counts
+
+    def plot_results(self, inference_times, token_counts):
+        plt.figure(figsize=(10, 6))
+        plt.scatter(token_counts, inference_times, color='blue', label='Inference Time')
+        plt.title('Token Count vs Inference Time')
+        plt.xlabel('Token Count')
+        plt.ylabel('Inference Time (seconds)')
+        plt.legend()
+        plt.grid(True)
+        plt.show()
 
 
 if __name__ == "__main__":
-    model_list = ['minicheck','hhem','factual_consistency']
+    model_list = ['minicheck', 'hhem', 'factual_consistency']
     eval_dataset = EvalDataset()
+
     for model_nm in model_list:
-        eval_dataset.run(model_nm)
+        print(f"Running evaluation for {model_nm}...")
+        inference_times, token_counts = eval_dataset.run(model_nm)
+        eval_dataset.plot_results(inference_times, token_counts)
