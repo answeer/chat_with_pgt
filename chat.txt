@@ -1,21 +1,13 @@
-import os
-import time
-import tqdm
 import pandas as pd
-import torch  # 用于处理 HHEM 张量
-import matplotlib.pyplot as plt
-from transformers import AutoTokenizer, AutoModelForSequenceClassification
-from minicheck.minicheck import MiniCheck
-from llm_guard.output_scanners import FactualConsistency
+import random
 
 class EvalDataset:
     def __init__(self, data_path='Consolidated.xlsx'):
         self.data_path = data_path
-        self.tokenizer = AutoTokenizer.from_pretrained('roberta-large')  # 用于计算token数
 
     def load_dataset(self, sheet_names):
         # 存放所有 sheet 的数据
-        all_data = []
+        all_data = {}
 
         for sheet_name in sheet_names:
             # 读取每个 sheet 的数据
@@ -25,132 +17,53 @@ class EvalDataset:
             df['Context'] = df['Context'].apply(lambda x: str(x) if not isinstance(x, str) else x)
             df['answer'] = df['answer'].apply(lambda x: str(x) if not isinstance(x, str) else x)
 
-            # 将当前 sheet 的数据添加到列表中
-            all_data.append(df)
+            # 将每个 sheet 的数据存入字典
+            all_data[sheet_name] = df[['Context', 'answer']]
 
-        # 将所有 sheet 的数据合并成一个 DataFrame
-        merged_df = pd.concat(all_data, ignore_index=True)
+        return all_data  # 返回包含每个 sheet 数据的字典
 
-        # 去除 'Context' 和 'answer' 都相同的重复行
-        merged_df = merged_df.drop_duplicates(subset=['Context', 'answer'], keep='first')
+    def augment_dataset(self, sheet_names):
+        all_data = self.load_dataset(sheet_names)
 
-        return merged_df  # 返回合并后的 DataFrame
+        # 正样本列表
+        positive_samples = []
+        for sheet_name, df in all_data.items():
+            for _, row in df.iterrows():
+                positive_samples.append({'Context': row['Context'], 'Answer': row['answer'], 'Label': 1})
 
-    def count_tokens(self, context, response):
-        inputs = self.tokenizer(context, response, return_tensors='pt', truncation=True)
-        return len(inputs['input_ids'][0])  # 返回token数
+        # 负样本列表
+        negative_samples = []
+        positive_sample_count = len(positive_samples)
+        negative_sample_target = positive_sample_count // 2  # 负样本数量设为正样本的一半
 
-    def run(self, model_nm):
-        df = self.load_dataset(sheet_names=['Sheet1', 'Sheet2', 'Sheet3'])
-        context_list = df['Context'].tolist()
-        response_list = df['answer'].tolist()
+        # 在不同的 sheet 间生成负样本
+        sheet_combinations = [(sheet1, sheet2) for sheet1 in sheet_names for sheet2 in sheet_names if sheet1 != sheet2]
 
-        all_labels = [1] * len(response_list)  # 假设所有标签都是1
+        while len(negative_samples) < negative_sample_target:
+            # 随机选择两个不同的 sheet
+            sheet1, sheet2 = random.choice(sheet_combinations)
+            context = random.choice(all_data[sheet1]['Context'].tolist())
+            answer = random.choice(all_data[sheet2]['answer'].tolist())
 
-        inference_times = []
-        token_counts = []
-        predictions = []  # 用于保存模型的推理结果
+            # 检查生成的负样本是否已存在于负样本列表中
+            if not any(sample['Context'] == context and sample['Answer'] == answer for sample in negative_samples):
+                negative_samples.append({'Context': context, 'Answer': answer, 'Label': 0})
 
-        # 使用 tqdm 来显示进度
-        for context, response in tqdm.tqdm(zip(context_list, response_list), total=len(context_list)):
-            tokens = self.count_tokens(context, response)
-            token_counts.append(tokens)
+        # 将正样本和负样本合并
+        augmented_data = positive_samples + negative_samples
+        return pd.DataFrame(augmented_data)
 
-            try:
-                start_inference = time.time()
-                if model_nm == "minicheck":
-                    scorer = MiniCheck(model_name='roberta-large', cache_dir='./ckpts')
-                    pred_label, _, _, _ = scorer.score(docs=[context], claims=[response])
-                    pred_label = int(pred_label[0])  # 获取模型预测的标签（假设输出为0或1）
-                
-                elif model_nm == "hhem":
-                    model = AutoModelForSequenceClassification.from_pretrained('models/hallucination_evaluation_model', trust_remote_code=True)
-                    tokenizer = AutoTokenizer.from_pretrained('models/hallucination_evaluation_model', trust_remote_code=True)
-                    inputs = tokenizer(context, response, return_tensors='pt', truncation=True)
-
-                    # 计算模型输出 (logits or scores)
-                    with torch.no_grad():
-                        outputs = model(**inputs)
-                        logits = outputs.logits  # 获取logits
-
-                    # 使用 sigmoid 激活并转换为概率
-                    probabilities = torch.sigmoid(logits)
-
-                    # 使用阈值 0.5 作为判断标准
-                    pred_label = (probabilities >= 0.5).int().item()  # 1 if score >= 0.5, else 0
-                
-                elif model_nm == 'factual_consistency':
-                    model = FactualConsistency(minimum_score=0.5)
-                    _, is_valid, _ = model.scan(context, response)
-                    pred_label = int(is_valid)  # 有效性判断 (1 for True, 0 for False)
-                
-                end_inference = time.time()
-
-                # 记录推理时间
-                inference_times.append(end_inference - start_inference)
-                predictions.append(pred_label)  # 记录预测结果
-
-            except Exception as e:
-                print(f"Error occurred for model {model_nm}: {e}")
-                inference_times.append(0)  # 错误情况下设推理时间为0
-                predictions.append(None)  # 记录 None 表示出错
-
-        return inference_times, token_counts, predictions
-
-    def save_results_to_excel(self, df, results, file_name='model_inference_results.xlsx'):
-        # 将每个模型的推理结果添加到 DataFrame
-        for model_nm, (_, _, predictions) in results.items():
-            df[f'{model_nm}_Result'] = predictions
-
-        # 保存到 Excel 文件
-        df.to_excel(file_name, index=False)
-        print(f"Results saved to {file_name}")
-
-    def plot_results(self, results, save_path='model_inference_plot.png'):
-        plt.figure(figsize=(10, 6))
-
-        # 使用不同颜色和图例来区分每个模型
-        colors = {'minicheck': 'blue', 'hhem': 'green', 'factual_consistency': 'red'}
-
-        for model_nm, (inference_times, token_counts, _) in results.items():
-            if inference_times and token_counts:  # 确保数据非空
-                plt.scatter(token_counts, inference_times, color=colors[model_nm], label=model_nm)
-
-        plt.title('Token Count vs Inference Time for Different Models')
-        plt.xlabel('Token Count')
-        plt.ylabel('Inference Time (seconds)')
-        plt.legend()
-        plt.grid(True)
-
-        # 调用 plt.draw() 来确保图像刷新
-        plt.draw()
-
-        # 保存图像为文件
-        plt.savefig(save_path)
-        print(f"Plot saved as {save_path}")
-
-        # 如果需要显示图像，也可以调用 plt.show()
-        # plt.show()
+    def save_augmented_dataset(self, augmented_df, file_name='augmented_dataset.xlsx'):
+        augmented_df.to_excel(file_name, index=False)
+        print(f"Augmented dataset saved to {file_name}")
 
 
 if __name__ == "__main__":
-    model_list = ['minicheck', 'hhem', 'factual_consistency']
     eval_dataset = EvalDataset()
+    sheet_names = ['Sheet1', 'Sheet2', 'Sheet3']
 
-    # 存放每个模型的推理时间和token数的结果
-    results = {}
+    # 增广数据集
+    augmented_df = eval_dataset.augment_dataset(sheet_names=sheet_names)
 
-    # 加载数据集
-    df = eval_dataset.load_dataset(sheet_names=['Sheet1', 'Sheet2', 'Sheet3'])
-
-    # 逐个模型运行并记录结果
-    for model_nm in model_list:
-        print(f"Running evaluation for {model_nm}...")
-        inference_times, token_counts, predictions = eval_dataset.run(model_nm)
-        results[model_nm] = (inference_times, token_counts, predictions)
-
-    # 保存推理结果到 Excel 文件
-    eval_dataset.save_results_to_excel(df, results, file_name='model_inference_results.xlsx')
-
-    # 所有模型跑完之后，统一绘制结果
-    eval_dataset.plot_results(results, save_path='inference_plot.png')
+    # 保存增广后的数据集
+    eval_dataset.save_augmented_dataset(augmented_df, file_name='augmented_dataset.xlsx')
