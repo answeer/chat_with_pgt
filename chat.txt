@@ -1,38 +1,120 @@
+import numpy as np
 import matplotlib.pyplot as plt
-from sklearn.metrics import roc_curve, auc
+from sklearn.metrics import classification_report, accuracy_score
+import pandas as pd
+import random
+from transformers import AutoTokenizer
+from minicheck.minicheck import MiniCheck
+from llm_guard.output_scanners import FactualConsistency
+import tqdm
+import time
+import torch
 
 class EvalDataset:
-    # ... (之前的代码不变)
+    def __init__(self, data_path='augmented_dataset.xlsx'):
+        self.data_path = data_path
+        self.tokenizer = AutoTokenizer.from_pretrained('roberta-large')  # 用于计算token数
 
-    def plot_results(self, results, save_path='model_inference_plot.png'):
-        # 设置绘图
-        plt.figure(figsize=(10, 8))
+    def load_dataset(self, sample_ratio=1.0):
+        df = pd.read_excel(self.data_path)
+        df['Context'] = df['Context'].apply(lambda x: str(x) if not isinstance(x, str) else x)
+        df['Answer'] = df['Answer'].apply(lambda x: str(x) if not isinstance(x, str) else x)
+        if 0 < sample_ratio < 1:
+            df = df.sample(frac=sample_ratio, random_state=42).reset_index(drop=True)
+        return df
 
-        # 绘制每个模型的 ROC 曲线
-        for model_nm, (_, _, predictions) in results.items():
-            # 获取对应模型的真实标签和预测分数
-            true_labels = [1 if label == 1 else 0 for label in predictions]  # 将标签转换为0和1
-            pred_scores = [pred if pred is not None else 0 for pred in predictions]  # 确保无效预测分数为0
+    def count_tokens(self, context, response):
+        inputs = self.tokenizer(context, response, return_tensors='pt', truncation=True)
+        return len(inputs['input_ids'][0])
 
-            # 计算 ROC 曲线和 AUC
-            fpr, tpr, _ = roc_curve(true_labels, pred_scores)
-            roc_auc = auc(fpr, tpr)
+    def run(self, model_nm, sample_ratio=1.0):
+        df = self.load_dataset(sample_ratio=sample_ratio)
+        context_list = df['Context'].tolist()
+        response_list = df['Answer'].tolist()
+        true_labels = df['Label'].tolist()
+        
+        inference_times, token_counts, predictions = [], [], []
 
-            # 绘制 ROC 曲线
-            plt.plot(fpr, tpr, label=f'{model_nm} (AUC = {roc_auc:.2f})')
+        for context, response in tqdm.tqdm(zip(context_list, response_list), total=len(context_list)):
+            tokens = self.count_tokens(context, response)
+            token_counts.append(tokens)
 
-        # 绘制随机猜测的参考线
-        plt.plot([0, 1], [0, 1], 'k--', label='Random (AUC = 0.5)')
+            try:
+                start_inference = time.time()
+                if model_nm == "minicheck":
+                    scorer = MiniCheck(model_name='roberta-large', cache_dir='./ckpts')
+                    pred_label, _, _, _ = scorer.score(docs=[context], claims=[response])
+                    pred_label = int(pred_label[0])
+                elif model_nm == "hhem":
+                    model = AutoModelForSequenceClassification.from_pretrained('models/hallucination_evaluation_model', trust_remote_code=True)
+                    tokenizer = AutoTokenizer.from_pretrained('models/hallucination_evaluation_model', trust_remote_code=True)
+                    inputs = tokenizer(context, response, return_tensors='pt', truncation=True)
+                    with torch.no_grad():
+                        outputs = model(**inputs)
+                        logits = outputs.logits
+                    probabilities = torch.sigmoid(logits)
+                    pred_label = (probabilities >= 0.5).int().item()
+                elif model_nm == 'factual_consistency':
+                    model = FactualConsistency(minimum_score=0.5)
+                    _, is_valid, _ = model.scan(context, response)
+                    pred_label = int(is_valid)
 
-        # 图形参数设置
-        plt.xlabel('False Positive Rate')
-        plt.ylabel('True Positive Rate')
-        plt.title('ROC AUC Curve for Models')
-        plt.legend(loc="lower right")
+                end_inference = time.time()
+                inference_times.append(end_inference - start_inference)
+                predictions.append(pred_label)
+            except Exception as e:
+                print(f"Error occurred for model {model_nm}: {e}")
+                inference_times.append(0)
+                predictions.append(None)
 
-        # 保存并显示图像
+        self.calculate_metrics(true_labels, predictions, model_nm)
+        return inference_times, token_counts, predictions
+
+    def calculate_metrics(self, true_labels, predictions, model_nm):
+        valid_indices = [i for i, pred in enumerate(predictions) if pred is not None]
+        true_labels = [true_labels[i] for i in valid_indices]
+        predictions = [predictions[i] for i in valid_indices]
+        print(f"\nEvaluation metrics for {model_nm}:")
+        print(classification_report(true_labels, predictions, target_names=['Negative', 'Positive']))
+
+    def plot_token_accuracy(self, token_counts, true_labels, predictions, model_nm, save_path='token_accuracy_plot.png'):
+        # 设置 token 区间
+        token_ranges = [(0, 50), (51, 100), (101, 150), (151, 200), (201, 300), (301, 500), (501, float('inf'))]
+        accuracies = []
+        range_labels = []
+
+        for start, end in token_ranges:
+            range_labels.append(f'{start}-{int(end) if end != float("inf") else "inf"}')
+            
+            # 获取当前区间的样本索引
+            indices = [i for i, tokens in enumerate(token_counts) if start <= tokens < end]
+            if not indices:
+                accuracies.append(0)
+                continue
+            
+            # 计算当前区间的准确率
+            range_true_labels = [true_labels[i] for i in indices]
+            range_predictions = [predictions[i] for i in indices]
+            accuracy = accuracy_score(range_true_labels, range_predictions)
+            accuracies.append(accuracy)
+
+        # 绘制准确率柱状图
+        plt.figure(figsize=(10, 6))
+        plt.bar(range_labels, accuracies, color='skyblue')
+        plt.xlabel('Token Range')
+        plt.ylabel('Accuracy')
+        plt.title(f'Token Range vs Accuracy for {model_nm}')
         plt.savefig(save_path)
         plt.show()
-        print(f"ROC AUC plot saved to {save_path}")
+        print(f"Token accuracy plot saved to {save_path}")
 
-# 其他代码保持不变
+
+if __name__ == "__main__":
+    model_list = ['minicheck', 'hhem', 'factual_consistency']
+    eval_dataset = EvalDataset()
+    results = {}
+    sample_ratio = 0.1
+
+    for model_nm in model_list:
+        print(f"Running evaluation for {model_nm}...")
+        inference_times, token_counts
