@@ -1,78 +1,33 @@
-from sklearn.metrics import roc_curve, auc
 import matplotlib.pyplot as plt
+import numpy as np
 
 class EvalDataset:
-    # ... 省略已有方法 ...
+    # 省略其他方法
 
-    def run(self, model_nm, sample_ratio=1.0):
-        df = self.load_dataset(sample_ratio=sample_ratio)
-        context_list = df['Context'].tolist()
-        response_list = df['Answer'].tolist()
-        true_labels = df['Label'].tolist()
+    def plot_inference_time_vs_tokens(self, results, save_path='inference_time_vs_tokens.png'):
+        plt.figure(figsize=(12, 8))
 
-        inference_times, token_counts, predictions, prob_scores = [], [], [], []
+        for model_nm, (token_counts, inference_times) in results.items():
+            # 添加轻微的随机偏移来避免完全重叠
+            jitter_x = np.random.normal(0, 2, size=len(token_counts))  # X 轴轻微随机偏移
+            jitter_y = np.random.normal(0, 0.005, size=len(inference_times))  # Y 轴轻微随机偏移
 
-        for context, response in tqdm.tqdm(zip(context_list, response_list), total=len(context_list)):
-            tokens = self.count_tokens(context, response)
-            token_counts.append(tokens)
+            plt.scatter(
+                np.array(token_counts) + jitter_x,
+                np.array(inference_times) + jitter_y,
+                alpha=0.6,  # 设置透明度
+                label=model_nm,
+                s=30,  # 点的大小
+                edgecolor='k'  # 增加边框以区分重叠点
+            )
 
-            try:
-                start_inference = time.time()
-                if model_nm == "minicheck":
-                    scorer = MiniCheck(model_name='roberta-large', cache_dir='./ckpts')
-                    _, raw_prob, _, _ = scorer.score(docs=[context], claims=[response])
-                    pred_prob = raw_prob[0]
-                    pred_label = int(pred_prob >= 0.5)
-
-                elif model_nm == "hhem":
-                    model = AutoModelForSequenceClassification.from_pretrained('models/hallucination_evaluation_model', trust_remote_code=True)
-                    tokenizer = AutoTokenizer.from_pretrained('models/hallucination_evaluation_model', trust_remote_code=True)
-                    inputs = tokenizer(context, response, return_tensors='pt', truncation=True)
-                    with torch.no_grad():
-                        outputs = model(**inputs)
-                        logits = outputs.logits
-                    pred_prob = torch.sigmoid(logits).item()
-                    pred_label = int(pred_prob >= 0.5)
-
-                elif model_nm == 'factual_consistency':
-                    model = FactualConsistency(minimum_score=0.5)
-                    _, is_valid, risk_score = model.scan(context, response)
-                    pred_prob = 1 - risk_score  # 1 - 风险分数作为概率
-                    pred_label = int(is_valid)
-
-                end_inference = time.time()
-                inference_times.append(end_inference - start_inference)
-                predictions.append(pred_label)
-                prob_scores.append(pred_prob)
-            except Exception as e:
-                print(f"Error occurred for model {model_nm}: {e}")
-                inference_times.append(0)
-                predictions.append(None)
-                prob_scores.append(None)
-
-        return token_counts, true_labels, predictions, prob_scores
-
-    def plot_roc_curve(self, results, save_path='roc_curve_comparison.png'):
-        plt.figure(figsize=(10, 8))
-        for model_nm, (true_labels, prob_scores) in results.items():
-            # 去除空值
-            valid_indices = [i for i, score in enumerate(prob_scores) if score is not None]
-            true_labels = [true_labels[i] for i in valid_indices]
-            prob_scores = [prob_scores[i] for i in valid_indices]
-
-            # 计算 ROC 曲线和 AUC
-            fpr, tpr, _ = roc_curve(true_labels, prob_scores)
-            roc_auc = auc(fpr, tpr)
-            plt.plot(fpr, tpr, lw=2, label=f'{model_nm} (AUC = {roc_auc:.2f})')
-
-        plt.plot([0, 1], [0, 1], color='gray', linestyle='--')
-        plt.xlabel('False Positive Rate')
-        plt.ylabel('True Positive Rate')
-        plt.title('ROC Curve Comparison')
-        plt.legend(loc="lower right")
+        plt.xlabel('Token Count')
+        plt.ylabel('Inference Time (seconds)')
+        plt.title('Inference Time vs Token Count Comparison for Models')
+        plt.legend(title='Model')
         plt.savefig(save_path)
         plt.show()
-        print(f"ROC curve comparison plot saved to {save_path}")
+        print(f"Inference time vs token count plot saved to {save_path}")
 
 
 if __name__ == "__main__":
@@ -83,7 +38,7 @@ if __name__ == "__main__":
     results = {}
     for model_nm in model_list:
         print(f"Running evaluation for {model_nm}...")
-        _, true_labels, _, prob_scores = eval_dataset.run(model_nm, sample_ratio=sample_ratio)
-        results[model_nm] = (true_labels, prob_scores)
+        token_counts, _, _, inference_times = eval_dataset.run(model_nm, sample_ratio=sample_ratio)
+        results[model_nm] = (token_counts, inference_times)
 
-    eval_dataset.plot_roc_curve(results)
+    eval_dataset.plot_inference_time_vs_tokens(results)
