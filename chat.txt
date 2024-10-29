@@ -1,50 +1,89 @@
-    def plot_token_accuracy(self, results, save_path='token_accuracy_comparison.png'):
-        # 定义 token 区间
-        token_ranges = [(0, 50), (51, 100), (101, 150), (151, 200), (201, 300), (301, 500), (501, float('inf'))]
-        range_labels = [f'{start}-{int(end) if end != float("inf") else "inf"}' for start, end in token_ranges]
+from sklearn.metrics import roc_curve, auc
+import matplotlib.pyplot as plt
 
-        # 准备绘图
-        plt.figure(figsize=(12, 8))
+class EvalDataset:
+    # ... 省略已有方法 ...
 
-        for model_nm, (token_counts, true_labels, predictions) in results.items():
-            accuracies = []
+    def run(self, model_nm, sample_ratio=1.0):
+        df = self.load_dataset(sample_ratio=sample_ratio)
+        context_list = df['Context'].tolist()
+        response_list = df['Answer'].tolist()
+        true_labels = df['Label'].tolist()
 
-            # 计算每个 token 区间的精度
-            for start, end in token_ranges:
-                indices = [i for i, tokens in enumerate(token_counts) if start <= tokens < end]
-                if not indices:
-                    accuracies.append(0)
-                    continue
-                
-                range_true_labels = [true_labels[i] for i in indices]
-                range_predictions = [predictions[i] for i in indices]
-                accuracy = accuracy_score(range_true_labels, range_predictions)
-                accuracies.append(accuracy)
+        inference_times, token_counts, predictions, prob_scores = [], [], [], []
 
-            # 绘制该模型的精度曲线
-            plt.plot(range_labels, accuracies, marker='o', label=model_nm)
+        for context, response in tqdm.tqdm(zip(context_list, response_list), total=len(context_list)):
+            tokens = self.count_tokens(context, response)
+            token_counts.append(tokens)
 
-        # 图形设置
-        plt.xlabel('Token Range')
-        plt.ylabel('Accuracy')
-        plt.title('Token Range vs Accuracy Comparison for Models')
-        plt.legend(title='Model')
+            try:
+                start_inference = time.time()
+                if model_nm == "minicheck":
+                    scorer = MiniCheck(model_name='roberta-large', cache_dir='./ckpts')
+                    _, raw_prob, _, _ = scorer.score(docs=[context], claims=[response])
+                    pred_prob = raw_prob[0]
+                    pred_label = int(pred_prob >= 0.5)
+
+                elif model_nm == "hhem":
+                    model = AutoModelForSequenceClassification.from_pretrained('models/hallucination_evaluation_model', trust_remote_code=True)
+                    tokenizer = AutoTokenizer.from_pretrained('models/hallucination_evaluation_model', trust_remote_code=True)
+                    inputs = tokenizer(context, response, return_tensors='pt', truncation=True)
+                    with torch.no_grad():
+                        outputs = model(**inputs)
+                        logits = outputs.logits
+                    pred_prob = torch.sigmoid(logits).item()
+                    pred_label = int(pred_prob >= 0.5)
+
+                elif model_nm == 'factual_consistency':
+                    model = FactualConsistency(minimum_score=0.5)
+                    _, is_valid, risk_score = model.scan(context, response)
+                    pred_prob = 1 - risk_score  # 1 - 风险分数作为概率
+                    pred_label = int(is_valid)
+
+                end_inference = time.time()
+                inference_times.append(end_inference - start_inference)
+                predictions.append(pred_label)
+                prob_scores.append(pred_prob)
+            except Exception as e:
+                print(f"Error occurred for model {model_nm}: {e}")
+                inference_times.append(0)
+                predictions.append(None)
+                prob_scores.append(None)
+
+        return token_counts, true_labels, predictions, prob_scores
+
+    def plot_roc_curve(self, results, save_path='roc_curve_comparison.png'):
+        plt.figure(figsize=(10, 8))
+        for model_nm, (true_labels, prob_scores) in results.items():
+            # 去除空值
+            valid_indices = [i for i, score in enumerate(prob_scores) if score is not None]
+            true_labels = [true_labels[i] for i in valid_indices]
+            prob_scores = [prob_scores[i] for i in valid_indices]
+
+            # 计算 ROC 曲线和 AUC
+            fpr, tpr, _ = roc_curve(true_labels, prob_scores)
+            roc_auc = auc(fpr, tpr)
+            plt.plot(fpr, tpr, lw=2, label=f'{model_nm} (AUC = {roc_auc:.2f})')
+
+        plt.plot([0, 1], [0, 1], color='gray', linestyle='--')
+        plt.xlabel('False Positive Rate')
+        plt.ylabel('True Positive Rate')
+        plt.title('ROC Curve Comparison')
+        plt.legend(loc="lower right")
         plt.savefig(save_path)
         plt.show()
-        print(f"Token accuracy comparison plot saved to {save_path}")
+        print(f"ROC curve comparison plot saved to {save_path}")
 
 
 if __name__ == "__main__":
     model_list = ['minicheck', 'hhem', 'factual_consistency']
     eval_dataset = EvalDataset()
-    sample_ratio = 0.1  # 设置样本比例
+    sample_ratio = 0.1
 
-    # 运行每个模型并收集结果
     results = {}
     for model_nm in model_list:
         print(f"Running evaluation for {model_nm}...")
-        token_counts, true_labels, predictions = eval_dataset.run(model_nm, sample_ratio=sample_ratio)
-        results[model_nm] = (token_counts, true_labels, predictions)
+        _, true_labels, _, prob_scores = eval_dataset.run(model_nm, sample_ratio=sample_ratio)
+        results[model_nm] = (true_labels, prob_scores)
 
-    # 绘制 token 数与精度的关系图
-    eval_dataset.plot_token_accuracy(results)
+    eval_dataset.plot_roc_curve(results)
