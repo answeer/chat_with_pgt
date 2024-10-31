@@ -1,83 +1,28 @@
-from llm_sanitation.scanners.scanner_base import Scanner
-from pypdf import PdfReader
-from PIL import Image
-from PIL.ExifTags import TAGS
-import re
-import os
-from llm_sanitation.logging.logging_setup import LogUtil, LogType, LogLevel
+The SoftwareCheck class is designed to detect potentially untrusted software used to create or modify PDF or image files by scanning their metadata. By comparing the software information in file metadata against a blacklist, it helps identify files that may be tampered with or created by untrusted software.
 
-class SoftwareCheck(Scanner):
-    """
-    A class to check the software used to create or modify a PDF or image file.
+Class Overview
+This class extends a Scanner base class, implementing file-specific checks on metadata to extract the software used to create the file. If the software matches an entry on a predefined blacklist, the file is flagged as potentially tampered with. This can be particularly useful in workflows where files from untrusted sources are involved, such as digital document verification, content management, or cybersecurity.
 
-    This class extends the `Scanner` base class and provides functionality to validate the software 
-    found in the metadata of PDF and image files against a blacklist of potentially untrusted software.
-    """
-
-    def __init__(self, **kwargs):
-        """
-        Initializes the SoftwareCheck instance.
-
-        Args:
-            **kwargs: Additional keyword arguments, including 'software_blacklist' which is a list of blacklisted software.
-        """
-        self.software_blacklist = kwargs["software_blacklist"]
-        super().__init__("software_check", 0.5)
-
-    def pdf_software_validator(self, software):
-        """
-        Validates the creator software found in the metadata to determine if it is blacklisted.
-
-        Args:
-            software (str): The name of the software extracted from the file metadata.
-
-        Returns:
-            tuple: A tuple containing a string message about the validation result and a score 
-                   (1 if the software is not blacklisted, 0 if it is).
-        """
-        if software is None:
-            tampered = "Software details are not available"
-            score = 1
-        elif software in self.software_blacklist:
-            tampered = "Potentially tampered using '{}'".format(software)
-            score = 0
-        else:
-            tampered = "Potentially not tampered, Software used for creation is {}".format(software)
-            score = 1
-        return tampered, score
-
-    def predict(self, file_path):
-        """
-        Scans the provided file (PDF or image) for software metadata and checks it against the blacklist.
-
-        Args:
-            file_path (str): The path to the file to be scanned.
-
-        Returns:
-            tuple: A tuple containing a string message about the software tampering check and a score 
-                   (1 if the software is not blacklisted, 0 if it is).
-        """
-        file_format = os.path.split(file_path)[-1].split(".")[-1].lower()
-        try:
-            if file_format == "pdf":
-                self.reader = PdfReader(file_path)
-                software = self.reader.metadata.producer
-            else:
-                image = Image.open(file_path)
-                exif_data = image.getexif()
-                if exif_data is not None:
-                    exif = {TAGS.get(tag,tag): value for tag, value in exif_data.items()}
-                    software = exif.get("Software",None)
-            if software is not None:
-                software = re.sub(r'\d+', '', re.sub(r'[^a-zA-Z\s]', '', software)).rstrip()
-            software_tampering,score = self.pdf_software_validator(software)
-        except Exception as e:
-            LogUtil.log(LogType.ERROR, LogLevel.ERROR, e)
-            software_tampering = e
-            score = 0
-        return software_tampering,score
-
-
-    def format_response(self):
-        self.response["prediction"]["software_check"] = self.pred[0]
-        self.response["score"] = self.pred[1]
+Core Components
+Initialization (__init__ method):
+Initializes SoftwareCheck with a specific name (software_check) and a default score (0.5).
+Takes a software_blacklist argument from kwargs, a list of software names deemed untrusted. This blacklist is used to validate the software detected in file metadata.
+PDF Software Validator (pdf_software_validator method):
+Takes a software name from the file metadata and checks if it is in the blacklist.
+Returns:
+Message: If the software is blacklisted, it labels the file as “Potentially tampered.” If the software is not in the blacklist, it indicates the file is “Potentially not tampered.”
+Score: A score of 0 for blacklisted software and 1 for safe software.
+Prediction (predict method):
+Detects the file format based on its extension (pdf or image format) and applies the corresponding metadata extraction method.
+For PDF files:
+Uses PdfReader to extract the Producer field from the file's metadata, which often contains the software used to create or modify the document.
+For image files:
+Uses Pillow to open the image and extract its EXIF metadata.
+Retrieves the "Software" field if available, which records the image editing software.
+Software Validation:
+Standardizes the software name by removing numbers and special characters, leaving only alphabetic characters.
+Passes the extracted software name to pdf_software_validator to determine if it’s blacklisted, and returns a prediction message and score.
+Response Formatting (format_response method):
+Modifies the response dictionary to include the software check result (software_check) and the score, making the results accessible for further analysis.
+Brief Introduction
+The SoftwareCheck class is a metadata analysis tool that verifies the software used to create or modify PDF and image files. By scanning metadata, it identifies potentially tampered files based on a blacklist of untrusted software, making it suitable for document verification systems or digital forensics.
