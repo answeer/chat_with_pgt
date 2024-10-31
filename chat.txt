@@ -1,87 +1,30 @@
-from llm_sanitation.scanners.scanner_base import Scanner
-from llm_sanitation.utils.connectors.suitability import blurriness_score
-from llm_sanitation.utils.doc_to_img import doc_to_img
-from llm_sanitation.logging.logging_setup import LogUtil, LogType, LogLevel
+The ImageBlurCheck class is designed to detect blurry pages within a document by analyzing each page's blurriness score against a defined threshold. By identifying pages that fail this threshold, it flags the blurry pages, making this tool useful in workflows involving scanned documents or any document-dependent system requiring clear image quality.
 
-# import cv2
+Class Overview
+This class extends a Scanner base class, implementing a blurriness evaluation to detect unclear or blurry pages. Each document page is converted into an image and assessed with a custom blurriness score function. Pages exceeding the threshold are flagged as blurry.
 
-
-class ImageBlurCheck(Scanner):
-    """
-    A class to detect blurry pages in a document based on blurriness scores.
-
-    This class extends the `Scanner` base class to analyze images of document pages and identify 
-    pages that are blurry based on a specified blurriness score threshold.
-
-    Attributes:
-        score_thresh (float): The threshold above which a page is considered blurry.
-        save_folder (str): The directory to save images extracted from the document.
-    """
-
-    def __init__(self, **kwargs):
-        """
-        Initializes the BlurnessCheck instance with the specified blurriness score threshold and save directory.
-
-        Args:
-            **kwargs: Keyword arguments including:
-                - "score_thresh" (float): The blurriness score threshold for detecting blurry pages.
-                - "save_folder" (str): The directory to save images extracted from the document.
-        """
-        score_thresh = kwargs["score_thresh"]
-        save_folder = kwargs['save_folder']
-        super().__init__("blurness_check", 0.5, score_thresh=score_thresh, save_folder=save_folder)
-
-    def suaitability_placeholder(self, image_path):
-        """
-        Get an image's suitability for blurriness detection.
-
-        This method serves as a placeholder for making API calls or running local calculations to 
-        evaluate an image's blurriness score.
-
-        Args:
-            image_path (str): The file path to the image to be evaluated.
-
-        Returns:
-            dict: A dictionary containing the blurriness score.
-        """
-        results = {"data": {}}
-        results["data"]["blurriness_score"] = blurriness_score(image_path)
-
-        return results
-
-    def predict(self, image_path):
-        """
-        Analyzes document pages to identify and index blurry pages.
-
-        This method processes a document by converting it into images and evaluating each image 
-        to determine if it is blurry based on the blurriness score threshold.
-
-        Args:
-            image_path (str): The file path to the document to be analyzed.
-
-        Returns:
-            tuple: A tuple containing a list of indices for blurry pages and a score indicating 
-            the presence of blurry pages.
-        """
-        try:
-            image_paths = doc_to_img(image_path, self._kwargs['save_folder'])
-
-            blur_pg_idx = []
-            score = 1
-            for ix, image_path in enumerate(image_paths):
-                results = self.suaitability_placeholder(image_path)
-
-                blurness_score = results['data']['blurriness_score'][0]['data']['blurriness_score']['Blurriness Score']
-
-                if blurness_score > self._kwargs['score_thresh']:
-                    blur_pg_idx.append(ix + 1)
-                    score = 0
-        except Exception as e:
-            LogUtil.log(LogType.ERROR, LogLevel.ERROR, e)
-            blur_pg_idx = []
-            score = 0
-        return blur_pg_idx, score
-
-    def format_response(self):
-        self.response["prediction"]["blurness_check"] = self.pred[0]
-        self.response["score"] = self.pred[1]
+Core Components
+Initialization (__init__ method):
+Initializes ImageBlurCheck with:
+score_thresh: Blurriness score threshold above which a page is considered blurry.
+save_folder: Directory for saving images generated from document pages.
+Suitability Placeholder (suitability_placeholder method):
+A placeholder for calculating or retrieving the blurriness score. In a production setup, this might make API calls or invoke a local function for score computation.
+Args: Takes image_path (file path to the page image).
+Returns: A dictionary with a computed blurriness_score for the image.
+Predict (predict method):
+Processes the document to detect blurry pages.
+Steps:
+Converts document pages to images using the doc_to_img utility.
+Iterates through each page image and calculates its blurriness score.
+If the score exceeds score_thresh, the page index is flagged as blurry.
+Args: image_path for the document to be analyzed.
+Returns: A tuple with:
+A list of page indices identified as blurry.
+A score (0 if blurry pages are detected, 1 otherwise).
+Response Formatting (format_response method):
+Updates the response dictionary to include:
+Blurness Check Prediction: List of blurry page indices.
+Score: Indicates the presence or absence of blurry pages.
+Brief Introduction
+The ImageBlurCheck class identifies blurry pages in a document by evaluating each page's blurriness score, making it ideal for document-processing systems needing high-quality images. This is achieved through page-by-page analysis, flagging any pages that exceed a given blurriness threshold.
