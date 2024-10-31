@@ -1,38 +1,45 @@
-The HarmfulString class is designed to detect harmful strings in text data by checking it against a predefined list loaded from a configuration file. This class extends the Scanner base class and provides functionality for both detection and potential sanitization of harmful content.
+import profanity_check
+from llm_sanitation.scanners.scanner_base import Scanner
+from llm_sanitation.logging.logging_setup import LogUtil, LogType, LogLevel
 
-Overview
-Attributes:
-case_sensitive: A boolean that determines whether the search for harmful strings is case-sensitive.
-harm_str: A dictionary of harmful strings that are read from a configuration file (harmful_strings.yml).
-Methods:
-__init__:
-Initializes the HarmfulString instance with the case_sensitive attribute and loads harmful strings from the configuration file.
-predict:
-Accepts a string of text data and checks for the presence of harmful strings.
-Returns: A tuple containing:
-A message indicating the presence of harmful strings (or lack thereof).
-A score indicating the result (1 if no harmful strings are found, 0 if any are detected).
-Optionally, the sanitized text (if the sanitization feature is enabled, though it's currently commented out).
-Error Handling: Logs any exceptions that occur during processing.
-format_response:
-Formats the output by including the prediction message and score in the response dictionary. The sanitized data field is commented out, but can be included if the sanitization feature is enabled.
-Example Usage
-Here’s a brief example of how to use the HarmfulString class:
+class ProfanityCheck(Scanner):
+    """
+    A class to detect profanity in a given text using the `profanity_check` library.
 
-python
-复制代码
-# Initialize the HarmfulString instance
-harmful_string_detector = HarmfulString(case_sensitive=False)
+    This class extends the `Scanner` base class and provides functionality to scan text data
+    for profanity and return a prediction along with a confidence score.
+    """
 
-# Example text data to check
-text_data = "This is a sample text with harmful content."
+    def __init__(self, **kwargs):
+        """
+        Initializes the ProfanityCheck instance.
 
-# Detect harmful strings
-result = harmful_string_detector.predict(text_data)
-print(result)  # Output: A message indicating harmful strings found or not, and the corresponding score.
-Potential Enhancements
-Redaction Feature: The class has a commented-out redact_text method that can be used to sanitize harmful strings by replacing them with "[REDACTED]". You can uncomment and use this method if you wish to implement sanitization.
-Flexible Configuration: You might consider allowing the configuration file path to be passed as an argument to the constructor to make the class more flexible.
-Logging Improvements: The error logging could be enhanced to provide more context, such as the data being processed when the error occurred.
-Summary
-The HarmfulString class is a straightforward implementation for detecting harmful content in text. Its design allows for easy customization regarding case sensitivity and the source of harmful strings, making it a useful tool for applications requiring content moderation or filtering.
+        Args:
+            **kwargs: Additional keyword arguments (not used directly in this class).
+        """
+        super().__init__("profanity", 0.5)
+
+    def predict(self, data):
+        """
+        Scans the provided text data to detect the presence of profanity.
+
+        Args:
+            data (str): The text data to be scanned for profanity.
+
+        Returns:
+            tuple: A tuple containing a boolean prediction indicating whether profanity was detected (True for yes, False for no),
+                   and a confidence score (float) between 0 and 1 representing the likelihood of the text containing profanity.
+        """
+        try:
+            predict = profanity_check.predict([data])
+            score = profanity_check.predict_prob([data])
+            predict = bool(predict[0])
+        except Exception as e:
+            LogUtil.log(LogType.ERROR, LogLevel.ERROR, e)
+            predict = "Error occurred: {}".format(e)
+            score = [0]
+        return predict, score[0]
+
+    def format_response(self):
+        self.response["prediction"]["Contain_profanity"] = self.pred[0]
+        self.response["score"] = 1 - self.pred[1]
