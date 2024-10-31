@@ -1,1 +1,59 @@
-The EncryptionDetector class is a valuable tool for identifying encrypted files across various formats. It is designed to detect and log encryption status, enabling systems to handle protected files with caution or prompt users for passwords. This helps maintain the security of applications that process files from potentially untrusted sources, such as in data ingestion pipelines, content management systems, or document review platforms.
+from llm_sanitation.scanners.scanner_base import Scanner
+from llm_sanitation.logging.logging_setup import LogUtil, LogType, LogLevel
+
+class FormatCheck(Scanner):
+    """
+    A class to check if a given file's format is valid based on a predefined list of acceptable formats.
+
+    This class extends the `Scanner` base class and provides functionality to validate the file format 
+    by checking its suffix against a provided list of acceptable formats.
+
+    Attributes:
+        format_list (list): A list of valid file formats to check against.
+    """
+
+    def __init__(self, **kwargs):
+        """
+        Initializes the FormatCheck instance and sets up the list of valid formats.
+
+        Args:
+            **kwargs: Additional keyword arguments, specifically 'format_list', which is a list of valid formats.
+        """
+        format_list = kwargs["format_list"]
+        super().__init__("format_check", 0.5, format_list=format_list)
+
+    def predict(self, file):
+        """
+        Checks the file format by comparing the file's suffix against the provided list of valid formats.
+
+        Args:
+            file (str): The file name or path to be checked.
+
+        Returns:
+            tuple: A tuple containing the prediction message (str) and the corresponding score (int).
+                   A score of 1 indicates a valid format, while a score of 0 indicates an invalid format.
+        """
+        try:
+            file_suffix = file.split('.')[-1]
+            if file_suffix in self._kwargs['format_list']:
+                score = 1
+                predict = "valid format"
+            else:
+                score = 0
+                predict = "invalid format"
+        except Exception as e:
+            predict = "Error occurred: {}".format(e)
+            score = 0
+            LogUtil.log(LogType.ERROR, LogLevel.ERROR, e)
+
+        return predict, score
+
+    def format_response(self):
+        """
+        Formats the prediction response to include the result of the format check and the corresponding score.
+
+        This method modifies the response dictionary to include the format check result under the "format" key 
+        and the corresponding score under the "score" key.
+        """
+        self.response["prediction"]["format"] = self.pred[0]
+        self.response["score"] = self.pred[1]
