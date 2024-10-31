@@ -1,64 +1,26 @@
-from llm_sanitation.scanners.scanner_base import Scanner
-from PIL import Image
-import os
-from llm_sanitation.logging.logging_setup import LogUtil, LogType, LogLevel
+The ImageDimCheck class verifies whether the dimensions of an image (height and width) meet minimum threshold requirements. This is particularly useful in quality control workflows to ensure that images meet specific dimensional standards before further processing.
 
-class ImageDimCheck(Scanner):
-    """
-    A class to check the dimensions (height and width) of an image and validate them against specified thresholds.
+Overview
+This class extends the Scanner base class and focuses on validating image dimensions against predefined minimum height and width values.
 
-    This class extends the `Scanner` base class and provides functionality to determine if an image file's dimensions
-    meet the minimum required size.
-
-    Attributes:
-        img_dim_thresh (tuple): A tuple containing the minimum required height and width for the image.
-    """
-
-    def __init__(self, **kwargs):
-        """
-        Initializes the ImageSizeCheck instance and sets up the image size thresholds.
-
-        Args:
-            **kwargs: Additional keyword arguments, including 'img_dim_thresh' which is a tuple of minimum required
-                      image dimensions (height, width).
-        """
-        img_dim_thresh = kwargs['img_dim_thresh']
-        super().__init__("img_dimension", 0.5, img_dim_thresh=img_dim_thresh)
-
-    def predict(self, image_path):
-        """
-        Checks the dimensions of the image and validates them against the specified thresholds.
-
-        Args:
-            image_path (str): The file path of the image to be checked.
-
-        Returns:
-            tuple: A tuple containing a prediction message (str) indicating whether the image size is valid 
-                   and the corresponding score (int).
-                   A score of 1 indicates that the image size is within the valid range, while a score of 0 indicates that it is not.
-        """
-        try:
-            extn = os.path.split(image_path)[-1].split(".")[-1].lower()
-            if extn in ["tiff", "tif", "png", "jpg", "jpeg"]:
-                img = Image.open(image_path)
-                height, width = img.size
-                height_thresh, width_thresh = self._kwargs['img_dim_thresh']
-                if height >= height_thresh and width >= width_thresh:
-                    predict = f"The image size {(height, width)} for this image is valid."
-                    score = 1
-                else:
-                    predict = f"The image size for this image is NOT valid. Image size is {(height, width)}. Please upload a valid image with sufficient size."
-                    score = 0
-            else:
-                predict = "Doc Type '{}' not supported".format(extn)
-                score = 0
-        except Exception as e:
-            LogUtil.log(LogType.ERROR, LogLevel.ERROR, e)
-            predict = "Error occurred: {}".format(e)
-            score = 0
-
-        return predict, score
-
-    def format_response(self):
-        self.response["prediction"]["img_size"] = self.pred[0]
-        self.response["score"] = self.pred[1]
+Core Components
+Initialization (__init__ method):
+Initializes the ImageDimCheck instance with:
+img_dim_thresh: A tuple defining the minimum acceptable image dimensions (height, width).
+Predict (predict method):
+Checks if an image meets the required dimensions.
+Steps:
+Confirms the file extension is supported (e.g., TIFF, PNG, JPG).
+Opens the image and retrieves its actual height and width.
+Compares the image's dimensions to the specified thresholds.
+Returns a message indicating whether the image dimensions are valid and assigns a score.
+Args: Takes image_path (path to the image file).
+Returns: A tuple with:
+Prediction Message: Specifies whether the image size meets requirements.
+Score: 1 if the image dimensions are valid, 0 if not.
+Response Formatting (format_response method):
+Updates the response dictionary with:
+Prediction for Image Size: Message about the image's dimensional validity.
+Score: Validity status (1 or 0).
+Brief Introduction
+The ImageDimCheck class verifies an image's dimensions, ensuring they meet minimum requirements. By validating image sizes before processing, it helps maintain quality standards in image-dependent workflows. This function is especially valuable for applications that require images to meet specific size standards before further processing or analysis.
