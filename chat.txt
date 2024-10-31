@@ -1,122 +1,17 @@
-from llm_sanitation.scanners.scanner_base import Scanner
-import spacy
-from nltk.tokenize import NLTKWordTokenizer,WordPunctTokenizer,WhitespaceTokenizer
-from llm_sanitation.logging.logging_setup import LogUtil, LogType, LogLevel
+The TokenLimit scanner is designed to analyze and verify the number of tokens in a given text, ensuring it does not exceed a specified threshold. It provides a flexible approach by allowing multiple tokenization methods to accommodate different tokenization needs.
 
-class TokenLimit(Scanner):
-    """
-    A class to check if the number of tokens in a text data exceeds a specified limit.
-
-    This class extends the `Scanner` base class and provides functionality to tokenize text data
-    using various methods and check if the number of tokens falls within a specified limit.
-
-    Attributes:
-        token_methods (dict): A dictionary mapping tokenization methods to their corresponding functions.
-    """
-
-    def __init__(self, **kwargs):
-        """
-        Initializes the TokenLimit instance.
-
-        Args:
-            **kwargs: Additional keyword arguments, including 'token_limit' specifying the maximum
-                      number of tokens allowed and 'token_method' specifying the tokenization method to use.
-        """
-        token_limit = kwargs["token_limit"]
-        token_method = kwargs['token_method']
-        super().__init__("token_limit", 0.5, token_limit=token_limit, token_method=token_method)
-
-        self.token_methods = {
-            'wiite space': self.white_space_tokenizer,
-            'word punct': self.word_punct_tokenizer,
-            'nltk': self.nltk_tokenizer,
-            'spacy': self.spacy_tokenizer
-        }
-
-    def nltk_tokenizer(self, data):
-        """
-        Tokenizes the data using NLTK's word tokenizer.
-
-        Args:
-            data (str): The text data to be tokenized.
-
-        Returns:
-            int: The number of tokens in the data.
-        """
-        tokens = NLTKWordTokenizer().tokenize(data)
-        token_count = len(tokens)
-        return token_count
-    
-    def white_space_tokenizer(self, data):
-        """
-        Tokenizes the data using whitespace-based tokenizer.
-
-        Args:
-            data (str): The text data to be tokenized.
-
-        Returns:
-            int: The number of tokens in the data.
-        """
-        tokens = WhitespaceTokenizer().tokenize(data)
-        token_count = len(tokens)
-        return token_count
-
-    def word_punct_tokenizer(self, data):
-        """
-        Tokenizes the data using word and punctuation-based tokenizer.
-
-        Args:
-            data (str): The text data to be tokenized.
-
-        Returns:
-            int: The number of tokens in the data.
-        """
-        tokens = WordPunctTokenizer().tokenize(data)
-        token_count = len(tokens)
-        return token_count
-
-    def spacy_tokenizer(self, data):
-        """
-        Tokenizes the data using spaCy's tokenizer.
-
-        Args:
-            data (str): The text data to be tokenized.
-
-        Returns:
-            int: The number of tokens in the data.
-        """
-        nlp = spacy.load("en_core_web_sm")
-        doc = nlp(data)
-        token_count = len(doc)
-        return token_count
-
-    def predict(self, data):
-        """
-        Checks the token count of the provided data using the specified tokenization method.
-
-        Args:
-            data (str): The text data to be checked.
-
-        Returns:
-            tuple: A tuple containing the prediction message (number of tokens) and a score (1 if 
-                   the token count is within the limit, 0 otherwise). In case of an unsupported method 
-                   or error, returns an appropriate message and a score of 0.
-        """
-        token_method = self._kwargs['token_method']
-        score = 0
-        try:
-            if token_method in self.token_methods:
-                token_count = self.token_methods[token_method](data)
-                pred = f"Tokens numbers is {token_count}."
-                if token_count < self._kwargs['token_limit']:
-                    score = 1
-            else:
-                pred = "This method is not supported, please choose a method in [{}].".format(", ".join(self.token_methods.keys()))
-        except Exception as e:
-            LogUtil.log(LogType.ERROR, LogLevel.ERROR, e)
-            pred = "Error occurred: {}".format(e)
-        return pred, score
-
-    def format_response(self):
-        self.response["prediction"]["token_limit"] = self.pred[0]
-        self.response["score"] = self.pred[1]
+Key Features and Workflow:
+Tokenization Methods:
+The scanner supports several tokenization techniques:
+Whitespace Tokenization: Splits text at each whitespace, providing a simple, space-based token count.
+Word Punctuation Tokenization: Separates tokens based on words and punctuation, helpful for more granular token counts.
+NLTK Word Tokenization: Uses NLTK’s tokenization approach, which is well-suited for natural language processing tasks.
+SpaCy Tokenization: Leverages spaCy’s NLP pipeline, which provides contextually aware tokenization.
+Token Count Check:
+The TokenLimit scanner checks if the token count from the specified method falls within the acceptable limit (token_limit). If the token count is under the threshold, a score of 1 is assigned; otherwise, it assigns a score of 0. The scanner also provides a message detailing the token count for reference.
+Error Handling:
+If an unsupported tokenization method is chosen, the scanner provides an error message with a list of valid options.
+In case of any processing errors, the scanner logs the error using LogUtil and returns an appropriate error message with a score of 0.
+Usage Scenarios:
+Text Limit Enforcements: Useful in applications where token limits are enforced, such as API calls, chatbots, or messaging platforms.
+Analysis of Language Patterns: Allows flexibility in tokenization approaches, enabling various language processing tasks, including token-based NLP preprocessing.
