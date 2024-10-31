@@ -1,19 +1,58 @@
-he ImageMemoryCheck class is designed to validate the memory size of image files against specified thresholds, ensuring they meet certain criteria in terms of file size. This can be particularly useful in applications where image size is critical for performance, storage, or compliance reasons.
+from llm_sanitation.scanners.scanner_base import Scanner
+from llm_sanitation.logging.logging_setup import LogUtil, LogType, LogLevel
 
-Overview
-Attributes:
-max_size: The maximum allowable size for the image in kilobytes (KB).
-min_size: The minimum allowable size for the image in kilobytes (KB).
-Methods:
-__init__:
-Initializes the class by setting up the size thresholds for image memory.
-predict:
-Checks the memory size of the specified image file.
-Validates whether the size falls within the defined minimum and maximum thresholds.
-Returns: A tuple containing:
-A prediction message indicating if the image size is valid.
-A score (1 if valid, 0 if not).
-format_response:
-Formats the prediction results and updates the response dictionary with the memory check results and the score.
-Summary
-The ImageMemoryCheck class is a useful utility in any image processing workflow, ensuring that images meet specified memory size requirements. This validation helps maintain performance standards and can prevent issues related to handling excessively large or small images in various applications.
+
+class BinTransform(Scanner):
+    """
+    A class for performing bin-based categorization of values.
+
+    This class extends the `Scanner` base class to categorize input values based on predefined ranges. 
+    It assigns a category to the value if it falls within any of the specified ranges, and returns 
+    the default category if no match is found.
+
+    Attributes:
+        default_catagory (str): The default category to return if no match is found.
+        catagories (list): A list of dictionaries where each dictionary defines a category with its range.
+    """
+
+    def __init__(self, **kwargs):
+        """
+        Initializes the BinTransform instance with specified categories and default category.
+
+        Args:
+            **kwargs: Keyword arguments including:
+                - "default" (str): The default category.
+                - "catagories" (list): A list of category dictionaries, each containing:
+                    - "name" (str): The name of the category.
+                    - "range" (tuple): A tuple specifying the inclusive range of values for the category.
+        """
+        self.default_catagory = kwargs["default"]
+        self.catagories = kwargs["catagories"]
+        super().__init__("bin_transform", None, catagories=kwargs["catagories"],
+                         default_catagory=kwargs["default"])
+
+    def predict(self, value):
+        """
+        Predicts the category of the given value based on predefined ranges.
+
+        Args:
+            value (float or int): The value to categorize.
+
+        Returns:
+            str: The name of the category that the value falls into, or the default category if no match is found.
+
+        Raises:
+            Exception: If an error occurs while processing the value.
+        """
+        try:
+            for catagory in self._kwargs["catagories"]:
+                lower, upper = catagory["range"]
+                if lower <= value <= upper:
+                    return catagory["name"]
+        except Exception as e:
+            LogUtil.log(LogType.ERROR, LogLevel.ERROR, e)
+        return self._kwargs["default_catagory"]
+
+    def format_response(self):
+        self.response["prediction"]["catagory"] = self.pred
+        self.response["score"] = None
