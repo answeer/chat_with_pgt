@@ -1,14 +1,122 @@
-The ProfanityCheck scanner is designed to detect and flag potentially inappropriate or offensive language within a given text. Here’s how this scanner functions and what makes it effective:
+from llm_sanitation.scanners.scanner_base import Scanner
+import spacy
+from nltk.tokenize import NLTKWordTokenizer,WordPunctTokenizer,WhitespaceTokenizer
+from llm_sanitation.logging.logging_setup import LogUtil, LogType, LogLevel
 
-Key Features and Workflow:
-Detection Approach:
-The ProfanityCheck scanner analyzes text data by running a profanity detection model on the input, categorizing it based on a predefined list of offensive terms and patterns.
-The scanner returns a boolean result (True for detected profanity, False otherwise), alongside a confidence score representing the likelihood that the content contains profanity. A high confidence score implies a strong match with potentially offensive language.
-Output and Interpretation:
-The prediction result includes:
-Contain_profanity: Indicates whether profanity was detected (True/False).
-Score: A probability-based score between 0 and 1, where higher values indicate stronger confidence in the presence of profanity. This score can be useful for understanding the level of certainty in cases where a binary answer may not suffice.
-Use Cases:
-This scanner is useful in applications needing content moderation, such as online forums, messaging platforms, or other settings where harmful language needs to be flagged or filtered. It provides an automated way to review text content for compliance with community standards and maintain a respectful environment.
-Limitations:
-While the scanner effectively detects explicit language, it may occasionally yield false positives (e.g., for words that could be profane in some contexts but not in others).
+class TokenLimit(Scanner):
+    """
+    A class to check if the number of tokens in a text data exceeds a specified limit.
+
+    This class extends the `Scanner` base class and provides functionality to tokenize text data
+    using various methods and check if the number of tokens falls within a specified limit.
+
+    Attributes:
+        token_methods (dict): A dictionary mapping tokenization methods to their corresponding functions.
+    """
+
+    def __init__(self, **kwargs):
+        """
+        Initializes the TokenLimit instance.
+
+        Args:
+            **kwargs: Additional keyword arguments, including 'token_limit' specifying the maximum
+                      number of tokens allowed and 'token_method' specifying the tokenization method to use.
+        """
+        token_limit = kwargs["token_limit"]
+        token_method = kwargs['token_method']
+        super().__init__("token_limit", 0.5, token_limit=token_limit, token_method=token_method)
+
+        self.token_methods = {
+            'wiite space': self.white_space_tokenizer,
+            'word punct': self.word_punct_tokenizer,
+            'nltk': self.nltk_tokenizer,
+            'spacy': self.spacy_tokenizer
+        }
+
+    def nltk_tokenizer(self, data):
+        """
+        Tokenizes the data using NLTK's word tokenizer.
+
+        Args:
+            data (str): The text data to be tokenized.
+
+        Returns:
+            int: The number of tokens in the data.
+        """
+        tokens = NLTKWordTokenizer().tokenize(data)
+        token_count = len(tokens)
+        return token_count
+    
+    def white_space_tokenizer(self, data):
+        """
+        Tokenizes the data using whitespace-based tokenizer.
+
+        Args:
+            data (str): The text data to be tokenized.
+
+        Returns:
+            int: The number of tokens in the data.
+        """
+        tokens = WhitespaceTokenizer().tokenize(data)
+        token_count = len(tokens)
+        return token_count
+
+    def word_punct_tokenizer(self, data):
+        """
+        Tokenizes the data using word and punctuation-based tokenizer.
+
+        Args:
+            data (str): The text data to be tokenized.
+
+        Returns:
+            int: The number of tokens in the data.
+        """
+        tokens = WordPunctTokenizer().tokenize(data)
+        token_count = len(tokens)
+        return token_count
+
+    def spacy_tokenizer(self, data):
+        """
+        Tokenizes the data using spaCy's tokenizer.
+
+        Args:
+            data (str): The text data to be tokenized.
+
+        Returns:
+            int: The number of tokens in the data.
+        """
+        nlp = spacy.load("en_core_web_sm")
+        doc = nlp(data)
+        token_count = len(doc)
+        return token_count
+
+    def predict(self, data):
+        """
+        Checks the token count of the provided data using the specified tokenization method.
+
+        Args:
+            data (str): The text data to be checked.
+
+        Returns:
+            tuple: A tuple containing the prediction message (number of tokens) and a score (1 if 
+                   the token count is within the limit, 0 otherwise). In case of an unsupported method 
+                   or error, returns an appropriate message and a score of 0.
+        """
+        token_method = self._kwargs['token_method']
+        score = 0
+        try:
+            if token_method in self.token_methods:
+                token_count = self.token_methods[token_method](data)
+                pred = f"Tokens numbers is {token_count}."
+                if token_count < self._kwargs['token_limit']:
+                    score = 1
+            else:
+                pred = "This method is not supported, please choose a method in [{}].".format(", ".join(self.token_methods.keys()))
+        except Exception as e:
+            LogUtil.log(LogType.ERROR, LogLevel.ERROR, e)
+            pred = "Error occurred: {}".format(e)
+        return pred, score
+
+    def format_response(self):
+        self.response["prediction"]["token_limit"] = self.pred[0]
+        self.response["score"] = self.pred[1]
