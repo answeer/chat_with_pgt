@@ -1,26 +1,83 @@
-The ImageDimCheck class verifies whether the dimensions of an image (height and width) meet minimum threshold requirements. This is particularly useful in quality control workflows to ensure that images meet specific dimensional standards before further processing.
+from llm_sanitation.scanners.scanner_base import Scanner
+from llm_sanitation.utils.connectors.suitability import image_xy_dpi
+from llm_sanitation.utils.doc_to_img import doc_to_img
+from llm_sanitation.logging.logging_setup import LogUtil, LogType, LogLevel
+# import cv2
 
-Overview
-This class extends the Scanner base class and focuses on validating image dimensions against predefined minimum height and width values.
+class ImageDPICheck(Scanner):
+    """
+    A class to check the DPI (dots per inch) of images extracted from documents and ensure they meet specified thresholds.
 
-Core Components
-Initialization (__init__ method):
-Initializes the ImageDimCheck instance with:
-img_dim_thresh: A tuple defining the minimum acceptable image dimensions (height, width).
-Predict (predict method):
-Checks if an image meets the required dimensions.
-Steps:
-Confirms the file extension is supported (e.g., TIFF, PNG, JPG).
-Opens the image and retrieves its actual height and width.
-Compares the image's dimensions to the specified thresholds.
-Returns a message indicating whether the image dimensions are valid and assigns a score.
-Args: Takes image_path (path to the image file).
-Returns: A tuple with:
-Prediction Message: Specifies whether the image size meets requirements.
-Score: 1 if the image dimensions are valid, 0 if not.
-Response Formatting (format_response method):
-Updates the response dictionary with:
-Prediction for Image Size: Message about the image's dimensional validity.
-Score: Validity status (1 or 0).
-Brief Introduction
-The ImageDimCheck class verifies an image's dimensions, ensuring they meet minimum requirements. By validating image sizes before processing, it helps maintain quality standards in image-dependent workflows. This function is especially valuable for applications that require images to meet specific size standards before further processing or analysis.
+    This class extends the `Scanner` base class and provides functionality to convert documents to images and 
+    verify if their DPI values meet the given thresholds for both X and Y dimensions.
+
+    Attributes:
+        x_dpi_thresh (int): The minimum allowable DPI for the X dimension.
+        y_dpi_thresh (int): The minimum allowable DPI for the Y dimension.
+        save_folder (str): The directory where images extracted from the document will be saved.
+    """
+
+    def __init__(self, **kwargs):
+        """
+        Initializes the ImageDPICheck instance and sets up the DPI thresholds and save folder.
+
+        Args:
+            **kwargs: Additional keyword arguments, including 'x_dpi_thresh' (minimum allowable X DPI), 
+                      'y_dpi_thresh' (minimum allowable Y DPI), and 'save_folder' (directory for saving images).
+        """
+        x_dpi_thresh = kwargs["x_dpi_thresh"]
+        y_dpi_thresh = kwargs["y_dpi_thresh"]
+        save_folder = kwargs['save_folder']
+
+        super().__init__("image_dpi_check", 0.5, x_dpi_thresh=x_dpi_thresh, y_dpi_thresh=y_dpi_thresh, save_folder=save_folder)
+
+    def suaitability_placeholder(self, image_path):
+        """
+        Get an image's suitability for DPI.
+
+        This method serves as a placeholder for making API calls or running local calculations to 
+        evaluate an image's DPI value.
+
+        Args:
+            image_path (str): The file path of the image to be analyzed.
+
+        Returns:
+            dict: A dictionary containing the DPI values for the image.
+        """
+        results = {"data": {}}
+        results["data"]["image_xy_dpi"] = image_xy_dpi(image_path)
+
+        return results
+
+    def predict(self, image_path):
+        """
+        Converts the document into images, checks their DPI values, and returns the indices of images that do not meet the threshold.
+
+        Args:
+            image_path (str): The file path of the document to be checked.
+
+        Returns:
+            tuple: A tuple containing a list of page indices with low DPI and the corresponding score (int).
+                   A score of 1 indicates that all pages meet the DPI thresholds, while a score of 0 indicates that some pages do not.
+        """
+        image_paths = doc_to_img(image_path, self._kwargs['save_folder'])
+
+        low_dpi_pg_idx = []
+        score = 1
+        try:
+            for ix, image_path in enumerate(image_paths):
+                results = self.suaitability_placeholder(image_path)
+                x_dpi = results['data']['image_xy_dpi'][0]['data']['image_xy_dpi']['X Dpi']
+                y_dpi = results['data']['image_xy_dpi'][0]['data']['image_xy_dpi']['Y Dpi']
+
+                if x_dpi < self._kwargs['x_dpi_thresh'] or y_dpi < self._kwargs['y_dpi_thresh']:
+                    low_dpi_pg_idx.append(ix + 1)
+                    score = 0
+        except Exception as e:
+            LogUtil.log(LogType.ERROR, LogLevel.ERROR, e)
+
+        return low_dpi_pg_idx, score
+
+    def format_response(self):
+        self.response["prediction"]["blank_page_check"] = self.pred[0]
+        self.response["score"] = self.pred[1]
