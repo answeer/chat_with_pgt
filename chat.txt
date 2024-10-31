@@ -1,32 +1,5 @@
-The SoftwareCheck class is designed to detect potentially untrusted software used to create or modify PDF or image files by scanning their metadata. By comparing the software information in file metadata against a blacklist, it helps identify files that may be tampered with or created by untrusted software.
-
-Class Overview
-This class extends a Scanner base class, implementing file-specific checks on metadata to extract the software used to create the file. If the software matches an entry on a predefined blacklist, the file is flagged as potentially tampered with. This can be particularly useful in workflows where files from untrusted sources are involved, such as digital document verification, content management, or cybersecurity.
-
-Core Components
-Initialization (__init__ method):
-Initializes SoftwareCheck with a specific name (software_check) and a default score (0.5).
-Takes a software_blacklist argument from kwargs, a list of software names deemed untrusted. This blacklist is used to validate the software detected in file metadata.
-PDF Software Validator (pdf_software_validator method):
-Takes a software name from the file metadata and checks if it is in the blacklist.
-Returns:
-Message: If the software is blacklisted, it labels the file as “Potentially tampered.” If the software is not in the blacklist, it indicates the file is “Potentially not tampered.”
-Score: A score of 0 for blacklisted software and 1 for safe software.
-Prediction (predict method):
-Detects the file format based on its extension (pdf or image format) and applies the corresponding metadata extraction method.
-For PDF files:
-Uses PdfReader to extract the Producer field from the file's metadata, which often contains the software used to create or modify the document.
-For image files:
-Uses Pillow to open the image and extract its EXIF metadata.
-Retrieves the "Software" field if available, which records the image editing software.
-Software Validation:
-Standardizes the software name by removing numbers and special characters, leaving only alphabetic characters.
-Passes the extracted software name to pdf_software_validator to determine if it’s blacklisted, and returns a prediction message and score.
-Response Formatting (format_response method):
-Modifies the response dictionary to include the software check result (software_check) and the score, making the results accessible for further analysis.
-Brief Introduction
-The SoftwareCheck class is a metadata analysis tool that verifies the software used to create or modify PDF and image files. By scanning metadata, it identifies potentially tampered files based on a blacklist of untrusted software, making it suitable for document verification systems or digital forensics.
-This method receives an HTML string (data) and analyzes it for harmful tags and attributes.
-It uses the bleach library to clean the HTML content, stripping out any tags or attributes that are not in an allowed list.
-If bleach alters the original data, indicating potentially harmful content, it proceeds to check for matches against each pattern in scripts_pattern.
-For each match found, it appends the type of harmful content detected (from the pattern names) to a list and forms a prediction message with a score. A score of 0 indicates the presence of harmful content, while 1 means the content appears clean.
+File-Type Specific Methods: Each method uses file-specific libraries to check for encryption:
+is_pwd_pdf: Uses fitz to detect if a PDF requires a password (needs_pass attribute).
+is_pwd_msdoc: Uses msoffcrypto to check encryption in Microsoft Office documents (e.g., .doc, .docx, .xls, .xlsx).
+is_pwd_7z: Uses py7zr for 7z archives. It attempts to extract the archive and returns True if a password is required.
+is_pwd_zip: Uses zipfile to test if a ZIP archive is encrypted by attempting to read its content.
