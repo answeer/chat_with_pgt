@@ -1,30 +1,64 @@
-The ImageBlurCheck class is designed to detect blurry pages within a document by analyzing each page's blurriness score against a defined threshold. By identifying pages that fail this threshold, it flags the blurry pages, making this tool useful in workflows involving scanned documents or any document-dependent system requiring clear image quality.
+from llm_sanitation.scanners.scanner_base import Scanner
+from PIL import Image
+import os
+from llm_sanitation.logging.logging_setup import LogUtil, LogType, LogLevel
 
-Class Overview
-This class extends a Scanner base class, implementing a blurriness evaluation to detect unclear or blurry pages. Each document page is converted into an image and assessed with a custom blurriness score function. Pages exceeding the threshold are flagged as blurry.
+class ImageDimCheck(Scanner):
+    """
+    A class to check the dimensions (height and width) of an image and validate them against specified thresholds.
 
-Core Components
-Initialization (__init__ method):
-Initializes ImageBlurCheck with:
-score_thresh: Blurriness score threshold above which a page is considered blurry.
-save_folder: Directory for saving images generated from document pages.
-Suitability Placeholder (suitability_placeholder method):
-A placeholder for calculating or retrieving the blurriness score. In a production setup, this might make API calls or invoke a local function for score computation.
-Args: Takes image_path (file path to the page image).
-Returns: A dictionary with a computed blurriness_score for the image.
-Predict (predict method):
-Processes the document to detect blurry pages.
-Steps:
-Converts document pages to images using the doc_to_img utility.
-Iterates through each page image and calculates its blurriness score.
-If the score exceeds score_thresh, the page index is flagged as blurry.
-Args: image_path for the document to be analyzed.
-Returns: A tuple with:
-A list of page indices identified as blurry.
-A score (0 if blurry pages are detected, 1 otherwise).
-Response Formatting (format_response method):
-Updates the response dictionary to include:
-Blurness Check Prediction: List of blurry page indices.
-Score: Indicates the presence or absence of blurry pages.
-Brief Introduction
-The ImageBlurCheck class identifies blurry pages in a document by evaluating each page's blurriness score, making it ideal for document-processing systems needing high-quality images. This is achieved through page-by-page analysis, flagging any pages that exceed a given blurriness threshold.
+    This class extends the `Scanner` base class and provides functionality to determine if an image file's dimensions
+    meet the minimum required size.
+
+    Attributes:
+        img_dim_thresh (tuple): A tuple containing the minimum required height and width for the image.
+    """
+
+    def __init__(self, **kwargs):
+        """
+        Initializes the ImageSizeCheck instance and sets up the image size thresholds.
+
+        Args:
+            **kwargs: Additional keyword arguments, including 'img_dim_thresh' which is a tuple of minimum required
+                      image dimensions (height, width).
+        """
+        img_dim_thresh = kwargs['img_dim_thresh']
+        super().__init__("img_dimension", 0.5, img_dim_thresh=img_dim_thresh)
+
+    def predict(self, image_path):
+        """
+        Checks the dimensions of the image and validates them against the specified thresholds.
+
+        Args:
+            image_path (str): The file path of the image to be checked.
+
+        Returns:
+            tuple: A tuple containing a prediction message (str) indicating whether the image size is valid 
+                   and the corresponding score (int).
+                   A score of 1 indicates that the image size is within the valid range, while a score of 0 indicates that it is not.
+        """
+        try:
+            extn = os.path.split(image_path)[-1].split(".")[-1].lower()
+            if extn in ["tiff", "tif", "png", "jpg", "jpeg"]:
+                img = Image.open(image_path)
+                height, width = img.size
+                height_thresh, width_thresh = self._kwargs['img_dim_thresh']
+                if height >= height_thresh and width >= width_thresh:
+                    predict = f"The image size {(height, width)} for this image is valid."
+                    score = 1
+                else:
+                    predict = f"The image size for this image is NOT valid. Image size is {(height, width)}. Please upload a valid image with sufficient size."
+                    score = 0
+            else:
+                predict = "Doc Type '{}' not supported".format(extn)
+                score = 0
+        except Exception as e:
+            LogUtil.log(LogType.ERROR, LogLevel.ERROR, e)
+            predict = "Error occurred: {}".format(e)
+            score = 0
+
+        return predict, score
+
+    def format_response(self):
+        self.response["prediction"]["img_size"] = self.pred[0]
+        self.response["score"] = self.pred[1]
