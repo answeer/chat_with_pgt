@@ -1,44 +1,85 @@
-import matplotlib.pyplot as plt
-import numpy as np
+from llm_sanitation.scanners.scanner_base import Scanner
+import bleach
+import re
+from llm_sanitation.logging.logging_setup import LogUtil, LogType, LogLevel
 
-class EvalDataset:
-    # 省略其他方法
+class ExecutableScript(Scanner):
+    """
+    A class to detect the presence of potentially harmful executable scripts in HTML content.
 
-    def plot_inference_time_vs_tokens(self, results, save_path='inference_time_vs_tokens.png'):
-        plt.figure(figsize=(12, 8))
+    This class extends the `Scanner` base class and provides functionality to check for embedded 
+    scripts and other potentially harmful HTML tags and attributes. It uses regular expressions 
+    to identify these patterns and assigns a score based on the findings.
 
-        for model_nm, (token_counts, inference_times) in results.items():
-            # 添加轻微的随机偏移来避免完全重叠
-            jitter_x = np.random.normal(0, 2, size=len(token_counts))  # X 轴轻微随机偏移
-            jitter_y = np.random.normal(0, 0.005, size=len(inference_times))  # Y 轴轻微随机偏移
+    Attributes:
+        scripts_pattern (dict): A dictionary of regular expressions for detecting various 
+                                types of executable scripts and HTML tags/attributes.
+    """
 
-            plt.scatter(
-                np.array(token_counts) + jitter_x,
-                np.array(inference_times) + jitter_y,
-                alpha=0.6,  # 设置透明度
-                label=model_nm,
-                s=30,  # 点的大小
-                edgecolor='k'  # 增加边框以区分重叠点
-            )
+    def __init__(self, **kwargs):
+        """
+        Initializes the ExecutableScript instance and sets up the regular expressions for detecting 
+        various types of executable scripts and HTML tags/attributes.
 
-        plt.xlabel('Token Count')
-        plt.ylabel('Inference Time (seconds)')
-        plt.title('Inference Time vs Token Count Comparison for Models')
-        plt.legend(title='Model')
-        plt.savefig(save_path)
-        plt.show()
-        print(f"Inference time vs token count plot saved to {save_path}")
+        Args:
+            **kwargs: Additional keyword arguments (not utilized in this implementation).
+        """
+        super().__init__("executable_script", 0.8)
+        self.scripts_pattern = {
+            "embedded script": re.compile(r"<script.*?>.*?</script>"),
+            "iframe": re.compile(r"<iframe.*?>.*?</iframe>"),
+            "object": re.compile(r"<object.*?>.*?</object>"),
+            "embed": re.compile(r"<embed.*?>.*?</embed>"),
+            "applet": re.compile(r"<applet.*?>.*?</applet>"),
+            "link": re.compile(r"<link.*?>"),
+            "style": re.compile(r"<style.*?>.*?</style>"),
+            "JavaScript event handlers": re.compile(r"on\w+=\s*['\"].+?['\"]"),
+            "JavaScript": re.compile(r"<JavaScript\s*:"),
+            "data": re.compile(r"<JavaScript\s*:"),
+            "img tag with src": re.compile(r"<img.*?src\s*['\"].*?['\"].*?>"),
+            "a tag with href": re.compile(r"<a.*?href\s*['\"].*?['\"].*?>"),
+            "body": re.compile(r"<body.*?online=.*?>"),
+            "input": re.compile(r"<input.*?>"),
+            "form": re.compile(r"<form.*?>.*?</form>"),
+            "marquee": re.compile(r"<marquee.*?>.*?</marquee>"),
+            "base": re.compile(r"<base.*?>"),
+        }
 
+    def predict(self, data):
+        """
+        Analyzes the provided HTML content to detect executable scripts or harmful tags.
 
-if __name__ == "__main__":
-    model_list = ['minicheck', 'hhem', 'factual_consistency']
-    eval_dataset = EvalDataset()
-    sample_ratio = 0.1
+        This method uses the defined regular expressions to check the HTML code for embedded scripts 
+        or tags that might execute code. It returns a prediction message and a score based on the findings.
 
-    results = {}
-    for model_nm in model_list:
-        print(f"Running evaluation for {model_nm}...")
-        token_counts, _, _, inference_times = eval_dataset.run(model_nm, sample_ratio=sample_ratio)
-        results[model_nm] = (token_counts, inference_times)
+        Args:
+            data (str): The HTML content to be analyzed.
 
-    eval_dataset.plot_inference_time_vs_tokens(results)
+        Returns:
+            tuple: A tuple containing the prediction message (str) and the corresponding score (int).
+                   A score of 0 indicates the presence of executable scripts, while a score of 1 
+                   indicates the content is clean.
+        """
+        try:
+            # Clean the HTML content by stripping out potentially harmful tags.
+            cleaned_data = bleach.clean(data, strip=True)
+            if cleaned_data != data:
+                languages = []
+                for language, pattern in self.scripts_pattern.items():
+                    if re.search(pattern, data):
+                        languages.append(language)
+                prediction = "Found executable scripts: {}.".format(', '.join(languages))
+                score = 0
+            else:
+                prediction = "No executable scripts found."
+                score = 1
+        except Exception as e:
+            prediction = "Error occurred: {}".format(e)
+            score = 0
+            LogUtil.log(LogType.ERROR, LogLevel.ERROR, e)
+            
+        return prediction, score
+ 
+    def format_response(self):
+        self.response["prediction"]["executable_script"] = self.pred[0]
+        self.response["score"] = self.pred[1]
