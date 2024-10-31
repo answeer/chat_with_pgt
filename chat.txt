@@ -1,57 +1,19 @@
-from llm_sanitation.scanners.scanner_base import Scanner
-import os
-from llm_sanitation.logging.logging_setup import LogUtil, LogType, LogLevel
+he ImageMemoryCheck class is designed to validate the memory size of image files against specified thresholds, ensuring they meet certain criteria in terms of file size. This can be particularly useful in applications where image size is critical for performance, storage, or compliance reasons.
 
-class ImageMemoryCheck(Scanner):
-    """
-    A class to check the memory size of an image and validate it against specified minimum and maximum size thresholds.
-
-    This class extends the `Scanner` base class and provides functionality to determine if an image file's memory size 
-    falls within a defined range (in KB).
-
-    Attributes:
-        max_size (float): The maximum allowable size for the image in kilobytes (KB).
-        min_size (float): The minimum allowable size for the image in kilobytes (KB).
-    """
-
-    def __init__(self, **kwargs):
-        """
-        Initializes the ImageMemoryCheck instance and sets up the memory size thresholds.
-
-        Args:
-            **kwargs: Additional keyword arguments, including 'max_size' (maximum allowable image size in KB) 
-                      and 'min_size' (minimum allowable image size in KB).
-        """
-        max_size = kwargs["max_size"]
-        min_size = kwargs["min_size"]
-        super().__init__("img_memory", 0.5, max_size=max_size, min_size=min_size)
-
-    def predict(self, image_path):
-        """
-        Checks the memory size of the image and validates it against the specified thresholds.
-
-        Args:
-            image_path (str): The file path of the image to be checked.
-
-        Returns:
-            tuple: A tuple containing a prediction message (str) indicating whether the image size is valid 
-                   and the corresponding score (int).
-                   A score of 1 indicates that the image size is within the valid range, while a score of 0 indicates that it is not.
-        """
-        try:
-            img_memory = os.path.getsize(image_path) / 1024
-            if self._kwargs['min_size'] <= img_memory <= self._kwargs['max_size']:
-                predict = f"The image memory for this document is valid, memory size is {img_memory:.2f} KB."
-                score = 1
-            else:
-                predict = f"The image memory for this image is NOT valid, memory size is {img_memory:.2f} KB."
-                score = 0
-        except Exception as e:
-            LogUtil.log(LogType.ERROR, LogLevel.ERROR, e)
-            predict = "Error occurred: {}".format(e)
-            score = 0
-        return predict, score
-
-    def format_response(self):
-        self.response["prediction"]["img_memory"] = self.pred[0]
-        self.response["score"] = self.pred[1]
+Overview
+Attributes:
+max_size: The maximum allowable size for the image in kilobytes (KB).
+min_size: The minimum allowable size for the image in kilobytes (KB).
+Methods:
+__init__:
+Initializes the class by setting up the size thresholds for image memory.
+predict:
+Checks the memory size of the specified image file.
+Validates whether the size falls within the defined minimum and maximum thresholds.
+Returns: A tuple containing:
+A prediction message indicating if the image size is valid.
+A score (1 if valid, 0 if not).
+format_response:
+Formats the prediction results and updates the response dictionary with the memory check results and the score.
+Summary
+The ImageMemoryCheck class is a useful utility in any image processing workflow, ensuring that images meet specified memory size requirements. This validation helps maintain performance standards and can prevent issues related to handling excessively large or small images in various applications.
