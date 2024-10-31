@@ -1,58 +1,36 @@
-from llm_sanitation.scanners.scanner_base import Scanner
-from llm_sanitation.logging.logging_setup import LogUtil, LogType, LogLevel
+The BinTransform class provides a mechanism for categorizing values based on predefined ranges, allowing you to assign categories dynamically based on input data. This approach is useful in data analysis, classification tasks, or any scenario where you need to group numeric values into distinct categories.
 
+Overview
+Attributes:
+default_category: The category that is returned if the input value does not fall within any defined range.
+categories: A list of dictionaries, each specifying a category with its name and the range of values it covers.
+Methods:
+__init__:
+Initializes the BinTransform instance with the default category and a list of categories. Each category is defined with its name and range.
+predict:
+Accepts a numeric value (int or float) and determines which category the value belongs to by checking it against the predefined ranges.
+Returns: The name of the category if the value falls within a defined range; otherwise, it returns the default category.
+Error Handling: Logs any exceptions that occur during the process.
+format_response:
+Formats the output by including the predicted category in the response dictionary. The score is set to None, as this implementation focuses on categorical classification rather than scoring.
+Example Usage
+Here’s a brief example of how to use the BinTransform class:
 
-class BinTransform(Scanner):
-    """
-    A class for performing bin-based categorization of values.
+python
+复制代码
+# Initialize the BinTransform instance
+bin_transformer = BinTransform(
+    default="Uncategorized",
+    categories=[
+        {"name": "Low", "range": (0, 10)},
+        {"name": "Medium", "range": (11, 20)},
+        {"name": "High", "range": (21, 30)}
+    ]
+)
 
-    This class extends the `Scanner` base class to categorize input values based on predefined ranges. 
-    It assigns a category to the value if it falls within any of the specified ranges, and returns 
-    the default category if no match is found.
-
-    Attributes:
-        default_catagory (str): The default category to return if no match is found.
-        catagories (list): A list of dictionaries where each dictionary defines a category with its range.
-    """
-
-    def __init__(self, **kwargs):
-        """
-        Initializes the BinTransform instance with specified categories and default category.
-
-        Args:
-            **kwargs: Keyword arguments including:
-                - "default" (str): The default category.
-                - "catagories" (list): A list of category dictionaries, each containing:
-                    - "name" (str): The name of the category.
-                    - "range" (tuple): A tuple specifying the inclusive range of values for the category.
-        """
-        self.default_catagory = kwargs["default"]
-        self.catagories = kwargs["catagories"]
-        super().__init__("bin_transform", None, catagories=kwargs["catagories"],
-                         default_catagory=kwargs["default"])
-
-    def predict(self, value):
-        """
-        Predicts the category of the given value based on predefined ranges.
-
-        Args:
-            value (float or int): The value to categorize.
-
-        Returns:
-            str: The name of the category that the value falls into, or the default category if no match is found.
-
-        Raises:
-            Exception: If an error occurs while processing the value.
-        """
-        try:
-            for catagory in self._kwargs["catagories"]:
-                lower, upper = catagory["range"]
-                if lower <= value <= upper:
-                    return catagory["name"]
-        except Exception as e:
-            LogUtil.log(LogType.ERROR, LogLevel.ERROR, e)
-        return self._kwargs["default_catagory"]
-
-    def format_response(self):
-        self.response["prediction"]["catagory"] = self.pred
-        self.response["score"] = None
+# Predict the category for a value
+value = 15
+category = bin_transformer.predict(value)
+print(f"The category for the value {value} is '{category}'.")  # Output: Medium
+Summary
+The BinTransform class is a versatile tool for categorizing numeric data into defined groups based on specific criteria. Its design allows for easy customization of categories and ranges, making it suitable for various applications where classification of numerical values is required.
