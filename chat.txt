@@ -1,45 +1,36 @@
-import profanity_check
-from llm_sanitation.scanners.scanner_base import Scanner
-from llm_sanitation.logging.logging_setup import LogUtil, LogType, LogLevel
+The ProfanityCheck class is designed to detect profanity in text data using the profanity_check library. This class extends the Scanner base class and provides methods to analyze text, return predictions about the presence of profanity, and offer a confidence score.
 
-class ProfanityCheck(Scanner):
-    """
-    A class to detect profanity in a given text using the `profanity_check` library.
+Overview
+Attributes:
+No specific attributes are defined in this class beyond those inherited from the Scanner base class.
+Methods:
+__init__:
+Initializes the ProfanityCheck instance. It calls the superclass constructor with the name "profanity" and a default threshold score of 0.5.
+predict:
+Accepts a string of text data and scans it for profanity.
+Returns: A tuple containing:
+A boolean indicating whether profanity was detected (True for detected, False for not detected).
+A confidence score (float) between 0 and 1 that represents the likelihood of the text containing profanity.
+Error Handling: If an exception occurs, it logs the error and returns a message indicating the error, along with a confidence score of 0.
+format_response:
+Formats the output by including the prediction (indicating if profanity was detected) and a score in the response dictionary. The score is inverted (1 - confidence score) to indicate the likelihood of non-profane content.
+Example Usage
+Here’s a brief example of how to use the ProfanityCheck class:
 
-    This class extends the `Scanner` base class and provides functionality to scan text data
-    for profanity and return a prediction along with a confidence score.
-    """
+python
+复制代码
+# Initialize the ProfanityCheck instance
+profanity_checker = ProfanityCheck()
 
-    def __init__(self, **kwargs):
-        """
-        Initializes the ProfanityCheck instance.
+# Example text data to check for profanity
+text_data = "This is a sample text with some bad words."
 
-        Args:
-            **kwargs: Additional keyword arguments (not used directly in this class).
-        """
-        super().__init__("profanity", 0.5)
-
-    def predict(self, data):
-        """
-        Scans the provided text data to detect the presence of profanity.
-
-        Args:
-            data (str): The text data to be scanned for profanity.
-
-        Returns:
-            tuple: A tuple containing a boolean prediction indicating whether profanity was detected (True for yes, False for no),
-                   and a confidence score (float) between 0 and 1 representing the likelihood of the text containing profanity.
-        """
-        try:
-            predict = profanity_check.predict([data])
-            score = profanity_check.predict_prob([data])
-            predict = bool(predict[0])
-        except Exception as e:
-            LogUtil.log(LogType.ERROR, LogLevel.ERROR, e)
-            predict = "Error occurred: {}".format(e)
-            score = [0]
-        return predict, score[0]
-
-    def format_response(self):
-        self.response["prediction"]["Contain_profanity"] = self.pred[0]
-        self.response["score"] = 1 - self.pred[1]
+# Check for profanity
+result = profanity_checker.predict(text_data)
+print(result)  # Output: (True or False, confidence score)
+Considerations
+Accuracy: The effectiveness of profanity detection will depend on the underlying model used by the profanity_check library. Testing with various inputs is recommended to evaluate performance.
+Customization: You may want to customize the list of profane words or phrases based on your application's context. This can often be done by modifying the library’s configuration if it supports it.
+Scalability: If you plan to check large volumes of text, consider the efficiency of the underlying library and its ability to handle bulk requests.
+Summary
+The ProfanityCheck class provides a straightforward and effective way to detect profanity in text. Its integration with the profanity_check library enables it to return a clear prediction and confidence score, making it suitable for applications that require content moderation or filtering. The class structure allows for easy extension and customization based on specific needs.
