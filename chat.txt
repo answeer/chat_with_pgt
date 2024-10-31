@@ -26,3 +26,7 @@ Response Formatting (format_response method):
 Modifies the response dictionary to include the software check result (software_check) and the score, making the results accessible for further analysis.
 Brief Introduction
 The SoftwareCheck class is a metadata analysis tool that verifies the software used to create or modify PDF and image files. By scanning metadata, it identifies potentially tampered files based on a blacklist of untrusted software, making it suitable for document verification systems or digital forensics.
+This method receives an HTML string (data) and analyzes it for harmful tags and attributes.
+It uses the bleach library to clean the HTML content, stripping out any tags or attributes that are not in an allowed list.
+If bleach alters the original data, indicating potentially harmful content, it proceeds to check for matches against each pattern in scripts_pattern.
+For each match found, it appends the type of harmful content detected (from the pattern names) to a list and forms a prediction message with a score. A score of 0 indicates the presence of harmful content, while 1 means the content appears clean.
