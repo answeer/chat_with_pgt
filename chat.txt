@@ -1,36 +1,86 @@
-The BinTransform class provides a mechanism for categorizing values based on predefined ranges, allowing you to assign categories dynamically based on input data. This approach is useful in data analysis, classification tasks, or any scenario where you need to group numeric values into distinct categories.
+from llm_sanitation.scanners.scanner_base import Scanner
+from llm_sanitation.utils.common import read_config
+from llm_sanitation.logging.logging_setup import LogUtil, LogType, LogLevel
 
-Overview
-Attributes:
-default_category: The category that is returned if the input value does not fall within any defined range.
-categories: A list of dictionaries, each specifying a category with its name and the range of values it covers.
-Methods:
-__init__:
-Initializes the BinTransform instance with the default category and a list of categories. Each category is defined with its name and range.
-predict:
-Accepts a numeric value (int or float) and determines which category the value belongs to by checking it against the predefined ranges.
-Returns: The name of the category if the value falls within a defined range; otherwise, it returns the default category.
-Error Handling: Logs any exceptions that occur during the process.
-format_response:
-Formats the output by including the predicted category in the response dictionary. The score is set to None, as this implementation focuses on categorical classification rather than scoring.
-Example Usage
-Here’s a brief example of how to use the BinTransform class:
+class HarmfulString(Scanner):
+    """
+    A class to detect harmful strings in text data.
 
-python
-复制代码
-# Initialize the BinTransform instance
-bin_transformer = BinTransform(
-    default="Uncategorized",
-    categories=[
-        {"name": "Low", "range": (0, 10)},
-        {"name": "Medium", "range": (11, 20)},
-        {"name": "High", "range": (21, 30)}
-    ]
-)
+    This class extends the `Scanner` base class to identify specific harmful strings
+    from a configuration file within given text data.
+    Attributes:
+        case_sensitive (bool): Indicates whether the search for harmful strings should be case-sensitive.
+        harm_str (dict): A dictionary of harmful strings loaded from a configuration file.
+    """
 
-# Predict the category for a value
-value = 15
-category = bin_transformer.predict(value)
-print(f"The category for the value {value} is '{category}'.")  # Output: Medium
-Summary
-The BinTransform class is a versatile tool for categorizing numeric data into defined groups based on specific criteria. Its design allows for easy customization of categories and ranges, making it suitable for various applications where classification of numerical values is required.
+    def __init__(self, **kwargs):
+        """
+        Initializes the HarmfulString instance.
+
+        Args:
+            **kwargs: Additional keyword arguments, including 'case_sensitive' to control case sensitivity of the search.
+        """
+        case_sensitive = kwargs['case_sensitive']
+        super().__init__("harmful_string", 0.5,case_sensitive=case_sensitive)
+        self.harm_str = read_config("harmful_strings.yml")
+
+    # def redact_text(self, text, substrings):
+    #     """
+    #     Redacts harmful substrings from the given text by replacing them with "[REDACTED]".
+
+    #     Args:
+    #         text (str): The text in which harmful substrings are to be redacted.
+    #         substrings (list): A list of harmful substrings to be redacted.
+
+    #     Returns:
+    #         str: The text with harmful substrings redacted.
+    #     """
+    #     redacted_text = text
+    #     for s in substrings:
+    #         redacted_text = redacted_text.replace(s, "[REDACTED]")
+    #     return redacted_text
+
+    def predict(self, data):
+        """
+        Detects harmful strings in the provided text and optionally sanitizes it.
+
+        Args:
+            data (str): The text data to be checked for harmful strings.
+
+        Returns:
+            tuple: A tuple containing:
+                - A message indicating the presence of harmful strings or lack thereof.
+                - A score indicating the result (1 for no harmful strings, 0 for detected harmful strings).
+                - The sanitized text if harmful strings were detected and sanitization is enabled.
+        """
+        # sanitized_data = data
+        matched_substrings = []
+        # missing_substrings = []
+        try:
+            for s in self.harm_str['harmful_strings']:
+                if not self._kwargs['case_sensitive']:
+                    s, data = s.lower(), data.lower()
+
+                if s in data:
+                    matched_substrings.append(s)
+                # else:
+                #     missing_substrings.append(s)
+            if matched_substrings:
+                # if self._kwargs['sanitize']:
+                #     sanitized_data = self.redact_text(sanitized_data, matched_substrings)
+                predict = "Found the harmful strings: {}.".format(', '.join(matched_substrings))
+                score = 0
+            else:
+                predict = "No harmful strings found."
+                score = 1
+        except Exception as e:
+            LogUtil.log(LogType.ERROR, LogLevel.ERROR, e)
+            predict = "Error occurred: {}".format(e)
+            score = 0
+
+        return predict, score
+
+    def format_response(self):
+        self.response["prediction"]["harmful_string"] = self.pred[0]
+        self.response["score"] = self.pred[1]
+        # self.response['sanitized_data'] = self.pred[2]
