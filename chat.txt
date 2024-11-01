@@ -1,52 +1,82 @@
-Microsoft Presidio is an open-source tool specifically designed for detecting and redacting Personally Identifiable Information (PII) and sensitive data in textual data. It’s highly customizable and can be integrated into various applications for privacy and compliance needs. Here’s a deeper look at what Presidio offers and how it works.
+from llm_sanitation.scanners.scanner_base import Scanner
+import unicodedata
+from llm_sanitation.logging.logging_setup import LogUtil, LogType, LogLevel
 
-Key Components of Presidio
-Presidio Analyzer
-The Analyzer is responsible for identifying PII entities in text.
-It uses an NlpEngine to tokenize and parse text, identifying entities based on patterns, context, and even custom recognizers.
-Entity Recognizers: The Analyzer includes recognizers for standard PII types, like names, addresses, phone numbers, credit card numbers, and more. Each recognizer uses:
-Pattern-based matching: Predefined regex patterns are used to match structured data (e.g., phone numbers, social security numbers).
-Machine learning-based matching: Language models (such as SpaCy) and NLP techniques can detect named entities, context-sensitive phrases, and other PII in free-text.
-Context-aware enhancements: Enhancers add context to detections, increasing accuracy by scoring matches higher if they’re close to certain keywords or fit certain contexts.
-Presidio Anonymizer
-The Anonymizer is responsible for redacting or masking identified PII from text.
-Users can specify various anonymization methods for each detected entity type:
-Redaction: Replacing PII with a placeholder (e.g., [NAME] or [REDACTED]).
-Masking: Partially hiding information, such as showing only the last four digits of a credit card.
-Hashing: Converting PII into a hash value, useful in maintaining consistency without storing original values.
-Customizable Replacements: Enables the replacement of PII with custom values or format transformations.
-The anonymization approach is configurable per entity type, allowing control over the degree of information that is removed or masked.
-NLP Engine
-Presidio supports multiple NLP engines (SpaCy, Stanza, etc.), and users can configure their choice of engine based on language support, accuracy, and performance.
-NLP engines are responsible for language parsing, tokenization, and entity recognition.
-Presidio’s configuration allows specifying custom models, making it adaptable to specific languages or industry jargon.
-Recognizer Registry
-The RecognizerRegistry maintains a collection of recognizers (both predefined and custom).
-Users can register custom recognizers with tailored patterns and contexts, which is essential for organizations with specific PII detection requirements that go beyond standard types.
-For example, an organization might need to detect internal identifiers, customer IDs, or even sensitive keywords that are unique to its operations.
-Workflow in Presidio
-Configuration and Initialization:
-Users configure NLP engines and specify entity types, thresholds, and custom recognizers through YAML configuration files.
-Presidio loads these settings upon initialization, tailoring its pipeline to specific requirements.
-Detection Process:
-Text data is passed to the AnalyzerEngine, which tokenizes and parses the text to detect entities based on predefined patterns, ML models, and context-aware scoring.
-Recognizers within the registry contribute to the detection of PII by matching patterns and providing scores based on confidence levels.
-Anonymization Process:
-Detected entities are sent to the AnonymizerEngine, which applies the chosen anonymization method.
-Custom anonymization options allow organizations to redact, hash, or mask PII according to their specific privacy policies or data handling requirements.
-Advantages of Presidio
-Highly Customizable: Users can define custom regex patterns, context rules, and recognizers, allowing for detection of non-standard PII or sensitive information specific to an organization.
-Language Support: By leveraging SpaCy or other NLP engines, Presidio supports multiple languages, expanding its usability across regions and industries.
-Scalability: Presidio can be deployed in various environments, including cloud services, as a microservice, or embedded within applications, making it scalable and adaptable.
-Compliance Ready: Presidio’s PII detection and redaction capabilities make it well-suited for GDPR, HIPAA, and other privacy standards that require data sanitization.
-Open Source and Extendable: Being open-source, Presidio can be extended with custom modules, making it adaptable to evolving privacy and security requirements.
-Common Use Cases
-Data Anonymization in Customer Support: Detects and redacts PII from customer queries, chat logs, and emails before saving them for analytics or machine learning.
-Redacting Sensitive Data in Documents: Companies can sanitize reports, contracts, and other documents by redacting PII before sharing them with third parties.
-Preprocessing Data for AI/ML: Detects and masks PII in datasets to ensure privacy compliance when training models.
-Log Anonymization: Sensitive data in server or application logs can be anonymized in real-time, preventing accidental exposure.
-Example Scenarios
-Financial Services: Automatically detect and mask customer information in financial documents, logs, and support conversations.
-Healthcare: Detect and anonymize patient information in electronic health records (EHR), research datasets, or clinical trial documents.
-E-commerce: Mask customer data like phone numbers, credit card numbers, and addresses before processing or analyzing customer feedback.
-In summary, Presidio offers a powerful and flexible way to handle PII detection and anonymization, which can be customized to meet specific organizational needs. It is a robust option for any project requiring privacy-preserving data handling in NLP.
+class RemoveUnicode(Scanner):
+    """
+    A Scanner class to detect and remove invisible Unicode characters from text data.
+
+    This class identifies and optionally removes invisible Unicode characters (e.g., format, 
+    control, private use, and unassigned characters) from the provided text. It extends the 
+    Scanner base class and provides a sanitization feature specifically for these characters.
+
+    Attributes:
+        sanitize (bool): Flag to indicate whether to perform the sanitization.
+        banned_categories (list): List of Unicode categories considered as invisible characters.
+    """
+
+    def __init__(self, **kwargs):
+        """
+        Initializes the RemoveUnicode scanner.
+
+        Args:
+            sanitize (bool): Flag indicating whether the text should be sanitized.
+        """
+        sanitize = kwargs["sanitize"]
+        super().__init__("invisible_text_check", 0.5, sanitize=sanitize)
+        # 'Cf' (Format characters), 'Cc' (Control characters), 'Co' (Private use characters), and 'Cn' (Unassigned characters)
+        self.banned_categories = ["Cf", "Cc", "Co", "Cn"]
+
+    @staticmethod
+    def contains_unicode(text: str):
+        """
+        Checks if the text contains any non-ASCII characters.
+
+        Args:
+            text (str): The input text to check for Unicode characters.
+
+        Returns:
+            bool: True if non-ASCII characters are found, False otherwise.
+        """
+        return any(ord(char) > 127 for char in text)
+
+    def predict(self, data):
+        """
+        Identifies and removes invisible Unicode characters from the provided text data.
+
+        Args:
+            data (str): The input text from which invisible characters need to be detected and removed.
+
+        Returns:
+            tuple: A tuple containing a prediction message, a score (1 for success, 0 for failure), 
+                   and the sanitized text.
+        """
+        sanitized_text = data
+        score = 0
+        try:
+            if not self.contains_unicode(data):
+                predict = "No invisible characters found"
+                score = 1
+            else:
+                chars = []
+                for char in data:
+                    if unicodedata.category(char) not in self.banned_categories:
+                        continue
+
+                    chars.append(char)
+                    data = data.replace(char, "")
+                if chars:
+                    predict = "Found invisible characters in the text:{}".format(', '.join(chars))
+                    sanitized_text = data
+                else:
+                    predict = "No invisible characters found"
+                    score = 1
+        except Exception as e:
+            LogUtil.log(LogType.ERROR, LogLevel.ERROR, e)
+        
+        return predict, score, sanitized_text
+
+    def format_response(self):
+        self.response["prediction"]["invisible_text_check"] = self.pred[0]
+        self.response["score"] = self.pred[1]
+        self.response['sanitized_data'] = self.pred[2]
