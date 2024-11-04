@@ -1,50 +1,45 @@
-The JsonValidator scanner is a validation tool designed to check if a JSON payload adheres to a specific structure and mandated key-value requirements, especially those requiring compliance with certain patterns. Here’s a detailed breakdown of how it operates:
+The Transformer architecture, introduced by Vaswani et al. in their 2017 paper, Attention Is All You Need, revolutionized the field of natural language processing (NLP) by discarding recurrent and convolutional layers and instead focusing on self-attention mechanisms. This architecture is efficient, highly parallelizable, and achieves superior performance on various tasks, such as language translation and text generation.
 
-Key Components of JsonValidator
+Here’s an overview of the main components and architecture of a Transformer model:
 
-	1.	Mandated Checks:
-	•	During initialization, the JsonValidator accepts a dictionary called mandate_checks, where each key corresponds to a required field in the JSON and is mapped to a regular expression pattern that defines acceptable values for that key.
-	•	This allows flexible validation of nested structures or complex patterns within the JSON payload.
-	2.	Key Retrieval:
-	•	The get_value method enables access to values within a nested JSON payload using dot notation, making it straightforward to validate deeply nested keys.
-	3.	Validation of Mandated Keys:
-	•	The check_mandate_keys method iterates through each key defined in mandate_checks.
-	•	For each key:
-	•	If the key is missing in the JSON, it adds an entry to predict and assigns a score of 0 for that key.
-	•	If present, the method checks whether the value adheres to the specified regex pattern. If it does, a score of 1 is assigned; if it doesn’t, the key’s value is noted as invalid in predict.
-	4.	JSON Format Check:
-	•	The check_json_format method ensures the input is a valid JSON by attempting to parse it. Any errors in this parsing process are captured and reported, which is useful for handling improperly formatted JSON data.
-	5.	Predict Method:
-	•	The main method, predict, first verifies the format of the input payload. If it isn’t valid JSON, an error is returned.
-	•	If valid, it proceeds with the mandate key checks, accumulating both the prediction results and average score for the validation outcome.
-	6.	Formatting the Response:
-	•	format_response integrates the predictions and score into the response dictionary, making it compatible with other scanners.
+1. Overall Structure
 
-Example Scenarios for JsonValidator
+	•	The Transformer consists of an encoder-decoder architecture, with the encoder processing the input sequence and the decoder generating the output sequence. The encoder and decoder are both composed of multiple identical layers (typically 6-12 layers in modern implementations).
 
-The JsonValidator can be highly useful in the following cases:
+2. Encoder
 
-	•	API Input Validation: Ensuring the structure and values of JSON payloads submitted via APIs match the expected format before processing.
-	•	Data Integrity Checks: Validating that JSON configurations or settings files contain mandatory fields with acceptable values.
-	•	Compliance Verification: Enforcing that required fields in data submissions follow specific patterns, such as email formats, date structures, or numeric ranges.
+	•	Each encoder layer has two main components:
+	•	Self-Attention Mechanism: This mechanism allows the model to weigh the importance of different words in a sentence relative to each other. The self-attention is computed in three steps:
+	1.	Query, Key, and Value Vectors: Each word in the input sequence is mapped to three vectors (query, key, and value) through learned linear transformations.
+	2.	Attention Weights Calculation: The attention score between each word and every other word is calculated using a scaled dot-product between the query and key vectors. This score is then normalized using a softmax function.
+	3.	Weighted Sum for Attention Output: The value vectors are weighted by these scores, allowing the model to focus on relevant words.
+	•	Feedforward Neural Network (FFN): This component is a fully connected neural network applied to each position independently. It typically has two linear layers with a ReLU activation in between.
+	•	Residual Connections and Layer Normalization: Residual (skip) connections are added around both the self-attention and feedforward layers to enable smoother gradient flow, and each layer is followed by layer normalization.
 
-Example Outputs
+3. Decoder
 
-	•	Valid JSON, All Checks Passed:
-	•	Prediction: ["Valid JSON payload."]
-	•	Score: 1
-	•	Indicates the JSON matches the mandated structure and all patterns.
-	•	Missing or Invalid Keys:
-	•	Prediction: ["Key emailnot found", "For Keydate value '13-25-2023' is not in the correct pattern."]
-	•	Score: Calculated as the mean score, reflecting the proportion of fields that passed validation.
-	•	Invalid JSON Format:
-	•	Prediction: Returns the parsing error, like "Expecting ',' delimiter: line 1 column 42 (char 41)"
-	•	Score: 0
+	•	Each decoder layer also has two main components but with an additional layer for cross-attention:
+	•	Masked Self-Attention Mechanism: Similar to the encoder’s self-attention, but with a mask to prevent attending to future tokens, ensuring the model generates output in a sequential manner.
+	•	Cross-Attention Mechanism: This mechanism allows the decoder to attend to the encoder’s output, enabling the decoder to focus on relevant parts of the input sequence.
+	•	Feedforward Neural Network: The FFN here is similar to that in the encoder.
+	•	Residual Connections and Layer Normalization: As with the encoder, residual connections and layer normalization help maintain stable gradients.
 
-Code Enhancement Suggestions
+4. Positional Encoding
 
-	1.	Dynamic Error Messages: Adding more specific error messages could help users quickly understand why a particular value is invalid.
-	2.	Enhanced Pattern Matching: Allow specifying multiple acceptable patterns per key to handle cases where different formats may be acceptable.
-	3.	Additional Key Type Checks: Implement type checking to ensure values match expected data types (e.g., string, integer), in addition to pattern matching.
+	•	Since Transformers lack inherent sequence awareness, positional encoding is added to the input embeddings to retain information about the word order in a sentence. Positional encodings are usually computed as sinusoidal functions and are added to the embeddings before feeding into the encoder and decoder layers.
 
-With its flexible validation rules and handling of nested JSON, JsonValidator is a comprehensive scanner for JSON structure and value validation.
+5. Attention Heads and Multi-Head Attention
+
+	•	Instead of a single attention mechanism, Transformers use multi-head attention where several independent attention heads (typically 8 or 16) run in parallel. This allows the model to capture different types of relationships between words by learning separate attention patterns.
+
+6. Final Output
+
+	•	In sequence-to-sequence tasks, the decoder’s final output is passed through a linear layer followed by a softmax layer to predict the next word in the output sequence. In tasks like text classification, the encoder’s output can be used directly for predictions.
+
+Key Benefits:
+
+	•	Parallelization: The self-attention mechanism enables parallelization across all tokens in the input sequence, making Transformers faster and more efficient.
+	•	Better Long-Range Dependencies: Self-attention can directly model relationships between distant words in the sequence, unlike RNNs where such dependencies degrade over long sequences.
+	•	Scalability: The architecture scales well with large data and compute resources, which is why Transformers like BERT and GPT have been able to achieve state-of-the-art results.
+
+The success of the Transformer has led to many variants and adaptations, including BERT, GPT, and T5, which are tailored for specific tasks. This architecture forms the backbone of many modern NLP applications.
