@@ -1,40 +1,92 @@
-This RemoveUnicode scanner focuses on detecting and optionally removing invisible Unicode characters, which may include control characters, format characters, private use characters, and unassigned characters in text. These types of characters can often cause formatting issues, rendering problems, or unexpected behavior in text processing systems.
+from llm_sanitation.scanners.scanner_base import Scanner
+import tempfile
+import os
+from detect_secrets.core.secrets_collection import SecretsCollection
+from detect_secrets.settings import default_settings
+from presidio_anonymizer.core.text_replace_builder import TextReplaceBuilder
+from llm_sanitation.logging.logging_setup import LogUtil, LogType, LogLevel
 
-Key Components of RemoveUnicode
+class Secrets(Scanner):
+    """
+    A Scanner class that detects and optionally sanitizes secrets (e.g., API keys, passwords) in text data.
 
-	1.	Unicode Category Filtering:
-	•	The scanner identifies characters that belong to specific Unicode categories that are often invisible or non-printable. It does this by comparing each character in the text against a list of categories (Cf, Cc, Co, Cn) using the unicodedata library. Each of these categories represents:
-	•	Cf (Format Characters): Used to control text formatting (e.g., soft hyphen).
-	•	Cc (Control Characters): Used to control text flow or represent non-graphical commands (e.g., null, line feed).
-	•	Co (Private Use Characters): Customizable characters for internal use, which aren’t defined by Unicode standards.
-	•	Cn (Unassigned Characters): Characters that have not been assigned a specific function.
-	2.	Sanitization Control:
-	•	The scanner has a sanitize flag, which when enabled, actively removes detected invisible characters from the text.
-	•	If sanitize is set to False, the scanner will simply report the presence of these characters without modifying the text.
-	3.	Predict Function:
-	•	Detection Process: The predict function first checks if the text contains any Unicode characters beyond standard ASCII (ord > 127). This quick check allows skipping the sanitization process for plain ASCII text.
-	•	Character-by-Character Analysis: For text with Unicode characters, each character’s category is examined. If the character belongs to one of the banned_categories, it is removed (if sanitize is True).
-	•	Logging: Detected invisible characters are listed and reported. An exception handling mechanism ensures that any errors encountered during processing are logged.
+    This class uses the `detect-secrets` library to find sensitive information in the provided text. If sanitize
+    is enabled, the detected secrets are replaced with asterisks.
 
-Usage and Example Scenarios
+    Attributes:
+        sanitize (bool): Flag to indicate whether to perform the sanitization.
+        secrets (SecretsCollection): An instance of SecretsCollection for managing detected secrets.
+    """
 
-The RemoveUnicode scanner is useful in scenarios where invisible characters might disrupt downstream processes, such as:
+    def __init__(self, **kwargs):
+        """
+        Initializes the Secrets scanner.
 
-	•	Data Cleaning: Removing control characters in data preprocessing pipelines.
-	•	Document Sanitization: Cleaning documents or text fields that may contain special Unicode characters inserted inadvertently or maliciously.
-	•	Text Normalization: Preparing text for systems that might mishandle or misinterpret control or invisible characters, such as legacy databases or display systems.
+        Args:
+            sanitize (bool): Flag indicating whether the text should be sanitized by replacing detected secrets.
+        """
+        sanitize = kwargs["sanitize"]
+        super().__init__("secret_detector", 0.5, sanitize=sanitize)
+        self.secrets = SecretsCollection()
 
-Example Output
+    def predict(self, data):
+        """
+        Detects and optionally sanitizes secrets in the provided text data.
 
-Here’s how RemoveUnicode might respond:
+        This method scans the text for secrets using the `detect-secrets` library. If sanitization is enabled,
+        the detected secrets are replaced with asterisks in the sanitized text.
 
-	•	If Invisible Characters Are Detected:
-	•	Prediction: "Found invisible characters in the text: <character list>"
-	•	Sanitized Text: The text with all invisible characters removed.
-	•	Score: 1 (if sanitized successfully) or 0 (if invisible characters remain or an error occurs).
-	•	If No Invisible Characters Are Found:
-	•	Prediction: "No invisible characters found"
-	•	Score: 1
-	•	Sanitized Text: Returns the original text unaltered.
+        Args:
+            data (str): The input text to scan for secrets.
 
-This scanner effectively provides a way to maintain text integrity by identifying and handling invisible characters, which are often unnoticed but can cause unexpected issues.
+        Returns:
+            tuple: A tuple containing a prediction message, a score (1 for success, 0 for failure), and the sanitized text.
+        """
+        sanitized_text = data
+        score = 0
+        try:
+            temp_file = tempfile.NamedTemporaryFile(delete=False)
+            temp_file.write(data.encode("utf-8"))
+            temp_file.close()
+
+            with default_settings():
+                self.secrets.scan_file(str(temp_file.name))
+
+            secret_types = []
+            text_replace_builder = TextReplaceBuilder(original_text=data)
+            for file in self.secrets.files:
+                for found_secret in self.secrets[file]:
+                    secret_types.append(found_secret.type)
+                    if self._kwargs['sanitize']:
+                        character_start_index = data.find(found_secret.secret_value, None, None)
+                        character_end_index = character_start_index + len(str(found_secret.secret_value))
+                        secret_value = text_replace_builder.get_text_in_position(
+                            character_start_index, character_end_index
+                        )
+
+                        text_replace_builder.replace_text_get_insertion_index(
+                            "******",
+                            character_start_index,
+                            character_end_index,
+                        )   
+
+            os.remove(temp_file.name)
+
+            if secret_types:
+                predict = "Detected secrets in text: {}".format(', '.join(secret_types))
+                score = 1
+                sanitized_text = text_replace_builder.output_text
+
+            else:
+                predict = "No secrets detected in the text"
+        
+        except Exception as e:
+            LogUtil.log(LogType.ERROR, LogLevel.ERROR, e)
+            predict = "Error occurred: {}".format(e)
+
+        return predict, score, sanitized_text
+
+    def format_response(self):
+        self.response["prediction"]["secret_detector"] = self.pred[0]
+        self.response["score"] = 1 - self.pred[1]
+        self.response['sanitized_data'] = self.pred[2]
