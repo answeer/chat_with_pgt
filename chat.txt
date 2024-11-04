@@ -1,82 +1,40 @@
-from llm_sanitation.scanners.scanner_base import Scanner
-import unicodedata
-from llm_sanitation.logging.logging_setup import LogUtil, LogType, LogLevel
+This RemoveUnicode scanner focuses on detecting and optionally removing invisible Unicode characters, which may include control characters, format characters, private use characters, and unassigned characters in text. These types of characters can often cause formatting issues, rendering problems, or unexpected behavior in text processing systems.
 
-class RemoveUnicode(Scanner):
-    """
-    A Scanner class to detect and remove invisible Unicode characters from text data.
+Key Components of RemoveUnicode
 
-    This class identifies and optionally removes invisible Unicode characters (e.g., format, 
-    control, private use, and unassigned characters) from the provided text. It extends the 
-    Scanner base class and provides a sanitization feature specifically for these characters.
+	1.	Unicode Category Filtering:
+	•	The scanner identifies characters that belong to specific Unicode categories that are often invisible or non-printable. It does this by comparing each character in the text against a list of categories (Cf, Cc, Co, Cn) using the unicodedata library. Each of these categories represents:
+	•	Cf (Format Characters): Used to control text formatting (e.g., soft hyphen).
+	•	Cc (Control Characters): Used to control text flow or represent non-graphical commands (e.g., null, line feed).
+	•	Co (Private Use Characters): Customizable characters for internal use, which aren’t defined by Unicode standards.
+	•	Cn (Unassigned Characters): Characters that have not been assigned a specific function.
+	2.	Sanitization Control:
+	•	The scanner has a sanitize flag, which when enabled, actively removes detected invisible characters from the text.
+	•	If sanitize is set to False, the scanner will simply report the presence of these characters without modifying the text.
+	3.	Predict Function:
+	•	Detection Process: The predict function first checks if the text contains any Unicode characters beyond standard ASCII (ord > 127). This quick check allows skipping the sanitization process for plain ASCII text.
+	•	Character-by-Character Analysis: For text with Unicode characters, each character’s category is examined. If the character belongs to one of the banned_categories, it is removed (if sanitize is True).
+	•	Logging: Detected invisible characters are listed and reported. An exception handling mechanism ensures that any errors encountered during processing are logged.
 
-    Attributes:
-        sanitize (bool): Flag to indicate whether to perform the sanitization.
-        banned_categories (list): List of Unicode categories considered as invisible characters.
-    """
+Usage and Example Scenarios
 
-    def __init__(self, **kwargs):
-        """
-        Initializes the RemoveUnicode scanner.
+The RemoveUnicode scanner is useful in scenarios where invisible characters might disrupt downstream processes, such as:
 
-        Args:
-            sanitize (bool): Flag indicating whether the text should be sanitized.
-        """
-        sanitize = kwargs["sanitize"]
-        super().__init__("invisible_text_check", 0.5, sanitize=sanitize)
-        # 'Cf' (Format characters), 'Cc' (Control characters), 'Co' (Private use characters), and 'Cn' (Unassigned characters)
-        self.banned_categories = ["Cf", "Cc", "Co", "Cn"]
+	•	Data Cleaning: Removing control characters in data preprocessing pipelines.
+	•	Document Sanitization: Cleaning documents or text fields that may contain special Unicode characters inserted inadvertently or maliciously.
+	•	Text Normalization: Preparing text for systems that might mishandle or misinterpret control or invisible characters, such as legacy databases or display systems.
 
-    @staticmethod
-    def contains_unicode(text: str):
-        """
-        Checks if the text contains any non-ASCII characters.
+Example Output
 
-        Args:
-            text (str): The input text to check for Unicode characters.
+Here’s how RemoveUnicode might respond:
 
-        Returns:
-            bool: True if non-ASCII characters are found, False otherwise.
-        """
-        return any(ord(char) > 127 for char in text)
+	•	If Invisible Characters Are Detected:
+	•	Prediction: "Found invisible characters in the text: <character list>"
+	•	Sanitized Text: The text with all invisible characters removed.
+	•	Score: 1 (if sanitized successfully) or 0 (if invisible characters remain or an error occurs).
+	•	If No Invisible Characters Are Found:
+	•	Prediction: "No invisible characters found"
+	•	Score: 1
+	•	Sanitized Text: Returns the original text unaltered.
 
-    def predict(self, data):
-        """
-        Identifies and removes invisible Unicode characters from the provided text data.
-
-        Args:
-            data (str): The input text from which invisible characters need to be detected and removed.
-
-        Returns:
-            tuple: A tuple containing a prediction message, a score (1 for success, 0 for failure), 
-                   and the sanitized text.
-        """
-        sanitized_text = data
-        score = 0
-        try:
-            if not self.contains_unicode(data):
-                predict = "No invisible characters found"
-                score = 1
-            else:
-                chars = []
-                for char in data:
-                    if unicodedata.category(char) not in self.banned_categories:
-                        continue
-
-                    chars.append(char)
-                    data = data.replace(char, "")
-                if chars:
-                    predict = "Found invisible characters in the text:{}".format(', '.join(chars))
-                    sanitized_text = data
-                else:
-                    predict = "No invisible characters found"
-                    score = 1
-        except Exception as e:
-            LogUtil.log(LogType.ERROR, LogLevel.ERROR, e)
-        
-        return predict, score, sanitized_text
-
-    def format_response(self):
-        self.response["prediction"]["invisible_text_check"] = self.pred[0]
-        self.response["score"] = self.pred[1]
-        self.response['sanitized_data'] = self.pred[2]
+This scanner effectively provides a way to maintain text integrity by identifying and handling invisible characters, which are often unnoticed but can cause unexpected issues.
