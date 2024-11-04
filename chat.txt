@@ -1,47 +1,133 @@
-This Secrets scanner is designed to detect and optionally sanitize sensitive information, like API keys or passwords, in text data. It leverages the detect-secrets library for detection and includes sanitization options that replace sensitive information with placeholders.
+from llm_sanitation.scanners.scanner_base import Scanner
+import json
+import numpy as np
+import re
+from llm_sanitation.logging.logging_setup import LogUtil, LogType, LogLevel
 
-Key Components of Secrets
+class JsonValidator(Scanner):
+    """
+    A Scanner class for validating JSON payloads against a set of mandated keys and patterns.
 
-	1.	Use of detect-secrets Library:
-	•	detect-secrets is a powerful tool for finding sensitive information by scanning for patterns commonly associated with secrets. The library’s SecretsCollection class is used here to collect any found secrets in the text.
-	•	By scanning a temporary file containing the text, the scanner can use detect-secrets to identify potential secrets without needing a custom pattern.
-	2.	Sanitization with TextReplaceBuilder:
-	•	If sanitize is enabled, TextReplaceBuilder from Presidio Anonymizer is used to replace detected secrets with asterisks (or other placeholders).
-	•	For each found secret, the TextReplaceBuilder calculates the position and length of the secret within the text and replaces it as specified.
-	3.	Predict Method:
-	•	Detection Process: The method creates a temporary file with the provided text, scans it using detect-secrets, and gathers any detected secrets.
-	•	Replacement: If sanitize is enabled, each secret is located by position, and TextReplaceBuilder replaces it with asterisks.
-	•	Logging: If any secrets are found, they are listed by type in the prediction message. Any errors during detection or replacement are logged.
-	4.	Temporary File Management:
-	•	A temporary file is used to scan the text, and it is safely removed after scanning to avoid leaving any sensitive information.
+    This class checks if the provided JSON payload adheres to the required structure and 
+    contains the necessary key-value pairs that match specified patterns.
 
-Example Usage Scenarios
+    Attributes:
+        mandate_checks (dict): A dictionary containing the keys and corresponding regex patterns 
+                               to validate against the JSON payload.
+    """
 
-The Secrets scanner can be used in various situations where sensitive data might accidentally be included in text, such as:
+    def __init__(self, **kwargs):
+        """
+        Initializes the JsonValidator scanner.
 
-	•	Log Scrubbing: Removing credentials or tokens from logs.
-	•	Data Pipeline Sanitization: Ensuring sensitive data doesn’t unintentionally propagate through different parts of a system.
-	•	Document and Code Review: Detecting accidental inclusion of secrets in documents or code repositories.
+        Args:
+            mandate_checks (dict): A dictionary of keys and regex patterns to validate against the JSON payload.
+        """
+        mandate_checks = kwargs["mandate_keys"]
+        super().__init__("json_validator", 1, mandate_checks=mandate_checks)
 
-Example Output
+    def get_value(self, payload, keys):
+        """
+        Retrieves the value from the nested JSON payload using dot notation.
 
-Here’s how the Secrets scanner might respond:
+        Args:
+            payload (dict): The JSON object to retrieve the value from.
+            keys (str): The dot-separated key string indicating the path in the JSON object.
 
-	•	If Secrets Are Detected:
-	•	Prediction: "Detected secrets in text: <list of detected secret types>"
-	•	Score: 1
-	•	Sanitized Text: Returns the text with each detected secret replaced by asterisks or another placeholder.
-	•	If No Secrets Are Found:
-	•	Prediction: "No secrets detected in the text"
-	•	Score: 0
-	•	Sanitized Text: Returns the original text unaltered.
+        Returns:
+            Any: The value found at the specified path, or None if the key does not exist.
+        """
+        keys = keys.split(".")
+        value = payload
+        for key in keys:
+            if isinstance(value, dict):
+                value = value.get(key)
+            else:
+                return None
+        return value
 
-Code Enhancement Suggestions
+    def check_mandate_keys(self, payload):
+        """
+        Validates the JSON payload against the mandated keys and patterns.
 
-To enhance usability, consider:
+        Args:
+            payload (dict): The JSON object to validate.
 
-	1.	Allowing configuration of the placeholder (e.g., replacing with "[REDACTED]" instead of "******").
-	2.	Including additional logging for each detected secret, potentially with location data for detailed tracking.
-	3.	Allowing customization of the secret detection settings (e.g., specifying custom patterns or sensitivity levels).
+        Returns:
+            tuple: A tuple containing a list of prediction strings and the average score.
+        """
+        self.mandate_keys = self._kwargs["mandate_checks"].keys()
 
-This scanner provides a powerful tool for detecting and sanitizing secrets, ensuring sensitive data is safely managed and removed where necessary.
+        predict = []
+        score = []
+        try:
+            for mandate_key in self.mandate_keys:
+                mandate_pattern = self._kwargs["mandate_checks"].get(mandate_key, [])
+                pattern = re.compile(mandate_pattern)
+                
+                value = self.get_value(payload, mandate_key)
+
+                if value is None:
+                    score.append(0)
+                    predict.append("Key `{}` not found".format(mandate_key))
+
+                elif re.match(pattern, value):
+                    score.append(1)
+                else:
+                    score.append(0)
+                    predict.append("For Key `{}` value {} is not in the correct pattern.".format(mandate_key, value))
+            if len(predict) == 0:
+                predict = "Valid json payload."
+
+        except Exception as e:
+            LogUtil.log(LogType.ERROR, LogLevel.ERROR, e)
+            predict.append("Error occurred: {}".format(e))
+            score.append(0)
+
+        return predict, np.mean(score)
+
+    def check_json_format(self, payload):
+        """
+        Validates that a value is parseable as valid JSON.
+
+        Args:
+            payload (Any): The data to check for JSON format.
+
+        Returns:
+            tuple: A tuple containing the parsed JSON object and any error that occurred during parsing.
+        """
+        stringified = payload
+        parsed_payload, error = (None, None)
+        try:
+            if not isinstance(payload, str):
+                stringified = json.dumps(payload)
+
+            parsed_payload = json.loads(stringified)
+        except json.decoder.JSONDecodeError as json_error:
+            error = json_error
+        except TypeError as type_error:
+            error = type_error
+        return parsed_payload, error
+
+    def predict(self, payload):
+        """
+        Main prediction method that validates the JSON payload.
+
+        Args:
+            payload (Any): The JSON object or string to validate.
+
+        Returns:
+            tuple: A tuple containing a list of prediction strings or error and a score.
+        """
+        parsed_payload, error = self.check_json_format(payload)
+        if error is not None:
+            score = 0
+            predict = error
+            return predict, score
+        else:
+            predict, score = self.check_mandate_keys(parsed_payload)
+        return predict, score
+
+    def format_response(self):
+        self.response["prediction"]["json_validator"] = self.pred[0]
+        self.response["score"] = self.pred[1]
