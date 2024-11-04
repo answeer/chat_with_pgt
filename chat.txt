@@ -1,92 +1,47 @@
-from llm_sanitation.scanners.scanner_base import Scanner
-import tempfile
-import os
-from detect_secrets.core.secrets_collection import SecretsCollection
-from detect_secrets.settings import default_settings
-from presidio_anonymizer.core.text_replace_builder import TextReplaceBuilder
-from llm_sanitation.logging.logging_setup import LogUtil, LogType, LogLevel
+This Secrets scanner is designed to detect and optionally sanitize sensitive information, like API keys or passwords, in text data. It leverages the detect-secrets library for detection and includes sanitization options that replace sensitive information with placeholders.
 
-class Secrets(Scanner):
-    """
-    A Scanner class that detects and optionally sanitizes secrets (e.g., API keys, passwords) in text data.
+Key Components of Secrets
 
-    This class uses the `detect-secrets` library to find sensitive information in the provided text. If sanitize
-    is enabled, the detected secrets are replaced with asterisks.
+	1.	Use of detect-secrets Library:
+	•	detect-secrets is a powerful tool for finding sensitive information by scanning for patterns commonly associated with secrets. The library’s SecretsCollection class is used here to collect any found secrets in the text.
+	•	By scanning a temporary file containing the text, the scanner can use detect-secrets to identify potential secrets without needing a custom pattern.
+	2.	Sanitization with TextReplaceBuilder:
+	•	If sanitize is enabled, TextReplaceBuilder from Presidio Anonymizer is used to replace detected secrets with asterisks (or other placeholders).
+	•	For each found secret, the TextReplaceBuilder calculates the position and length of the secret within the text and replaces it as specified.
+	3.	Predict Method:
+	•	Detection Process: The method creates a temporary file with the provided text, scans it using detect-secrets, and gathers any detected secrets.
+	•	Replacement: If sanitize is enabled, each secret is located by position, and TextReplaceBuilder replaces it with asterisks.
+	•	Logging: If any secrets are found, they are listed by type in the prediction message. Any errors during detection or replacement are logged.
+	4.	Temporary File Management:
+	•	A temporary file is used to scan the text, and it is safely removed after scanning to avoid leaving any sensitive information.
 
-    Attributes:
-        sanitize (bool): Flag to indicate whether to perform the sanitization.
-        secrets (SecretsCollection): An instance of SecretsCollection for managing detected secrets.
-    """
+Example Usage Scenarios
 
-    def __init__(self, **kwargs):
-        """
-        Initializes the Secrets scanner.
+The Secrets scanner can be used in various situations where sensitive data might accidentally be included in text, such as:
 
-        Args:
-            sanitize (bool): Flag indicating whether the text should be sanitized by replacing detected secrets.
-        """
-        sanitize = kwargs["sanitize"]
-        super().__init__("secret_detector", 0.5, sanitize=sanitize)
-        self.secrets = SecretsCollection()
+	•	Log Scrubbing: Removing credentials or tokens from logs.
+	•	Data Pipeline Sanitization: Ensuring sensitive data doesn’t unintentionally propagate through different parts of a system.
+	•	Document and Code Review: Detecting accidental inclusion of secrets in documents or code repositories.
 
-    def predict(self, data):
-        """
-        Detects and optionally sanitizes secrets in the provided text data.
+Example Output
 
-        This method scans the text for secrets using the `detect-secrets` library. If sanitization is enabled,
-        the detected secrets are replaced with asterisks in the sanitized text.
+Here’s how the Secrets scanner might respond:
 
-        Args:
-            data (str): The input text to scan for secrets.
+	•	If Secrets Are Detected:
+	•	Prediction: "Detected secrets in text: <list of detected secret types>"
+	•	Score: 1
+	•	Sanitized Text: Returns the text with each detected secret replaced by asterisks or another placeholder.
+	•	If No Secrets Are Found:
+	•	Prediction: "No secrets detected in the text"
+	•	Score: 0
+	•	Sanitized Text: Returns the original text unaltered.
 
-        Returns:
-            tuple: A tuple containing a prediction message, a score (1 for success, 0 for failure), and the sanitized text.
-        """
-        sanitized_text = data
-        score = 0
-        try:
-            temp_file = tempfile.NamedTemporaryFile(delete=False)
-            temp_file.write(data.encode("utf-8"))
-            temp_file.close()
+Code Enhancement Suggestions
 
-            with default_settings():
-                self.secrets.scan_file(str(temp_file.name))
+To enhance usability, consider:
 
-            secret_types = []
-            text_replace_builder = TextReplaceBuilder(original_text=data)
-            for file in self.secrets.files:
-                for found_secret in self.secrets[file]:
-                    secret_types.append(found_secret.type)
-                    if self._kwargs['sanitize']:
-                        character_start_index = data.find(found_secret.secret_value, None, None)
-                        character_end_index = character_start_index + len(str(found_secret.secret_value))
-                        secret_value = text_replace_builder.get_text_in_position(
-                            character_start_index, character_end_index
-                        )
+	1.	Allowing configuration of the placeholder (e.g., replacing with "[REDACTED]" instead of "******").
+	2.	Including additional logging for each detected secret, potentially with location data for detailed tracking.
+	3.	Allowing customization of the secret detection settings (e.g., specifying custom patterns or sensitivity levels).
 
-                        text_replace_builder.replace_text_get_insertion_index(
-                            "******",
-                            character_start_index,
-                            character_end_index,
-                        )   
-
-            os.remove(temp_file.name)
-
-            if secret_types:
-                predict = "Detected secrets in text: {}".format(', '.join(secret_types))
-                score = 1
-                sanitized_text = text_replace_builder.output_text
-
-            else:
-                predict = "No secrets detected in the text"
-        
-        except Exception as e:
-            LogUtil.log(LogType.ERROR, LogLevel.ERROR, e)
-            predict = "Error occurred: {}".format(e)
-
-        return predict, score, sanitized_text
-
-    def format_response(self):
-        self.response["prediction"]["secret_detector"] = self.pred[0]
-        self.response["score"] = 1 - self.pred[1]
-        self.response['sanitized_data'] = self.pred[2]
+This scanner provides a powerful tool for detecting and sanitizing secrets, ensuring sensitive data is safely managed and removed where necessary.
