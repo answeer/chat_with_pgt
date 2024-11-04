@@ -1,133 +1,50 @@
-from llm_sanitation.scanners.scanner_base import Scanner
-import json
-import numpy as np
-import re
-from llm_sanitation.logging.logging_setup import LogUtil, LogType, LogLevel
+The JsonValidator scanner is a validation tool designed to check if a JSON payload adheres to a specific structure and mandated key-value requirements, especially those requiring compliance with certain patterns. Here’s a detailed breakdown of how it operates:
 
-class JsonValidator(Scanner):
-    """
-    A Scanner class for validating JSON payloads against a set of mandated keys and patterns.
+Key Components of JsonValidator
 
-    This class checks if the provided JSON payload adheres to the required structure and 
-    contains the necessary key-value pairs that match specified patterns.
+	1.	Mandated Checks:
+	•	During initialization, the JsonValidator accepts a dictionary called mandate_checks, where each key corresponds to a required field in the JSON and is mapped to a regular expression pattern that defines acceptable values for that key.
+	•	This allows flexible validation of nested structures or complex patterns within the JSON payload.
+	2.	Key Retrieval:
+	•	The get_value method enables access to values within a nested JSON payload using dot notation, making it straightforward to validate deeply nested keys.
+	3.	Validation of Mandated Keys:
+	•	The check_mandate_keys method iterates through each key defined in mandate_checks.
+	•	For each key:
+	•	If the key is missing in the JSON, it adds an entry to predict and assigns a score of 0 for that key.
+	•	If present, the method checks whether the value adheres to the specified regex pattern. If it does, a score of 1 is assigned; if it doesn’t, the key’s value is noted as invalid in predict.
+	4.	JSON Format Check:
+	•	The check_json_format method ensures the input is a valid JSON by attempting to parse it. Any errors in this parsing process are captured and reported, which is useful for handling improperly formatted JSON data.
+	5.	Predict Method:
+	•	The main method, predict, first verifies the format of the input payload. If it isn’t valid JSON, an error is returned.
+	•	If valid, it proceeds with the mandate key checks, accumulating both the prediction results and average score for the validation outcome.
+	6.	Formatting the Response:
+	•	format_response integrates the predictions and score into the response dictionary, making it compatible with other scanners.
 
-    Attributes:
-        mandate_checks (dict): A dictionary containing the keys and corresponding regex patterns 
-                               to validate against the JSON payload.
-    """
+Example Scenarios for JsonValidator
 
-    def __init__(self, **kwargs):
-        """
-        Initializes the JsonValidator scanner.
+The JsonValidator can be highly useful in the following cases:
 
-        Args:
-            mandate_checks (dict): A dictionary of keys and regex patterns to validate against the JSON payload.
-        """
-        mandate_checks = kwargs["mandate_keys"]
-        super().__init__("json_validator", 1, mandate_checks=mandate_checks)
+	•	API Input Validation: Ensuring the structure and values of JSON payloads submitted via APIs match the expected format before processing.
+	•	Data Integrity Checks: Validating that JSON configurations or settings files contain mandatory fields with acceptable values.
+	•	Compliance Verification: Enforcing that required fields in data submissions follow specific patterns, such as email formats, date structures, or numeric ranges.
 
-    def get_value(self, payload, keys):
-        """
-        Retrieves the value from the nested JSON payload using dot notation.
+Example Outputs
 
-        Args:
-            payload (dict): The JSON object to retrieve the value from.
-            keys (str): The dot-separated key string indicating the path in the JSON object.
+	•	Valid JSON, All Checks Passed:
+	•	Prediction: ["Valid JSON payload."]
+	•	Score: 1
+	•	Indicates the JSON matches the mandated structure and all patterns.
+	•	Missing or Invalid Keys:
+	•	Prediction: ["Key emailnot found", "For Keydate value '13-25-2023' is not in the correct pattern."]
+	•	Score: Calculated as the mean score, reflecting the proportion of fields that passed validation.
+	•	Invalid JSON Format:
+	•	Prediction: Returns the parsing error, like "Expecting ',' delimiter: line 1 column 42 (char 41)"
+	•	Score: 0
 
-        Returns:
-            Any: The value found at the specified path, or None if the key does not exist.
-        """
-        keys = keys.split(".")
-        value = payload
-        for key in keys:
-            if isinstance(value, dict):
-                value = value.get(key)
-            else:
-                return None
-        return value
+Code Enhancement Suggestions
 
-    def check_mandate_keys(self, payload):
-        """
-        Validates the JSON payload against the mandated keys and patterns.
+	1.	Dynamic Error Messages: Adding more specific error messages could help users quickly understand why a particular value is invalid.
+	2.	Enhanced Pattern Matching: Allow specifying multiple acceptable patterns per key to handle cases where different formats may be acceptable.
+	3.	Additional Key Type Checks: Implement type checking to ensure values match expected data types (e.g., string, integer), in addition to pattern matching.
 
-        Args:
-            payload (dict): The JSON object to validate.
-
-        Returns:
-            tuple: A tuple containing a list of prediction strings and the average score.
-        """
-        self.mandate_keys = self._kwargs["mandate_checks"].keys()
-
-        predict = []
-        score = []
-        try:
-            for mandate_key in self.mandate_keys:
-                mandate_pattern = self._kwargs["mandate_checks"].get(mandate_key, [])
-                pattern = re.compile(mandate_pattern)
-                
-                value = self.get_value(payload, mandate_key)
-
-                if value is None:
-                    score.append(0)
-                    predict.append("Key `{}` not found".format(mandate_key))
-
-                elif re.match(pattern, value):
-                    score.append(1)
-                else:
-                    score.append(0)
-                    predict.append("For Key `{}` value {} is not in the correct pattern.".format(mandate_key, value))
-            if len(predict) == 0:
-                predict = "Valid json payload."
-
-        except Exception as e:
-            LogUtil.log(LogType.ERROR, LogLevel.ERROR, e)
-            predict.append("Error occurred: {}".format(e))
-            score.append(0)
-
-        return predict, np.mean(score)
-
-    def check_json_format(self, payload):
-        """
-        Validates that a value is parseable as valid JSON.
-
-        Args:
-            payload (Any): The data to check for JSON format.
-
-        Returns:
-            tuple: A tuple containing the parsed JSON object and any error that occurred during parsing.
-        """
-        stringified = payload
-        parsed_payload, error = (None, None)
-        try:
-            if not isinstance(payload, str):
-                stringified = json.dumps(payload)
-
-            parsed_payload = json.loads(stringified)
-        except json.decoder.JSONDecodeError as json_error:
-            error = json_error
-        except TypeError as type_error:
-            error = type_error
-        return parsed_payload, error
-
-    def predict(self, payload):
-        """
-        Main prediction method that validates the JSON payload.
-
-        Args:
-            payload (Any): The JSON object or string to validate.
-
-        Returns:
-            tuple: A tuple containing a list of prediction strings or error and a score.
-        """
-        parsed_payload, error = self.check_json_format(payload)
-        if error is not None:
-            score = 0
-            predict = error
-            return predict, score
-        else:
-            predict, score = self.check_mandate_keys(parsed_payload)
-        return predict, score
-
-    def format_response(self):
-        self.response["prediction"]["json_validator"] = self.pred[0]
-        self.response["score"] = self.pred[1]
+With its flexible validation rules and handling of nested JSON, JsonValidator is a comprehensive scanner for JSON structure and value validation.
