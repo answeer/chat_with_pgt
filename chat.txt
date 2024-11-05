@@ -1,39 +1,61 @@
-. Dataset Preparation
+from sklearn.metrics import accuracy_score, f1_score, recall_score
+import matplotlib.pyplot as plt
+import numpy as np
 
-	•	Data Collection: Briefly describe how you gathered your dataset, its purpose, and any relevant characteristics (e.g., size, class distribution).
-	•	Data Cleaning and Preprocessing: Outline any preprocessing steps such as tokenization, normalization, or feature extraction that you performed to make the data suitable for the model.
-	•	Splitting the Dataset: Specify the strategy used to split the data into training, validation, and test sets (e.g., 80-10-10 split). Mention if stratified sampling was used to maintain class balance.
+class EvalDataset:
+    # 省略其他方法
 
-2. Model Selection
+    def plot_metrics_bar(self, results, save_path='model_metrics_comparison.png'):
+        metrics = ['Accuracy', 'F1-Score', 'Recall']
+        model_metrics = {metric: [] for metric in metrics}
+        model_names = []
 
-	•	Model Description: Name and describe the model(s) used for evaluation, including any custom architectures or hyperparameters specific to your task.
-	•	Pre-trained or Custom Models: Note if the model is pre-trained on a similar task or trained from scratch.
-	•	Loss Function and Optimization: Document the loss function (especially if using a custom loss function for text classification tasks with Transformers), optimizer, and any relevant learning rate schedules or regularization techniques.
+        for model_nm, (true_labels, predictions) in results.items():
+            # 计算每个模型的 metrics
+            accuracy = accuracy_score(true_labels, predictions)
+            f1 = f1_score(true_labels, predictions, zero_division=0)
+            recall = recall_score(true_labels, predictions, zero_division=0)
+            
+            # 存储到对应列表中
+            model_names.append(model_nm)
+            model_metrics['Accuracy'].append(accuracy)
+            model_metrics['F1-Score'].append(f1)
+            model_metrics['Recall'].append(recall)
 
-3. Evaluation Metrics
+        # 绘制柱状图
+        x = np.arange(len(model_names))  # x 轴的位置
+        bar_width = 0.2  # 每个柱的宽度
 
-	•	Metric Choice: List the metrics used for evaluating model performance (e.g., accuracy, precision, recall, F1 score, etc.), and provide a rationale for why they’re appropriate for your task.
-	•	Metric Calculation: If any metrics require specific implementations or non-standard methods, outline them. Include any token-based metrics if applicable (e.g., BLEU score for text generation tasks).
+        plt.figure(figsize=(10, 6))
 
-4. Evaluation Process
+        # 画每个 metric 的柱状图，依次偏移位置
+        for i, metric in enumerate(metrics):
+            plt.bar(x + i * bar_width, model_metrics[metric], width=bar_width, label=metric)
 
-	•	Inference on Dataset: Describe how the model processes the test data, including any batching or memory considerations.
-	•	Tracking Metrics: Explain how you track relevant metrics during inference, especially if you need to track additional details like inference time or token counts (as mentioned in previous evaluations).
-	•	Token Count and Inference Time: If analyzing the relationship between token count and inference time, describe how this data is collected.
+        # 设置 x 轴和图例
+        plt.xlabel('Models')
+        plt.ylabel('Score')
+        plt.title('Comparison of Accuracy, F1-Score, and Recall for Each Model')
+        plt.xticks(x + bar_width, model_names)
+        plt.legend(title='Metrics')
+        
+        # 保存并显示图表
+        plt.tight_layout()
+        plt.savefig(save_path)
+        plt.show()
+        print(f"Model metrics comparison plot saved to {save_path}")
 
-5. Results
 
-	•	Quantitative Results: Present results for each metric, with mean values and, if necessary, standard deviations.
-	•	Qualitative Analysis: Include a brief analysis of sample predictions, errors, or any interesting cases where the model performed exceptionally well or poorly.
-	•	Comparison of Models: If multiple models were evaluated (e.g., MiniCheck, HHEM, FactualConsistency), compare them side-by-side with both quantitative and qualitative insights.
+if __name__ == "__main__":
+    model_list = ['minicheck', 'hhem', 'factual_consistency']
+    eval_dataset = EvalDataset()
+    sample_ratio = 0.1
 
-6. Analysis and Insights
+    results = {}
+    for model_nm in model_list:
+        print(f"Running evaluation for {model_nm}...")
+        _, true_labels, predictions, _ = eval_dataset.run(model_nm, sample_ratio=sample_ratio)
+        results[model_nm] = (true_labels, predictions)
 
-	•	Performance Insights: Provide observations on the model’s strengths and weaknesses, patterns observed in errors, and how well the model generalizes across different samples.
-	•	Error Analysis: Identify common failure cases and suggest reasons or potential improvements (e.g., certain classes may be underrepresented, leading to poor generalization).
-	•	Token Count and Inference Time Analysis: If you tracked token counts and inference times, present the relationship between them, possibly with a plotted graph to illustrate how token count affects performance.
-
-7. Conclusions
-
-	•	Summarize the evaluation, touching on whether the model met your initial objectives and any insights gained regarding dataset characteristics or model behavior.
-	•	Next Steps: Based on the evaluation, mention any steps you might take for further improvements, such as model fine-tuning, dataset augmentation, or exploring different architectures.
+    # 绘制指标柱状图
+    eval_dataset.plot_metrics_bar(results)
