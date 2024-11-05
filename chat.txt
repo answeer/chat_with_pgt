@@ -1,64 +1,39 @@
-Cross-entropy loss measures the difference between the predicted probability distribution (softmax output) and the true label distribution (one-hot encoding of the actual word/token).
+. Dataset Preparation
 
-Formula:
+	•	Data Collection: Briefly describe how you gathered your dataset, its purpose, and any relevant characteristics (e.g., size, class distribution).
+	•	Data Cleaning and Preprocessing: Outline any preprocessing steps such as tokenization, normalization, or feature extraction that you performed to make the data suitable for the model.
+	•	Splitting the Dataset: Specify the strategy used to split the data into training, validation, and test sets (e.g., 80-10-10 split). Mention if stratified sampling was used to maintain class balance.
 
-\text{Loss} = -\sum_{t=1}^{T} \log(p(y_t | y_{<t}, x))
+2. Model Selection
 
-where:
+	•	Model Description: Name and describe the model(s) used for evaluation, including any custom architectures or hyperparameters specific to your task.
+	•	Pre-trained or Custom Models: Note if the model is pre-trained on a similar task or trained from scratch.
+	•	Loss Function and Optimization: Document the loss function (especially if using a custom loss function for text classification tasks with Transformers), optimizer, and any relevant learning rate schedules or regularization techniques.
 
-	•	 T  is the length of the output sequence.
-	•	 y_t  is the actual token at position  t .
-	•	 p(y_t | y_{<t}, x)  is the predicted probability for the correct token given the previous tokens and the input sequence  x .
+3. Evaluation Metrics
 
-This approach trains the Transformer to maximize the probability of the correct sequence.
-1. Accuracy
+	•	Metric Choice: List the metrics used for evaluating model performance (e.g., accuracy, precision, recall, F1 score, etc.), and provide a rationale for why they’re appropriate for your task.
+	•	Metric Calculation: If any metrics require specific implementations or non-standard methods, outline them. Include any token-based metrics if applicable (e.g., BLEU score for text generation tasks).
 
-	•	Definition: Accuracy is the percentage of correct predictions out of all predictions.
-	•	Reason: Accuracy is straightforward and works well for balanced datasets, where each class has a similar number of samples. It’s easy to interpret and often serves as a baseline metric.
-	•	Limitation: Accuracy can be misleading on imbalanced datasets, as it does not account for how well the model performs across all classes. For example, if a dataset is 90% one class, predicting that class 100% of the time yields high accuracy without actually understanding other classes.
+4. Evaluation Process
 
-2. Precision, Recall, and F1-Score
+	•	Inference on Dataset: Describe how the model processes the test data, including any batching or memory considerations.
+	•	Tracking Metrics: Explain how you track relevant metrics during inference, especially if you need to track additional details like inference time or token counts (as mentioned in previous evaluations).
+	•	Token Count and Inference Time: If analyzing the relationship between token count and inference time, describe how this data is collected.
 
-	•	Precision: The proportion of correctly predicted positive samples out of all samples predicted as positive.
+5. Results
 
-\text{Precision} = \frac{\text{True Positives}}{\text{True Positives} + \text{False Positives}}
+	•	Quantitative Results: Present results for each metric, with mean values and, if necessary, standard deviations.
+	•	Qualitative Analysis: Include a brief analysis of sample predictions, errors, or any interesting cases where the model performed exceptionally well or poorly.
+	•	Comparison of Models: If multiple models were evaluated (e.g., MiniCheck, HHEM, FactualConsistency), compare them side-by-side with both quantitative and qualitative insights.
 
-	•	Recall: The proportion of correctly predicted positive samples out of all actual positive samples.
+6. Analysis and Insights
 
-\text{Recall} = \frac{\text{True Positives}}{\text{True Positives} + \text{False Negatives}}
+	•	Performance Insights: Provide observations on the model’s strengths and weaknesses, patterns observed in errors, and how well the model generalizes across different samples.
+	•	Error Analysis: Identify common failure cases and suggest reasons or potential improvements (e.g., certain classes may be underrepresented, leading to poor generalization).
+	•	Token Count and Inference Time Analysis: If you tracked token counts and inference times, present the relationship between them, possibly with a plotted graph to illustrate how token count affects performance.
 
-	•	F1-Score: The harmonic mean of precision and recall, balancing the two metrics.
+7. Conclusions
 
-\text{F1-Score} = 2 \times \frac{\text{Precision} \times \text{Recall}}{\text{Precision} + \text{Recall}}
-
-	•	Reason: Precision, recall, and F1-score are particularly useful for imbalanced datasets. Precision is useful when false positives need to be minimized, and recall is important when false negatives are costly. F1-score provides a single metric that balances both precision and recall.
-	•	Limitation: These metrics do not convey the model’s performance across individual classes when averaged without considering class distribution.
-
-3. AUC-ROC (Area Under the Receiver Operating Characteristic Curve)
-
-	•	Definition: The ROC curve plots the true positive rate (recall) against the false positive rate at various threshold settings. AUC-ROC is the area under this curve.
-	•	Reason: AUC-ROC is threshold-independent and captures the model’s ability to distinguish between classes, particularly for binary classification. It’s a good measure of separability, showing how well a model can separate positive and negative classes.
-	•	Limitation: AUC-ROC may be less informative for heavily imbalanced datasets, as the curve can become less indicative of overall performance if one class dominates.
-
-4. AUC-PR (Area Under the Precision-Recall Curve)
-
-	•	Definition: The precision-recall curve plots precision versus recall for different probability thresholds. The area under this curve is calculated as AUC-PR.
-	•	Reason: AUC-PR is especially helpful for highly imbalanced datasets, as it focuses on the performance with respect to the positive class. It shows the trade-off between precision and recall, which is often more relevant for imbalanced classes than ROC.
-	•	Limitation: It’s primarily used in binary classification, and interpreting it for multi-class scenarios can be challenging.
-
-5. Confusion Matrix
-
-	•	Definition: A table that shows the true positives, false positives, true negatives, and false negatives for each class.
-	•	Reason: The confusion matrix provides a detailed breakdown of model performance across each class, revealing any patterns in misclassification and indicating classes that may need improvement.
-	•	Limitation: The confusion matrix alone is not a summary metric, so interpretation may require additional metrics, especially for large class numbers.
-
-6. Macro and Micro Averaged Scores (for Multi-Class Classification)
-
-	•	Macro-Averaging: Computes metrics independently for each class and then takes the average, treating all classes equally.
-	•	Micro-Averaging: Aggregates contributions of all classes and calculates a global metric, which treats larger classes as more important.
-	•	Reason: These methods help in multi-class classification to balance the influence of each class. Macro-averaging is ideal when you want all classes treated equally, while micro-averaging is suitable for accounting for each individual prediction, regardless of class.
-	•	Limitation: Macro-averaging may underrepresent large classes, and micro-averaging can be biased towards large classes, so choice depends on the dataset and goals.
-
-Summary
-
-In general, accuracy works well for balanced datasets, but precision, recall, F1-score, and AUC-PR are often more informative for imbalanced datasets. Confusion matrices are useful for in-depth analysis, and macro/micro-averaging helps in understanding model performance across classes in multi-class scenarios.
+	•	Summarize the evaluation, touching on whether the model met your initial objectives and any insights gained regarding dataset characteristics or model behavior.
+	•	Next Steps: Based on the evaluation, mention any steps you might take for further improvements, such as model fine-tuning, dataset augmentation, or exploring different architectures.
