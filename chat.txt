@@ -1,45 +1,13 @@
-The Transformer architecture, introduced by Vaswani et al. in their 2017 paper, Attention Is All You Need, revolutionized the field of natural language processing (NLP) by discarding recurrent and convolutional layers and instead focusing on self-attention mechanisms. This architecture is efficient, highly parallelizable, and achieves superior performance on various tasks, such as language translation and text generation.
+Cross-entropy loss measures the difference between the predicted probability distribution (softmax output) and the true label distribution (one-hot encoding of the actual word/token).
 
-Here’s an overview of the main components and architecture of a Transformer model:
+Formula:
 
-1. Overall Structure
+\text{Loss} = -\sum_{t=1}^{T} \log(p(y_t | y_{<t}, x))
 
-	•	The Transformer consists of an encoder-decoder architecture, with the encoder processing the input sequence and the decoder generating the output sequence. The encoder and decoder are both composed of multiple identical layers (typically 6-12 layers in modern implementations).
+where:
 
-2. Encoder
+	•	 T  is the length of the output sequence.
+	•	 y_t  is the actual token at position  t .
+	•	 p(y_t | y_{<t}, x)  is the predicted probability for the correct token given the previous tokens and the input sequence  x .
 
-	•	Each encoder layer has two main components:
-	•	Self-Attention Mechanism: This mechanism allows the model to weigh the importance of different words in a sentence relative to each other. The self-attention is computed in three steps:
-	1.	Query, Key, and Value Vectors: Each word in the input sequence is mapped to three vectors (query, key, and value) through learned linear transformations.
-	2.	Attention Weights Calculation: The attention score between each word and every other word is calculated using a scaled dot-product between the query and key vectors. This score is then normalized using a softmax function.
-	3.	Weighted Sum for Attention Output: The value vectors are weighted by these scores, allowing the model to focus on relevant words.
-	•	Feedforward Neural Network (FFN): This component is a fully connected neural network applied to each position independently. It typically has two linear layers with a ReLU activation in between.
-	•	Residual Connections and Layer Normalization: Residual (skip) connections are added around both the self-attention and feedforward layers to enable smoother gradient flow, and each layer is followed by layer normalization.
-
-3. Decoder
-
-	•	Each decoder layer also has two main components but with an additional layer for cross-attention:
-	•	Masked Self-Attention Mechanism: Similar to the encoder’s self-attention, but with a mask to prevent attending to future tokens, ensuring the model generates output in a sequential manner.
-	•	Cross-Attention Mechanism: This mechanism allows the decoder to attend to the encoder’s output, enabling the decoder to focus on relevant parts of the input sequence.
-	•	Feedforward Neural Network: The FFN here is similar to that in the encoder.
-	•	Residual Connections and Layer Normalization: As with the encoder, residual connections and layer normalization help maintain stable gradients.
-
-4. Positional Encoding
-
-	•	Since Transformers lack inherent sequence awareness, positional encoding is added to the input embeddings to retain information about the word order in a sentence. Positional encodings are usually computed as sinusoidal functions and are added to the embeddings before feeding into the encoder and decoder layers.
-
-5. Attention Heads and Multi-Head Attention
-
-	•	Instead of a single attention mechanism, Transformers use multi-head attention where several independent attention heads (typically 8 or 16) run in parallel. This allows the model to capture different types of relationships between words by learning separate attention patterns.
-
-6. Final Output
-
-	•	In sequence-to-sequence tasks, the decoder’s final output is passed through a linear layer followed by a softmax layer to predict the next word in the output sequence. In tasks like text classification, the encoder’s output can be used directly for predictions.
-
-Key Benefits:
-
-	•	Parallelization: The self-attention mechanism enables parallelization across all tokens in the input sequence, making Transformers faster and more efficient.
-	•	Better Long-Range Dependencies: Self-attention can directly model relationships between distant words in the sequence, unlike RNNs where such dependencies degrade over long sequences.
-	•	Scalability: The architecture scales well with large data and compute resources, which is why Transformers like BERT and GPT have been able to achieve state-of-the-art results.
-
-The success of the Transformer has led to many variants and adaptations, including BERT, GPT, and T5, which are tailored for specific tasks. This architecture forms the backbone of many modern NLP applications.
+This approach trains the Transformer to maximize the probability of the correct sequence.
