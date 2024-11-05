@@ -1,61 +1,84 @@
-from sklearn.metrics import accuracy_score, f1_score, recall_score
+import pandas as pd
+from sklearn.metrics import accuracy_score, f1_score, recall_score, precision_score
 import matplotlib.pyplot as plt
 import numpy as np
 
 class EvalDataset:
-    # 省略其他方法
+    def __init__(self, result_path='inference_results.xlsx'):
+        self.result_path = result_path
 
-    def plot_metrics_bar(self, results, save_path='model_metrics_comparison.png'):
-        metrics = ['Accuracy', 'F1-Score', 'Recall']
-        model_metrics = {metric: [] for metric in metrics}
-        model_names = []
+    def load_results(self):
+        """读取保存的推理结果 Excel 文件"""
+        df = pd.read_excel(self.result_path)
+        return df
 
-        for model_nm, (true_labels, predictions) in results.items():
-            # 计算每个模型的 metrics
+    def calculate_metrics(self, df):
+        """计算 accuracy、precision、recall 和 f1-score"""
+        model_names = [col for col in df.columns if col not in ['Context', 'Answer', 'Label']]
+        results = {}
+        
+        for model_nm in model_names:
+            true_labels = df['Label']
+            predictions = df[model_nm]
+
             accuracy = accuracy_score(true_labels, predictions)
-            f1 = f1_score(true_labels, predictions, zero_division=0)
+            precision = precision_score(true_labels, predictions, zero_division=0)
             recall = recall_score(true_labels, predictions, zero_division=0)
-            
-            # 存储到对应列表中
-            model_names.append(model_nm)
-            model_metrics['Accuracy'].append(accuracy)
-            model_metrics['F1-Score'].append(f1)
-            model_metrics['Recall'].append(recall)
+            f1 = f1_score(true_labels, predictions, zero_division=0)
 
-        # 绘制柱状图
-        x = np.arange(len(model_names))  # x 轴的位置
-        bar_width = 0.2  # 每个柱的宽度
+            results[model_nm] = {
+                'accuracy': accuracy,
+                'precision': precision,
+                'recall': recall,
+                'f1-score': f1
+            }
+        
+        return results
+
+    def plot_metrics_bar(self, metrics, save_path='model_metrics_comparison.png'):
+        """绘制 precision, recall, f1-score 的柱状图"""
+        metrics_names = ['Precision', 'Recall', 'F1-Score']
+        model_metrics = {metric: [] for metric in metrics_names}
+        model_names = list(metrics.keys())
+
+        for model_nm in model_names:
+            model_metrics['Precision'].append(metrics[model_nm]['precision'])
+            model_metrics['Recall'].append(metrics[model_nm]['recall'])
+            model_metrics['F1-Score'].append(metrics[model_nm]['f1-score'])
+
+        # 绘制 precision 的柱状图
+        plt.figure(figsize=(8, 6))
+        plt.bar(model_names, model_metrics['Precision'], color='skyblue', alpha=0.7)
+        plt.xlabel('Models')
+        plt.ylabel('Precision')
+        plt.title('Precision Comparison for Each Model')
+        plt.tight_layout()
+        plt.savefig('precision_comparison.png')
+        plt.show()
+
+        # 绘制 recall 和 f1-score 的柱状图
+        x = np.arange(len(model_names))
+        bar_width = 0.3
 
         plt.figure(figsize=(10, 6))
+        plt.bar(x, model_metrics['Recall'], width=bar_width, label='Recall', color='salmon', alpha=0.7)
+        plt.bar(x + bar_width, model_metrics['F1-Score'], width=bar_width, label='F1-Score', color='lightgreen', alpha=0.7)
 
-        # 画每个 metric 的柱状图，依次偏移位置
-        for i, metric in enumerate(metrics):
-            plt.bar(x + i * bar_width, model_metrics[metric], width=bar_width, label=metric)
-
-        # 设置 x 轴和图例
         plt.xlabel('Models')
         plt.ylabel('Score')
-        plt.title('Comparison of Accuracy, F1-Score, and Recall for Each Model')
-        plt.xticks(x + bar_width, model_names)
+        plt.title('Recall and F1-Score Comparison for Each Model')
+        plt.xticks(x + bar_width / 2, model_names)
         plt.legend(title='Metrics')
-        
-        # 保存并显示图表
         plt.tight_layout()
-        plt.savefig(save_path)
+        plt.savefig('recall_f1_comparison.png')
         plt.show()
-        print(f"Model metrics comparison plot saved to {save_path}")
-
 
 if __name__ == "__main__":
-    model_list = ['minicheck', 'hhem', 'factual_consistency']
-    eval_dataset = EvalDataset()
-    sample_ratio = 0.1
+    eval_dataset = EvalDataset(result_path='inference_results.xlsx')
+    df = eval_dataset.load_results()
 
-    results = {}
-    for model_nm in model_list:
-        print(f"Running evaluation for {model_nm}...")
-        _, true_labels, predictions, _ = eval_dataset.run(model_nm, sample_ratio=sample_ratio)
-        results[model_nm] = (true_labels, predictions)
+    # 计算指标
+    metrics = eval_dataset.calculate_metrics(df)
 
-    # 绘制指标柱状图
-    eval_dataset.plot_metrics_bar(results)
+    # 绘制 Precision 图和 Recall, F1-Score 图
+    eval_dataset.plot_metrics_bar(metrics)
