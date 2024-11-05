@@ -11,3 +11,54 @@ where:
 	•	 p(y_t | y_{<t}, x)  is the predicted probability for the correct token given the previous tokens and the input sequence  x .
 
 This approach trains the Transformer to maximize the probability of the correct sequence.
+1. Accuracy
+
+	•	Definition: Accuracy is the percentage of correct predictions out of all predictions.
+	•	Reason: Accuracy is straightforward and works well for balanced datasets, where each class has a similar number of samples. It’s easy to interpret and often serves as a baseline metric.
+	•	Limitation: Accuracy can be misleading on imbalanced datasets, as it does not account for how well the model performs across all classes. For example, if a dataset is 90% one class, predicting that class 100% of the time yields high accuracy without actually understanding other classes.
+
+2. Precision, Recall, and F1-Score
+
+	•	Precision: The proportion of correctly predicted positive samples out of all samples predicted as positive.
+
+\text{Precision} = \frac{\text{True Positives}}{\text{True Positives} + \text{False Positives}}
+
+	•	Recall: The proportion of correctly predicted positive samples out of all actual positive samples.
+
+\text{Recall} = \frac{\text{True Positives}}{\text{True Positives} + \text{False Negatives}}
+
+	•	F1-Score: The harmonic mean of precision and recall, balancing the two metrics.
+
+\text{F1-Score} = 2 \times \frac{\text{Precision} \times \text{Recall}}{\text{Precision} + \text{Recall}}
+
+	•	Reason: Precision, recall, and F1-score are particularly useful for imbalanced datasets. Precision is useful when false positives need to be minimized, and recall is important when false negatives are costly. F1-score provides a single metric that balances both precision and recall.
+	•	Limitation: These metrics do not convey the model’s performance across individual classes when averaged without considering class distribution.
+
+3. AUC-ROC (Area Under the Receiver Operating Characteristic Curve)
+
+	•	Definition: The ROC curve plots the true positive rate (recall) against the false positive rate at various threshold settings. AUC-ROC is the area under this curve.
+	•	Reason: AUC-ROC is threshold-independent and captures the model’s ability to distinguish between classes, particularly for binary classification. It’s a good measure of separability, showing how well a model can separate positive and negative classes.
+	•	Limitation: AUC-ROC may be less informative for heavily imbalanced datasets, as the curve can become less indicative of overall performance if one class dominates.
+
+4. AUC-PR (Area Under the Precision-Recall Curve)
+
+	•	Definition: The precision-recall curve plots precision versus recall for different probability thresholds. The area under this curve is calculated as AUC-PR.
+	•	Reason: AUC-PR is especially helpful for highly imbalanced datasets, as it focuses on the performance with respect to the positive class. It shows the trade-off between precision and recall, which is often more relevant for imbalanced classes than ROC.
+	•	Limitation: It’s primarily used in binary classification, and interpreting it for multi-class scenarios can be challenging.
+
+5. Confusion Matrix
+
+	•	Definition: A table that shows the true positives, false positives, true negatives, and false negatives for each class.
+	•	Reason: The confusion matrix provides a detailed breakdown of model performance across each class, revealing any patterns in misclassification and indicating classes that may need improvement.
+	•	Limitation: The confusion matrix alone is not a summary metric, so interpretation may require additional metrics, especially for large class numbers.
+
+6. Macro and Micro Averaged Scores (for Multi-Class Classification)
+
+	•	Macro-Averaging: Computes metrics independently for each class and then takes the average, treating all classes equally.
+	•	Micro-Averaging: Aggregates contributions of all classes and calculates a global metric, which treats larger classes as more important.
+	•	Reason: These methods help in multi-class classification to balance the influence of each class. Macro-averaging is ideal when you want all classes treated equally, while micro-averaging is suitable for accounting for each individual prediction, regardless of class.
+	•	Limitation: Macro-averaging may underrepresent large classes, and micro-averaging can be biased towards large classes, so choice depends on the dataset and goals.
+
+Summary
+
+In general, accuracy works well for balanced datasets, but precision, recall, F1-score, and AUC-PR are often more informative for imbalanced datasets. Confusion matrices are useful for in-depth analysis, and macro/micro-averaging helps in understanding model performance across classes in multi-class scenarios.
