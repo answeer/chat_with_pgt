@@ -1,25 +1,51 @@
-dvantages of HHEM
+import matplotlib.pyplot as plt
+import pandas as pd
+import numpy as np
 
-	1.	High Overall Accuracy (0.94):
-	•	HHEM achieves the highest accuracy among the models, showing it reliably distinguishes between Positive and Negative classes.
-	2.	Exceptional Precision for Positive Class (1.00):
-	•	With a precision of 1.00 in the Positive class, HHEM has minimal false positives, which is critical in applications where incorrect positive identifications could be costly or problematic.
-	3.	Strong Recall for Both Classes:
-	•	HHEM maintains a high recall of 0.99 for the Negative class and 0.92 for the Positive class. This balance suggests that the model effectively identifies both classes without sacrificing one over the other.
-	4.	High F1-Scores:
-	•	The high f1-scores (0.92 for Negative and 0.96 for Positive) reflect the model’s balance of precision and recall. This is useful in scenarios where both metrics are equally important for reliability.
-	5.	Consistent Performance Across Classes:
-	•	HHEM’s balanced metrics indicate that it’s well-suited for tasks where both Positive and Negative classes must be accurately classified, without favoring one over the other.
+class EvalDataset:
+    def __init__(self, result_path='inference_results.xlsx'):
+        self.result_path = result_path
 
-Disadvantages of HHEM
+    def load_results(self):
+        """读取保存的推理结果 Excel 文件，假设文件中有 'tokens' 和 'time' 列"""
+        df = pd.read_excel(self.result_path)
+        return df
 
-	1.	Marginally Lower Recall in Positive Class:
-	•	Although recall in the Positive class is relatively high (0.92), it’s slightly lower than its precision. In applications where identifying all Positive instances is critical, this could mean that some positives are still missed.
-	2.	Potential Overfitting to Positive Class:
-	•	With a precision of 1.00 in the Positive class, the model might have learned to be overly conservative in classifying positives, possibly leading to a lower recall in some edge cases or unseen data.
-	3.	Higher Computational Cost:
-	•	High-performance models like HHEM, especially when fine-tuned to achieve balanced metrics, often require more computational resources for training and inference. This could be a consideration for real-time or resource-limited applications.
-	4.	Potential for Class Imbalance Sensitivity:
-	•	Although HHEM performs well with this dataset, its sensitivity to other datasets with different class distributions hasn’t been tested here. Models performing with high precision and recall on balanced datasets may behave differently on imbalanced datasets.
+    def calculate_avg_time_by_token_bins(self, df, bin_size=50):
+        """根据 tokens 数分区间，并计算每个区间的平均推理时间"""
+        max_tokens = df['tokens'].max()
+        bins = list(range(0, max_tokens + bin_size, bin_size))
+        
+        # 使用 pandas 的 cut 函数将 tokens 分区间
+        df['token_bin'] = pd.cut(df['tokens'], bins=bins, right=False)
 
-HHEM’s strengths make it a great choice for applications needing balanced, high-accuracy classification, but resource demands and possible sensitivity to data distribution are factors to consider. Let me know if you’d like to explore other aspects, such as optimization options!
+        # 计算每个区间的平均推理时间
+        avg_time_per_bin = df.groupby('token_bin')['time'].mean().reset_index()
+        avg_time_per_bin['token_bin'] = avg_time_per_bin['token_bin'].astype(str)  # 转换为字符串便于绘图
+
+        return avg_time_per_bin
+
+    def plot_avg_time_by_token_bins(self, avg_time_per_bin, save_path='avg_time_by_token_bins.png'):
+        """绘制不同 token 区间的平均推理时间柱状图"""
+        plt.figure(figsize=(12, 6))
+        plt.bar(avg_time_per_bin['token_bin'], avg_time_per_bin['time'], color='lightblue')
+        plt.xlabel('Token Range')
+        plt.ylabel('Average Inference Time (s)')
+        plt.title('Average Inference Time by Token Range')
+        plt.xticks(rotation=45, ha='right')  # 旋转 x 轴标签，便于查看
+        plt.tight_layout()
+
+        # 保存并显示图表
+        plt.savefig(save_path)
+        plt.show()
+        print(f"Average inference time by token range plot saved to {save_path}")
+
+if __name__ == "__main__":
+    eval_dataset = EvalDataset(result_path='inference_results.xlsx')
+    df = eval_dataset.load_results()
+
+    # 计算每个 token 区间的平均推理时间
+    avg_time_per_bin = eval_dataset.calculate_avg_time_by_token_bins(df, bin_size=50)
+
+    # 绘制柱状图
+    eval_dataset.plot_avg_time_by_token_bins(avg_time_per_bin)
