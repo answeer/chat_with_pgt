@@ -46,7 +46,7 @@ class EvalDataset:
         return token_counts, inference_times
 
     def plot_token_time_bars(self, results, save_path='token_time_bars.png'):
-        # 定义 token 区间
+        # 定义 token 数区间
         token_ranges = [(0, 50), (51, 100), (101, 150), (151, 200), (201, 300), (301, 500), (501, float('inf'))]
         range_labels = [f'{start}-{int(end) if end != float("inf") else "inf"}' for start, end in token_ranges]
         num_ranges = len(token_ranges)
@@ -55,13 +55,14 @@ class EvalDataset:
         bar_width = 0.2
         x = np.arange(num_ranges)
 
-        plt.figure(figsize=(12, 8))
+        plt.figure(figsize=(14, 8))
 
         # 遍历每个模型并绘制其柱状图
         for i, (model_nm, (token_counts, inference_times)) in enumerate(results.items()):
             avg_times = []
 
             for start, end in token_ranges:
+                # 找出属于该区间的所有样本的推理时间
                 indices = [j for j, tokens in enumerate(token_counts) if start <= tokens < end]
                 if not indices:
                     avg_times.append(0)
