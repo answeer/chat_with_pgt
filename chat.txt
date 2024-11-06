@@ -49,47 +49,28 @@ class EvalDataset:
         # 定义 token 区间
         token_ranges = [(0, 50), (51, 100), (101, 150), (151, 200), (201, 300), (301, 500), (501, float('inf'))]
         range_labels = [f'{start}-{int(end) if end != float("inf") else "inf"}' for start, end in token_ranges]
+        num_ranges = len(token_ranges)
 
-        # 准备绘图
+        # 设置并排显示的宽度偏移
+        bar_width = 0.2
+        x = np.arange(num_ranges)
+
         plt.figure(figsize=(12, 8))
 
-        for model_nm, (token_counts, inference_times) in results.items():
+        # 遍历每个模型并绘制其柱状图
+        for i, (model_nm, (token_counts, inference_times)) in enumerate(results.items()):
             avg_times = []
 
             for start, end in token_ranges:
-                indices = [i for i, tokens in enumerate(token_counts) if start <= tokens < end]
+                indices = [j for j, tokens in enumerate(token_counts) if start <= tokens < end]
                 if not indices:
                     avg_times.append(0)
                     continue
 
                 # 计算当前区间的平均推理时间
-                range_times = [inference_times[i] for i in indices]
+                range_times = [inference_times[j] for j in indices]
                 avg_time = np.mean(range_times)
                 avg_times.append(avg_time)
 
-            # 绘制柱状图
-            plt.bar(range_labels, avg_times, alpha=0.6, label=model_nm)
-
-        plt.xlabel('Token Range')
-        plt.ylabel('Average Inference Time (s)')
-        plt.title('Average Inference Time by Token Range for Models')
-        plt.legend(title='Model')
-        plt.xticks(rotation=45)
-        plt.savefig(save_path)
-        plt.show()
-        print(f"Token range vs. inference time plot saved to {save_path}")
-
-
-if __name__ == "__main__":
-    model_list = ['minicheck', 'hhem', 'factual_consistency']
-    eval_dataset = EvalDataset()
-    sample_ratio = 0.1
-
-    results = {}
-    for model_nm in model_list:
-        print(f"Running evaluation for {model_nm}...")
-        token_counts, inference_times = eval_dataset.run(model_nm, sample_ratio=sample_ratio)
-        results[model_nm] = (token_counts, inference_times)
-
-    # 绘制 token 数区间与平均推理时间的柱状图
-    eval_dataset.plot_token_time_bars(results)
+            # 并排绘制柱状图，位置偏移为 `x + i * bar_width`
+            plt.bar(x + i * bar_width, avg_times,
