@@ -1,51 +1,95 @@
+import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
-import numpy as np
+from transformers import AutoTokenizer
+from tqdm import tqdm
+import time
 
 class EvalDataset:
-    def __init__(self, result_path='inference_results.xlsx'):
-        self.result_path = result_path
+    def __init__(self, data_path='augmented_dataset.xlsx'):
+        self.data_path = data_path
+        self.tokenizer = AutoTokenizer.from_pretrained('roberta-large')
 
-    def load_results(self):
-        """读取保存的推理结果 Excel 文件，假设文件中有 'tokens' 和 'time' 列"""
-        df = pd.read_excel(self.result_path)
+    def load_dataset(self, sample_ratio=1.0):
+        df = pd.read_excel(self.data_path)
+        df['Context'] = df['Context'].apply(lambda x: str(x) if not isinstance(x, str) else x)
+        df['Answer'] = df['Answer'].apply(lambda x: str(x) if not isinstance(x, str) else x)
+        if 0 < sample_ratio < 1:
+            df = df.sample(frac=sample_ratio, random_state=42).reset_index(drop=True)
         return df
 
-    def calculate_avg_time_by_token_bins(self, df, bin_size=50):
-        """根据 tokens 数分区间，并计算每个区间的平均推理时间"""
-        max_tokens = df['tokens'].max()
-        bins = list(range(0, max_tokens + bin_size, bin_size))
-        
-        # 使用 pandas 的 cut 函数将 tokens 分区间
-        df['token_bin'] = pd.cut(df['tokens'], bins=bins, right=False)
+    def count_tokens(self, context, response):
+        inputs = self.tokenizer(context, response, return_tensors='pt', truncation=True)
+        return len(inputs['input_ids'][0])
 
-        # 计算每个区间的平均推理时间
-        avg_time_per_bin = df.groupby('token_bin')['time'].mean().reset_index()
-        avg_time_per_bin['token_bin'] = avg_time_per_bin['token_bin'].astype(str)  # 转换为字符串便于绘图
+    def run(self, model_nm, sample_ratio=1.0):
+        df = self.load_dataset(sample_ratio=sample_ratio)
+        context_list = df['Context'].tolist()
+        response_list = df['Answer'].tolist()
 
-        return avg_time_per_bin
+        inference_times, token_counts = [], []
 
-    def plot_avg_time_by_token_bins(self, avg_time_per_bin, save_path='avg_time_by_token_bins.png'):
-        """绘制不同 token 区间的平均推理时间柱状图"""
-        plt.figure(figsize=(12, 6))
-        plt.bar(avg_time_per_bin['token_bin'], avg_time_per_bin['time'], color='lightblue')
+        for context, response in tqdm(zip(context_list, response_list), total=len(context_list)):
+            tokens = self.count_tokens(context, response)
+            token_counts.append(tokens)
+
+            try:
+                start_inference = time.time()
+                # 模型推理逻辑省略, 此处仅模拟推理时间
+                time.sleep(0.01)  # 模拟推理时间
+                end_inference = time.time()
+                inference_times.append(end_inference - start_inference)
+            except Exception as e:
+                print(f"Error occurred for model {model_nm}: {e}")
+                inference_times.append(0)
+
+        return token_counts, inference_times
+
+    def plot_token_time_bars(self, results, save_path='token_time_bars.png'):
+        # 定义 token 区间
+        token_ranges = [(0, 50), (51, 100), (101, 150), (151, 200), (201, 300), (301, 500), (501, float('inf'))]
+        range_labels = [f'{start}-{int(end) if end != float("inf") else "inf"}' for start, end in token_ranges]
+
+        # 准备绘图
+        plt.figure(figsize=(12, 8))
+
+        for model_nm, (token_counts, inference_times) in results.items():
+            avg_times = []
+
+            for start, end in token_ranges:
+                indices = [i for i, tokens in enumerate(token_counts) if start <= tokens < end]
+                if not indices:
+                    avg_times.append(0)
+                    continue
+
+                # 计算当前区间的平均推理时间
+                range_times = [inference_times[i] for i in indices]
+                avg_time = np.mean(range_times)
+                avg_times.append(avg_time)
+
+            # 绘制柱状图
+            plt.bar(range_labels, avg_times, alpha=0.6, label=model_nm)
+
         plt.xlabel('Token Range')
         plt.ylabel('Average Inference Time (s)')
-        plt.title('Average Inference Time by Token Range')
-        plt.xticks(rotation=45, ha='right')  # 旋转 x 轴标签，便于查看
-        plt.tight_layout()
-
-        # 保存并显示图表
+        plt.title('Average Inference Time by Token Range for Models')
+        plt.legend(title='Model')
+        plt.xticks(rotation=45)
         plt.savefig(save_path)
         plt.show()
-        print(f"Average inference time by token range plot saved to {save_path}")
+        print(f"Token range vs. inference time plot saved to {save_path}")
+
 
 if __name__ == "__main__":
-    eval_dataset = EvalDataset(result_path='inference_results.xlsx')
-    df = eval_dataset.load_results()
+    model_list = ['minicheck', 'hhem', 'factual_consistency']
+    eval_dataset = EvalDataset()
+    sample_ratio = 0.1
 
-    # 计算每个 token 区间的平均推理时间
-    avg_time_per_bin = eval_dataset.calculate_avg_time_by_token_bins(df, bin_size=50)
+    results = {}
+    for model_nm in model_list:
+        print(f"Running evaluation for {model_nm}...")
+        token_counts, inference_times = eval_dataset.run(model_nm, sample_ratio=sample_ratio)
+        results[model_nm] = (token_counts, inference_times)
 
-    # 绘制柱状图
-    eval_dataset.plot_avg_time_by_token_bins(avg_time_per_bin)
+    # 绘制 token 数区间与平均推理时间的柱状图
+    eval_dataset.plot_token_time_bars(results)
