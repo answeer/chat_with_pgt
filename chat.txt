@@ -1,34 +1,321 @@
+Introduction 
+Overview of the model
+
+HHEM-2.1-Open is a major upgrade to HHEM-1.0-Open created by Vectara in November 2023 and is a finetuned version of google/flan-t5-base. The HHEM model series are designed for detecting hallucinations in LLMs. They are particularly useful in the context of building retrieval-augmented-generation (RAG) applications where a set of facts is summarized by an LLM, and HHEM can be used to measure the extent to which this summary is factually consistent with the facts.
+
+Key features
+HHEM-2.1-Open outperforms GPT-3.5-Turbo and even GPT-4.
+HHEM-2.1-Open can be run on consumer-grade hardware, occupying less than 600MB RAM space at 32-bit precision and elapsing around 1.5 seconds for a 2k-token input on a modern x86 CPU.
+Model Architecture
+Detailed Architecture 
+
+    1. Overall Structure
+
+The Transformer consists of an encoder-decoder architecture, with the encoder processing the input sequence and the decoder generating the output sequence. The encoder and decoder are both composed of multiple identical layers (typically 6-12 layers in modern implementations).
+
+    2. Encoder
+
+Each encoder layer has two main components:
+
+Self-Attention Mechanism: This mechanism allows the model to weigh the importance of different words in a sentence relative to each other. The self-attention is computed in three steps:
+Query, Key, and Value Vectors: Each word in the input sequence is mapped to three vectors (query, key, and value) through learned linear transformations.
+Attention Weights Calculation: The attention score between each word and every other word is calculated using a scaled dot-product between the query and key vectors. This score is then normalized using a softmax function.
+Weighted Sum for Attention Output: The value vectors are weighted by these scores, allowing the model to focus on relevant words.
+Feedforward Neural Network (FFN): This component is a fully connected neural network applied to each position independently. It typically has two linear layers with a ReLU activation in between.
+Residual Connections and Layer Normalization: Residual (skip) connections are added around both the self-attention and feedforward layers to enable smoother gradient flow, and each layer is followed by layer normalization.
+
+    3. Decoder
+
+Each decoder layer also has two main components but with an additional layer for cross-attention:
+
+Masked Self-Attention Mechanism: Similar to the encoder’s self-attention, but with a mask to prevent attending to future tokens, ensuring the model generates output in a sequential manner.
+Cross-Attention Mechanism: This mechanism allows the decoder to attend to the encoder’s output, enabling the decoder to focus on relevant parts of the input sequence.
+Feedforward Neural Network: The FFN here is similar to that in the encoder.
+Residual Connections and Layer Normalization: As with the encoder, residual connections and layer normalization help maintain stable gradients.
+
+    4. Positional Encoding
+
+Since Transformers lack inherent sequence awareness, positional encoding is added to the input embeddings to retain information about the word order in a sentence. Positional encodings are usually computed as sinusoidal functions and are added to the embeddings before feeding into the encoder and decoder layers.
+
+    5. Attention Heads and Multi-Head Attention
+
+Instead of a single attention mechanism, Transformers use multi-head attention where several independent attention heads (typically 8 or 16) run in parallel. This allows the model to capture different types of relationships between words by learning separate attention patterns.
+
+6. Final Output
+
+In sequence-to-sequence tasks, the decoder’s final output is passed through a linear layer followed by a softmax layer to predict the next word in the output sequence. In tasks like text classification, the encoder’s output can be used directly for predictions.
+
+Key Benefits:
+
+Parallelization: The self-attention mechanism enables parallelization across all tokens in the input sequence, making Transformers faster and more efficient.
+Better Long-Range Dependencies: Self-attention can directly model relationships between distant words in the sequence, unlike RNNs where such dependencies degrade over long sequences.
+Scalability: The architecture scales well with large data and compute resources, which is why Transformers like BERT and GPT have been able to achieve state-of-the-art results.
+Training Details
+Dataset used for training
+
+Not mentioned 
+
+Loss function
+
+Cross-entropy loss measures the difference between the predicted probability distribution (softmax output) and the true label distribution (one-hot encoding of the actual word/token).
+
+Hyperparameter details
+
+Not mentioned
+
+
+
+
+Metrics and Evaluation
+Reason for using this metric
+
+1. Accuracy
+
+Definition: Accuracy is the percentage of correct predictions out of all predictions.
+
+Reason: Accuracy is straightforward and works well for balanced datasets, where each class has a similar number of samples. It’s easy to interpret and often serves as a baseline metric.
+
+Limitation: Accuracy can be misleading on imbalanced datasets, as it does not account for how well the model performs across all classes. For example, if a dataset is 90% one class, predicting that class 100% of the time yields high accuracy without actually understanding other classes.
+
+2. Precision, Recall, and F1-Score
+
+Precision: The proportion of correctly predicted positive samples out of all samples predicted as positive.
+Recall: The proportion of correctly predicted positive samples out of all actual positive samples.
+F1-Score: The harmonic mean of precision and recall, balancing the two metrics.
+
+Reason: Precision, recall, and F1-score are particularly useful for imbalanced datasets. Precision is useful when false positives need to be minimized, and recall is important when false negatives are costly. F1-score provides a single metric that balances both precision and recall.
+
+Limitation: These metrics do not convey the model’s performance across individual classes when averaged without considering class distribution.
+
+3. AUC-ROC (Area Under the Receiver Operating Characteristic Curve)
+
+Definition: The ROC curve plots the true positive rate (recall) against the false positive rate at various threshold settings. AUC-ROC is the area under this curve.
+
+Reason: AUC-ROC is threshold-independent and captures the model’s ability to distinguish between classes, particularly for binary classification. It’s a good measure of separability, showing how well a model can separate positive and negative classes.
+Limitation: AUC-ROC may be less informative for heavily imbalanced datasets, as the curve can become less indicative of overall performance if one class dominates.
+
+4. AUC-PR (Area Under the Precision-Recall Curve)
+
+Definition: The precision-recall curve plots precision versus recall for different probability thresholds. The area under this curve is calculated as AUC-PR.
+
+Reason: AUC-PR is especially helpful for highly imbalanced datasets, as it focuses on the performance with respect to the positive class. It shows the trade-off between precision and recall, which is often more relevant for imbalanced classes than ROC.
+Limitation: It’s primarily used in binary classification, and interpreting it for multi-class scenarios can be challenging.
+
+5. Confusion Matrix
+
+Definition: A table that shows the true positives, false positives, true negatives, and false negatives for each class.
+
+Reason: The confusion matrix provides a detailed breakdown of model performance across each class, revealing any patterns in misclassification and indicating classes that may need improvement.
+Limitation: The confusion matrix alone is not a summary metric, so interpretation may require additional metrics, especially for large class numbers.
+
+Comparison with Other models
+Evaluation on benchmark dataset
+
+To evaluate the performance of HHEM-2.1 in detecting hallucinations more broadly, we benchmarked it directly against GPT-3.5-Turbo and GPT-4 (used via the “LLM-as-a-judge” methodology in the zero-shot fashion) as well as against RAGAS (using GPT-3.5-Turbo and GPT-4 internally). Note that in all cases we use GPT-3.5-Turbo version 01-25 and GPT-4 version 06-13.
+
+We used AggreFact and RAGTruth, two prominent hallucination benchmark datasets. In particular, on AggreFact, we picked its SOTA subset (AggreFact-SOTA). We also report the performances on the summarization (RAGTruth-Summ) and question-answering (RAGTruth-QA) subsets of RAGTruth. All evaluation sets contain English-only data.
+
+When using an LLM to detect hallucinations, we used the zero-shot template described in “ChatGPT as a Factual Consistency Evaluator for Text Summarization”.
+
+We measure performance using the common metrics of precision, recall, and F1, applied to the task of detecting hallucinations. In all cases, higher values are better.
+
+In terms of F1 score (Figures 1 to 3), HHEM-2.1 outperforms all baselines by significant margins on all evaluation sets, except when compared with RAGAS-Faithfulness using GPT–4 as the underlying model. RAGAS has the downside of being relatively slow – it may take RAGAS as much as 35 seconds to make a judgment with GPT-4 for a 4096-token context (and a substantial cost) whereas in HHEM-2.1, it’s only 0.6 seconds on a consumer-level RTX 3090 GPU. According to F1 score, HHEM-2.1 is at least 1.5x better than GPT-3.5-Turbo on RAGTruth’s Summarization and Question Answering subsets, respectively, and over 30% (relative) better than GPT-4.
+
+Next, look at precision and recall.
+
+We notice that using GPT-4 or GPT-3.5-Turbo with zero-shot judgment has a very unbalanced performance in terms of precision and recall. Despite using the same prompt template, the zero-shot performances of GPT-3.5-Turbo and GPT-4 measured by Vectara differ significantly from those reported in the RAGTruth v2 paper. In fact, if you compare the numbers measured by Vectara to those reported in the RAGTruth v2 paper,  the precision and recall nearly flipped for both GPT-3.5-Turbo and GPT-4. Furthermore, the RAGTruth v1 and v2 papers report moderate differences.
+
+We hypothesize that the differences in precision and recall are due to constant model updates from OpenAI and the different times at which the experiments were carried out.
+
+These observations may indicate that the “LLM-as-a-judge” technique may not be robust for hallucination detection in that a model update can flip the assessment, or may result in otherwise unreliable outcomes.
+
+In contrast, HHEM performs better than both GPT-3.5-Turbo and GPT-4 (in terms of both balanced accuracy and F1 score), with a more balanced precision/recall trade-off, making it reliable and consistent.
+
+Evaluation on our own dataset
+
+1.Dataset Preparation
+
+Data Collection: The data was collected from the human labelled question and answer pairs that based on some handbook documents which only include the positive samples.
+Data augmentation and Preprocessing: In order to enhance and balance the dataset, we do some data augmentation work that shuffle context and answer to generate negative samples. After generate the dataset, we apply a data cleaning to delete the same samples and make sure the data are all string format for evaluation as well.
+Data scale: There are a total of 7670 positive samples and 3836 negative samples for evaluation. 
+
+2. Model Selection
+
+We picked up three models for evaluation on our own dataset:
+
+HHEM-2.1: hallucination_evaluation_model
+Minicheck: MiniCheck-RoBERTa-Large 
+ Factual_Consistency: deberta-v3-base-zeroshot-v1.1-all-33
+
+3. Evaluation Process
+
+Tracking Metrics: Precision,Accuracy, F1-score, Recall.
+Token Count and Inference Time: analyzing the relationship between token count and inference time.
+
+4. Results
+
+• Quantitative Results: 
+
+Evaluation metrics for minicheck:
+             
+
+     	precision	recall	f1-score	support samples
+Negative	0.77	0.99	0.86	3835
+Positive	0.99	0.84	0.91	7180
+
+Evaluation metrics for HHEM-2.1:
+
+     	precision	recall	f1-score	support samples
+Negative	0.87	0.99	0.92	3835
+Positive	1.00	0.92	0.94	7180
+
+Evaluation metrics for Factual_Consistency:
+
+     	precision	recall	f1-score	support samples
+Negative	0.47	0.98	0.63	3835
+Positive	0.97	0.41	0.58	7180
+
+
+• Qualitative Analysis:
+
 Based on these metrics, here’s a comparative analysis of MiniCheck, HHEM, and FactualConsistency:
 
 1. MiniCheck
 
-	•	Overall Performance: Accuracy of 0.89, with a balanced performance in both precision and recall for Positive and Negative classes.
-	•	Strengths:
-	•	High precision (0.99) in identifying the Positive class, which is critical for minimizing false positives.
-	•	Solid recall (0.99) in the Negative class, indicating effective identification of negatives.
-	•	Weaknesses:
-	•	Recall for Positive class is slightly lower at 0.84, showing some misses in correctly identifying positives.
+• Overall Performance: Accuracy of 0.89, with a balanced performance in both precision and recall for Positive and Negative classes.
+• Strengths:
+• High precision (0.99) in identifying the Positive class, which is critical for minimizing false positives.
+• Solid recall (0.99) in the Negative class, indicating effective identification of negatives.
+• Weaknesses:
+• Recall for Positive class is slightly lower at 0.84, showing some misses in correctly identifying positives.
 
 2. HHEM
 
-	•	Overall Performance: Achieves the highest accuracy at 0.94, with high precision and recall across both classes.
-	•	Strengths:
-	•	Exceptional precision (1.00) for the Positive class, meaning it rarely misclassifies Positive instances.
-	•	Very high recall (0.99) for the Negative class, so it captures nearly all negatives accurately.
-	•	The model achieves a high f1-score in both classes, especially in Positive (0.96), reflecting strong balance in detection.
-	•	Weaknesses: Minor, as it demonstrates consistent and strong performance across both classes.
+• Overall Performance: Achieves the highest accuracy at 0.94, with high precision and recall across both classes.
+• Strengths:
+• Exceptional precision (1.00) for the Positive class, meaning it rarely misclassifies Positive instances.
+• Very high recall (0.99) for the Negative class, so it captures nearly all negatives accurately.
+• The model achieves a high f1-score in both classes, especially in Positive (0.96), reflecting strong balance in detection.
+• Weaknesses: Minor, as it demonstrates consistent and strong performance across both classes.
 
 3. FactualConsistency
 
-	•	Overall Performance: Accuracy of 0.61, which is significantly lower than the other two models.
-	•	Strengths:
-	•	High precision (0.97) in the Positive class, suggesting it can identify positives accurately when it does identify them.
-	•	Weaknesses:
-	•	Low recall (0.41) for the Positive class, meaning many positives are missed.
-	•	Overall, the performance is much weaker than the other models, with a particularly low f1-score for both classes.
+• Overall Performance: Accuracy of 0.61, which is significantly lower than the other two models.
+• Strengths:
+• High precision (0.97) in the Positive class, suggesting it can identify positives accurately when it does identify them.
+• Weaknesses:
+• Low recall (0.41) for the Positive class, meaning many positives are missed.
+• Overall, the performance is much weaker than the other models, with a particularly low f1-score for both classes.
 
 Conclusion
 
-HHEM shows the most balanced and robust performance, with high accuracy and strong metrics across both Positive and Negative classes. MiniCheck follows as a close second, with solid performance but slightly lower recall in the Positive class. FactualConsistency falls short with significant limitations in recall and overall accuracy, suggesting it may be less suitable for applications needing balanced class performance.
+HHEM shows the most balanced and robust performance, with high accuracy and strong metrics across both Positive and Negative classes.
 
-Let me know if you’d like a further breakdown or a visualization of these metrics.
+MiniCheck follows as a close second, with solid performance but slightly lower recall in the Positive class.
+
+FactualConsistency falls short with significant limitations in recall and overall accuracy, suggesting it may be less suitable for applications needing balanced class performance.
+
+Advantage and disadvantage
+
+
+
+
+Use case and applications
+SCB context application
+
+Hallucination detection, especially in natural language processing (NLP), focuses on identifying when a model generates outputs that are factually incorrect, irrelevant, or misleading. Hallucinations occur when the model “hallucinates” facts or statements that aren’t grounded in real or reliable data. Detecting hallucinations is critical for high-stakes applications like medical, legal, and educational fields, where incorrect information can have serious consequences.
+
+1. Legal and Financial Document Generation:
+• Legal documents, contracts, and financial reports demand precision and factual consistency. Hallucination detection helps ensure that the generated content is factually grounded in the input data, preventing the introduction of false or misleading statements that could lead to legal issues or financial errors.
+2. Customer Support and Chatbots:
+• Hallucination detection can improve the reliability of AI-based customer service by ensuring responses are accurate and relevant. This is especially useful in domains like banking, insurance, and telecommunications, where inaccurate information can lead to customer dissatisfaction or regulatory concerns.
+3. Fact-Checking and News Generation:
+• Media organizations often use AI to assist in writing or fact-checking articles. Hallucination detection in automated news generation helps ensure that generated content adheres to verified facts, supporting journalistic integrity and reducing the spread of misinformation.
+4. Machine Translation (MT):
+• In translation systems, hallucination detection is important to avoid the generation of content that isn’t present in the original text. This is especially crucial in diplomatic, legal, and technical translations, where any deviation from the source can alter the meaning and lead to miscommunication.
+5. Summarization of Scientific Research:
+• Summarizing scientific articles and technical papers requires high factual accuracy. Hallucination detection ensures summaries are consistent with the original research data and findings, which is essential in academia and research-intensive industries.
+
+Key Techniques in Hallucination Detection
+
+Hallucination detection often combines:
+
+Fact Verification: Comparing the generated output to known databases or sources to confirm factuality.
+Confidence Scoring: Assigning a confidence level to each statement in the output, where low-confidence content may indicate hallucination.
+Consistency Checks: Evaluating if the generated content aligns well with the input data structure, especially useful in controlled summarization tasks.
+Human-in-the-Loop Systems: Human reviewers verify flagged content, which is common in applications like journalism and legal document generation.
+
+Hallucination detection is an evolving field with applications expanding as generative models are increasingly adopted in diverse, high-stakes settings. It’s crucial for enhancing the credibility, reliability, and safety of AI-generated content.
+
+Limitation and Challenges
+Common failures
+
+
+
+
+Knows Issues
+
+
+
+
+Deployment and usage
+How to use the model
+
+
+
+
+
+
+
+from transformers import AutoModelForSequenceClassification
+
+pairs = [ # Test data, List[Tuple[str, str]]
+    ("The capital of France is Berlin.", "The capital of France is Paris."), # factual but hallucinated
+    ('I am in California', 'I am in United States.'), # Consistent
+    ('I am in United States', 'I am in California.'), # Hallucinated
+    ("A person on a horse jumps over a broken down airplane.", "A person is outdoors, on a horse."),
+    ("A boy is jumping on skateboard in the middle of a red bridge.", "The boy skates down the sidewalk on a red bridge"),
+    ("A man with blond-hair, and a brown shirt drinking out of a public water fountain.", "A blond man wearing a brown shirt is reading a book."),
+    ("Mark Wahlberg was a fan of Manny.", "Manny was a fan of Mark Wahlberg.")
+]
+
+# Step 1: Load the model
+model = AutoModelForSequenceClassification.from_pretrained(
+    'vectara/hallucination_evaluation_model', trust_remote_code=True)
+
+# Step 2: Use the model to predict
+model.predict(pairs) # note the predict() method. Do not do model(pairs). 
+# tensor([0.0111, 0.6474, 0.1290, 0.8969, 0.1846, 0.0050, 0.0543])
+
+
+
+
+
+
+
+
+
+API documentation
+
+https://docs.vectara.com/docs/learn/hallucination-evaluation
+
+Model inference time
+
+Finetune and Customization
+Customization on a specific task
+
+
+
+
+Reference
+Published paper for reference
+
+HHEM 2.1: A Better Hallucination Detection Model and a New Leaderboard: https://www.vectara.com/blog/hhem-2-1-a-better-hallucination-detection-model#hhem-version-2
+
+Understanding Factual Errors in Summarization: Errors, Summarizers, Datasets, Error Detectors: https://arxiv.org/pdf/2205.12854
+
+RAGTruth: A Hallucination Corpus for Developing Trustworthy Retrieval-Augmented Language Models: https://arxiv.org/pdf/2401.00396
+
+ChatGPT as a Factual Inconsistency Evaluator for Text Summarization: https://arxiv.org/pdf/2303.15621
+
+
