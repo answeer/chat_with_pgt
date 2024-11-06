@@ -73,4 +73,34 @@ class EvalDataset:
                 avg_times.append(avg_time)
 
             # 并排绘制柱状图，位置偏移为 `x + i * bar_width`
-            plt.bar(x + i * bar_width, avg_times,
+            plt.bar(x + i * bar_width, avg_times, width=bar_width, label=model_nm)
+
+            # 在柱状图上显示平均推理时间数值
+            for j, avg_time in enumerate(avg_times):
+                plt.text(x[j] + i * bar_width, avg_time + 0.001, f'{avg_time:.2f}', ha='center', va='bottom', fontsize=8)
+
+        # 设置标签
+        plt.xlabel('Token Range')
+        plt.ylabel('Average Inference Time (s)')
+        plt.title('Average Inference Time by Token Range for Models')
+        plt.xticks(x + bar_width, range_labels, rotation=45)
+        plt.legend(title='Model')
+        plt.tight_layout()
+        plt.savefig(save_path)
+        plt.show()
+        print(f"Token range vs. inference time plot saved to {save_path}")
+
+
+if __name__ == "__main__":
+    model_list = ['minicheck', 'hhem', 'factual_consistency']
+    eval_dataset = EvalDataset()
+    sample_ratio = 0.1
+
+    results = {}
+    for model_nm in model_list:
+        print(f"Running evaluation for {model_nm}...")
+        token_counts, inference_times = eval_dataset.run(model_nm, sample_ratio=sample_ratio)
+        results[model_nm] = (token_counts, inference_times)
+
+    # 绘制 token 数区间与平均推理时间的柱状图
+    eval_dataset.plot_token_time_bars(results)
