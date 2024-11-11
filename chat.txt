@@ -1,107 +1,28 @@
-import numpy as np
-import matplotlib.pyplot as plt
 import pandas as pd
-from transformers import AutoTokenizer
-from tqdm import tqdm
-import time
 
-class EvalDataset:
-    def __init__(self, data_path='augmented_dataset.xlsx'):
-        self.data_path = data_path
-        self.tokenizer = AutoTokenizer.from_pretrained('roberta-large')
+def save_misclassifications(input_file='evaluation_results.xlsx', output_file='misclassifications.xlsx'):
+    # 读取包含评测结果的 Excel 文件
+    df = pd.read_excel(input_file)
 
-    def load_dataset(self, sample_ratio=1.0):
-        df = pd.read_excel(self.data_path)
-        df['Context'] = df['Context'].apply(lambda x: str(x) if not isinstance(x, str) else x)
-        df['Answer'] = df['Answer'].apply(lambda x: str(x) if not isinstance(x, str) else x)
-        if 0 < sample_ratio < 1:
-            df = df.sample(frac=sample_ratio, random_state=42).reset_index(drop=True)
-        return df
+    # 初始化一个字典，用于存储每个模型的错误分类
+    misclassifications = {}
 
-    def count_tokens(self, context, response):
-        inputs = self.tokenizer(context, response, return_tensors='pt', truncation=True)
-        return len(inputs['input_ids'][0])
+    # 遍历每个模型的预测列，识别错误分类
+    model_columns = ['minicheck_pred', 'hhem_pred', 'factual_consistency_pred']
+    for model_col in model_columns:
+        # 过滤出错误分类样本
+        misclassified_df = df[df['label'] != df[model_col]].copy()
+        
+        # 添加该模型的错误分类到字典中
+        misclassifications[model_col] = misclassified_df[['Context', 'Answer', 'label', model_col]]
 
-    def run(self, model_nm, sample_ratio=1.0):
-        df = self.load_dataset(sample_ratio=sample_ratio)
-        context_list = df['Context'].tolist()
-        response_list = df['Answer'].tolist()
+    # 将每个模型的错误分类结果保存到一个新的 Excel 文件的不同 sheet 中
+    with pd.ExcelWriter(output_file) as writer:
+        for model_col, misclassified_df in misclassifications.items():
+            sheet_name = model_col + '_misclassified'
+            misclassified_df.to_excel(writer, sheet_name=sheet_name, index=False)
+    
+    print(f"Misclassifications saved to {output_file}")
 
-        inference_times, token_counts = [], []
-
-        for context, response in tqdm(zip(context_list, response_list), total=len(context_list)):
-            tokens = self.count_tokens(context, response)
-            token_counts.append(tokens)
-
-            try:
-                start_inference = time.time()
-                # 模型推理逻辑省略, 此处仅模拟推理时间
-                time.sleep(0.01)  # 模拟推理时间
-                end_inference = time.time()
-                inference_times.append(end_inference - start_inference)
-            except Exception as e:
-                print(f"Error occurred for model {model_nm}: {e}")
-                inference_times.append(0)
-
-        return token_counts, inference_times
-
-    def plot_token_time_bars(self, results, save_path='token_time_bars.png'):
-        # 定义 token 数区间
-        token_ranges = [(0, 50), (51, 100), (101, 150), (151, 200), (201, 300), (301, 500), (501, float('inf'))]
-        range_labels = [f'{start}-{int(end) if end != float("inf") else "inf"}' for start, end in token_ranges]
-        num_ranges = len(token_ranges)
-
-        # 设置并排显示的宽度偏移
-        bar_width = 0.2
-        x = np.arange(num_ranges)
-
-        plt.figure(figsize=(14, 8))
-
-        # 遍历每个模型并绘制其柱状图
-        for i, (model_nm, (token_counts, inference_times)) in enumerate(results.items()):
-            avg_times = []
-
-            for start, end in token_ranges:
-                # 找出属于该区间的所有样本的推理时间
-                indices = [j for j, tokens in enumerate(token_counts) if start <= tokens < end]
-                if not indices:
-                    avg_times.append(0)
-                    continue
-
-                # 计算当前区间的平均推理时间
-                range_times = [inference_times[j] for j in indices]
-                avg_time = np.mean(range_times)
-                avg_times.append(avg_time)
-
-            # 并排绘制柱状图，位置偏移为 `x + i * bar_width`
-            plt.bar(x + i * bar_width, avg_times, width=bar_width, label=model_nm)
-
-            # 在柱状图上显示平均推理时间数值
-            for j, avg_time in enumerate(avg_times):
-                plt.text(x[j] + i * bar_width, avg_time + 0.001, f'{avg_time:.2f}', ha='center', va='bottom', fontsize=8)
-
-        # 设置标签
-        plt.xlabel('Token Range')
-        plt.ylabel('Average Inference Time (s)')
-        plt.title('Average Inference Time by Token Range for Models')
-        plt.xticks(x + bar_width, range_labels, rotation=45)
-        plt.legend(title='Model')
-        plt.tight_layout()
-        plt.savefig(save_path)
-        plt.show()
-        print(f"Token range vs. inference time plot saved to {save_path}")
-
-
-if __name__ == "__main__":
-    model_list = ['minicheck', 'hhem', 'factual_consistency']
-    eval_dataset = EvalDataset()
-    sample_ratio = 0.1
-
-    results = {}
-    for model_nm in model_list:
-        print(f"Running evaluation for {model_nm}...")
-        token_counts, inference_times = eval_dataset.run(model_nm, sample_ratio=sample_ratio)
-        results[model_nm] = (token_counts, inference_times)
-
-    # 绘制 token 数区间与平均推理时间的柱状图
-    eval_dataset.plot_token_time_bars(results)
+# 使用该函数
+save_misclassifications()
