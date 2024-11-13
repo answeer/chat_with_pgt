@@ -1,50 +1,29 @@
-1. File Data
+File Data
 
-	•	Encryption Detector
-	•	Purpose: Ensures that files are not encrypted, allowing access for processing.
-	•	Reason: Encrypted files halt processing unless decrypted, leading to potential errors.
 	•	File Format Check
-	•	Purpose: Verifies files are in supported formats (e.g., PNG, JPEG, TXT).
-	•	Reason: Unsupported formats can cause parsing errors or data loss, ensuring format compatibility avoids these issues.
+	•	Reason: Ensures that files are in a supported format, preventing errors during processing due to unsupported file types. This foundational check confirms that the file can be correctly parsed and utilized by the system.
 
-2. Image Data
+Image Data
 
+	•	Image Blurriness Check
+	•	Reason: Identifies blurry images that lack clarity, which could impact tasks requiring clear visual data (e.g., computer vision tasks). Ensuring image sharpness improves the quality and reliability of analysis.
 	•	Image Dimension Check
-	•	Purpose: Confirms images meet minimum size requirements.
-	•	Reason: Small images lack detail, impacting quality and usability in visual analysis.
-	•	Image DPI Check
-	•	Purpose: Checks DPI (dots per inch) for clarity and resolution.
-	•	Reason: Low-DPI images may degrade processing accuracy, especially in high-quality applications.
+	•	Reason: Verifies that images meet minimum size requirements, avoiding issues with images that are too small to be useful for analysis or processing. This ensures the image provides adequate detail for its intended use.
 
-3. Text Data
+Text Data
 
-	•	Executable Scripts
-	•	Purpose: Detects and removes embedded executable scripts (e.g., JavaScript).
-	•	Reason: Prevents code injection attacks, ensuring system security.
+	•	Harmful String
+	•	Reason: Detects potentially harmful or malicious content within text fields. Removing harmful strings helps maintain data integrity and safeguards against security risks.
 	•	Profanity Check
-	•	Purpose: Filters offensive or inappropriate language.
-	•	Reason: Especially in user-generated content, this helps maintain content compliance.
-	•	Token Limit
-	•	Purpose: Limits text length.
-	•	Reason: Manages processing resources by avoiding excessively long text inputs.
+	•	Reason: Filters out offensive or inappropriate language, especially useful for user-generated content to maintain compliance with content standards and ensure a positive user experience.
 	•	PII Detector
-	•	Purpose: Flags personal identifiable information (e.g., names, emails).
-	•	Reason: Ensures privacy compliance (e.g., GDPR), protecting personal information.
+	•	Reason: Flags personal identifiable information (PII) to help comply with privacy regulations (e.g., GDPR). Protecting PII prevents unintentional exposure of sensitive information.
+	•	Remove Unicode
+	•	Reason: Removes special Unicode characters, standardizing text data to reduce compatibility issues and ensure consistent processing.
 	•	Secret Detector
-	•	Purpose: Identifies sensitive information like passwords or API keys.
-	•	Reason: Prevents accidental exposure or leakage of confidential information.
+	•	Reason: Detects sensitive information (e.g., passwords, API keys), preventing accidental leakage of confidential data, which is essential for data security.
 
-4. Structured Data Validation
+Structured Data
 
-	•	JSON Validation
-	•	Purpose: Validates JSON structure.
-	•	Reason: Ensures compatibility with systems that rely on structured data for parsing and processing.
-
-Summary of Essential Default Scanners
-
-	•	File Data: Encryption Detector, File Format Check
-	•	Image Data: Image Dimension Check, Image DPI Check
-	•	Text Data: Executable Scripts, Profanity Check, Token Limit, PII Detector, Secret Detector
-	•	Structured Data Validation: JSON Validation
-
-These scanners cover key security, format consistency, and compliance needs, ensuring that data can be processed safely and reliably across diverse formats.
+	•	JSON Validator
+	•	Reason: Ensures the integrity of JSON structures, confirming they are valid and well-formed. This is essential for systems that rely on structured data for accurate parsing and data handling.
