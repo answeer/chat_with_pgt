@@ -7,7 +7,47 @@ def save_misclassifications(input_file='evaluation_results.xlsx', output_file='m
     # 初始化一个字典，用于存储每个模型的错误分类
     misclassifications = {}
 
-    # 遍历每个模型的预测列，识别错误分类
+    # 遍历每个模型1. File Data
+
+	•	Encryption Detector
+	•	Purpose: Ensures that files are not encrypted, allowing access for processing.
+	•	Reason: Encrypted files halt processing unless decrypted, leading to potential errors.
+	•	File Format Check
+	•	Purpose: Verifies files are in supported formats (e.g., PNG, JPEG, TXT).
+	•	Reason: Unsupported formats can cause parsing errors or data loss, ensuring format compatibility avoids these issues.
+
+2. Image Data
+
+	•	Image Dimension Check
+	•	Purpose: Confirms images meet minimum size requirements.
+	•	Reason: Small images lack detail, impacting quality and usability in visual analysis.
+	•	Image DPI Check
+	•	Purpose: Checks DPI (dots per inch) for clarity and resolution.
+	•	Reason: Low-DPI images may degrade processing accuracy, especially in high-quality applications.
+
+3. Text Data
+
+	•	Executable Scripts
+	•	Purpose: Detects and removes embedded executable scripts (e.g., JavaScript).
+	•	Reason: Prevents code injection attacks, ensuring system security.
+	•	Profanity Check
+	•	Purpose: Filters offensive or inappropriate language.
+	•	Reason: Especially in user-generated content, this helps maintain content compliance.
+	•	Token Limit
+	•	Purpose: Limits text length.
+	•	Reason: Manages processing resources by avoiding excessively long text inputs.
+	•	PII Detector
+	•	Purpose: Flags personal identifiable information (e.g., names, emails).
+	•	Reason: Ensures privacy compliance (e.g., GDPR), protecting personal information.
+	•	Secret Detector
+	•	Purpose: Identifies sensitive information like passwords or API keys.
+	•	Reason: Prevents accidental exposure or leakage of confidential information.
+
+4. Structured Data Validation
+
+	•	JSON Validation
+	•	Purpose: Validates JSON structure.
+	•	Reason: Ensures compatibility with systems that rely on structured data for parsing and processing.的预测列，识别错误分类
     model_columns = ['minicheck_pred', 'hhem_pred', 'factual_consistency_pred']
     for model_col in model_columns:
         # 过滤出错误分类样本
