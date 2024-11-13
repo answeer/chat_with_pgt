@@ -1,13 +1,4 @@
-import pandas as pd
-
-def save_misclassifications(input_file='evaluation_results.xlsx', output_file='misclassifications.xlsx'):
-    # 读取包含评测结果的 Excel 文件
-    df = pd.read_excel(input_file)
-
-    # 初始化一个字典，用于存储每个模型的错误分类
-    misclassifications = {}
-
-    # 遍历每个模型1. File Data
+1. File Data
 
 	•	Encryption Detector
 	•	Purpose: Ensures that files are not encrypted, allowing access for processing.
@@ -47,22 +38,13 @@ def save_misclassifications(input_file='evaluation_results.xlsx', output_file='m
 
 	•	JSON Validation
 	•	Purpose: Validates JSON structure.
-	•	Reason: Ensures compatibility with systems that rely on structured data for parsing and processing.的预测列，识别错误分类
-    model_columns = ['minicheck_pred', 'hhem_pred', 'factual_consistency_pred']
-    for model_col in model_columns:
-        # 过滤出错误分类样本
-        misclassified_df = df[df['label'] != df[model_col]].copy()
-        
-        # 添加该模型的错误分类到字典中
-        misclassifications[model_col] = misclassified_df[['Context', 'Answer', 'label', model_col]]
+	•	Reason: Ensures compatibility with systems that rely on structured data for parsing and processing.
 
-    # 将每个模型的错误分类结果保存到一个新的 Excel 文件的不同 sheet 中
-    with pd.ExcelWriter(output_file) as writer:
-        for model_col, misclassified_df in misclassifications.items():
-            sheet_name = model_col + '_misclassified'
-            misclassified_df.to_excel(writer, sheet_name=sheet_name, index=False)
-    
-    print(f"Misclassifications saved to {output_file}")
+Summary of Essential Default Scanners
 
-# 使用该函数
-save_misclassifications()
+	•	File Data: Encryption Detector, File Format Check
+	•	Image Data: Image Dimension Check, Image DPI Check
+	•	Text Data: Executable Scripts, Profanity Check, Token Limit, PII Detector, Secret Detector
+	•	Structured Data Validation: JSON Validation
+
+These scanners cover key security, format consistency, and compliance needs, ensuring that data can be processed safely and reliably across diverse formats.
