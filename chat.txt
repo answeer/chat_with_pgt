@@ -1,19 +1,2 @@
-def determine_task_group(data):
-    """Determines the task group based on the input data type."""
-    if isinstance(data, str):
-        # Check if the data is a filepath
-        if os.path.isfile(data):
-            # Determine the MIME type
-            mime_type, _ = mimetypes.guess_type(data)
-            if mime_type and mime_type.startswith('image'):
-                return 'image_bounding'  # Image files
-            else:
-                return 'file_bounding'  # All other file types
-        else:
-            # Plain string, not a filepath
-            return 'text_bounding'
-    elif isinstance(data, (int, float)):
-        # If data is numeric
-        return 'numeric_bounding'
-    else:
-        raise ValueError("Unsupported data type for task group determination.")
+HI Li,
+As we worked together in Input and Output sanitation, i would like to get your feedback please
