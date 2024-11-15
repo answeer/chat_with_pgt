@@ -55,16 +55,31 @@ class Action:
         """Generates an execution plan for default scanners based on file type."""
         return {scanner: {"sanitize": True} for scanner in self.DEFAULT_SCANNERS.get(file_type, [])}
 
-    def run_action(self, data, save_path, default_only=False):
-        """Executes the scanning process based on data type and scanner type configuration."""
+    def merge_execution_plans(self, default_plan, additional_scanners):
+        """Combines the default execution plan with any additional scanners."""
+        combined_plan = default_plan.copy()
+        for scanner, param in additional_scanners.items():
+            combined_plan[scanner] = param  # Overwrites if duplicate, otherwise adds new
+        return combined_plan
+
+    def run_action(self, data, save_path, additional_scanners=None, default_only=False):
+        """
+        Executes the scanning process with the option to include additional non-default scanners.
+        
+        Parameters:
+            data: The data to scan.
+            save_path: Path to save results.
+            additional_scanners: Optional dict of additional scanners to include.
+            default_only: If True, runs only the default scanners.
+        """
         try:
             job_id = self.kwargs['job_id']
             task_group = self.kwargs['task_group']
 
             file_type = self.detect_file_type(data)
+            default_plan = self.get_default_execution_plan(file_type)
             execution_plan = (
-                self.get_default_execution_plan(file_type) if default_only
-                else self.kwargs.get("execution_plan", {})
+                default_plan if default_only else self.merge_execution_plans(default_plan, additional_scanners or {})
             )
 
             for scanner_nm, param in execution_plan.items():
@@ -119,7 +134,12 @@ if __name__ == "__main__":
     data = payload["service_params"].get("job_object", {}).get("data", "")
     save_path = payload["job_params"].get("save_path", "NA")
 
+    additional_scanners = {
+        "AdditionalScanner1": {"sanitize": True},
+        "AdditionalScanner2": {"sanitize": False}
+    }
+
     action_obj = Action(**kwargs)
-    result, error_code, error_message = action_obj.run_action(data, save_path, default_only=True)
+    result, error_code, error_message = action_obj.run_action(data, save_path, additional_scanners=additional_scanners)
     print("Action completed")
     print(result)
