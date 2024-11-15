@@ -122,3 +122,40 @@ class Action:
 if __name__ == "__main__":
     # Example main function
     # Additional code for loading payload and executing `run_action` based on task group.
+payload = {
+        "job_params": {
+            "jobid": "JID-54ca58ba-c495-11ed-b20c-0a586e830578",
+            "task_id": "TID-54ca58ba-c495-11ed-b20c-0a586e830578",
+            "app_name": "synthesizer",
+            "use_case": "aadhar_redact",
+            "save_path": r"C:\path\to\save",
+        },
+        "service_params": {
+            "callback_url": "http://callback.url",
+            "job_object": {
+                "io": "i",
+                "policy_id": "policy_00001",
+                "data": r"path/to/your/file.jpg",
+                "execution_plan": {
+                    "AdditionalScanner": {'param_key': 'param_value'}
+                }
+            }
+        }
+    }
+
+    kwargs = {
+        "job_id": payload["job_params"].get("jobid", "NA"),
+        "task_id": payload["job_params"].get("task_id", "NA"),
+        "use_case": payload["job_params"].get("use_case", "NA"),
+        "io": payload["service_params"]["job_object"].get("io", "NA"),
+        "policy_id": payload["service_params"]["job_object"].get("policy_id", "NA"),
+        "data": payload["service_params"]["job_object"].get("data", ""),
+    }
+
+    action_obj = Action(**kwargs)
+    result, error_code, error_message = action_obj.run_action(
+        payload["service_params"]["job_object"]["execution_plan"],
+        payload["service_params"]["job_object"]["data"],
+        payload["job_params"]["save_path"]
+    )
+    print("Action completed", result)
