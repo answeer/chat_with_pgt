@@ -6,7 +6,25 @@ from llm_sanitation.utils.error_codes import ERROR_CODE_DICT
 from llm_sanitation.logging.logging_setup import LogUtil, LogType, LogLevel
 
 class Action:
-    def __init__(self,**kwargs):
+    DEFAULT_SCANNERS = {
+        "file_bounding": {"FormatCheck": {'format_list': ['jpg', 'png', 'jpeg', 'pdf']}},
+        "image_bounding": {
+            "ImageBlurCheck": {'score_thresh': 0.6},
+            "ImageDimCheck": {'img_dim_thresh': (1024, 1024)}
+        },
+        "text_bounding": {
+            "HarmfulString": {"case_sensitive": False},
+            "ProfanityCheck": {},
+            "PiiDetector": {'sanitize': True},
+            "RemoveUnicode": {"sanitize": True},
+            "Secrets": {'sanitize': True}
+        },
+        "structured_bounding": {
+            "JsonValidator": {}
+        }
+    }
+
+    def __init__(self, **kwargs):
         LogUtil.log(LogType.TRANSACTION, LogLevel.INFO, "Running Initialized")
         self.response = Callback(**kwargs)
         self.check = Checks(self.response)
@@ -14,161 +32,93 @@ class Action:
         self.combined_result = []
         self.nstp_result = []
 
+    def determine_task_group(self, data):
+        """Determines the task group based on file type or data format."""
+        if isinstance(data, str) and os.path.isfile(data):
+            ext = os.path.splitext(data)[1].lower()
+            if ext in [".jpg", ".jpeg", ".png"]:
+                return "image_bounding"
+            elif ext in [".json"]:
+                return "structured_bounding"
+            elif ext in [".txt", ".csv", ".md"]:
+                return "text_bounding"
+            elif ext in [".pdf", ".docx"]:
+                return "file_bounding"
+        return "text_bounding"
+
     def run_scanner(self, data, scanner_nm, param, **kwargs):
         """Dynamically imports and runs the specified scanner with provided parameters."""
         try:
             scanners = __import__("llm_sanitation.scanners", fromlist=[scanner_nm])
             scanner = getattr(scanners, scanner_nm)
+            scanner_obj = scanner(**param)
+            result = scanner_obj.validate(data, **kwargs)
+            self.combined_result.append(result)
+            self.nstp_result.append(result.get("NSTP"))
+            return result
         except (ImportError, AttributeError) as e:
             error_code = "FRDIOS9000"
             error_message = ERROR_CODE_DICT[error_code].format(str(e))
-            self.response.form_response(error_code,error_message)
+            self.response.form_response(error_code, error_message)
             LogUtil.log(LogType.ERROR, LogLevel.ERROR, "Running ended with error", jid=self.kwargs['job_id'], error=error_message)
             return None
-        
-        scanner_obj = scanner(**param)
-        # Run the scanner's validation method and record the result
-        result = scanner_obj.validate(data, **kwargs)
-
-        self.combined_result.append(result)
-        self.nstp_result.append(result.get("NSTP"))
-
-        return result
-
-    def get_result(self):
-        """Returns all combined results from the scanners."""
-        return self.combined_result
-
-    def get_nstp_result(self):
-        """Returns NSTP results from each scanner."""
-        return self.nstp_result
 
     def run_action(self, execution_plan, data, save_path):
         """Executes the scanning process based on the provided execution plan and scanner type."""
         try:
-            # Initialize the callback object for the response tracking
-            error_code = ""
-            error_message = ""
             job_id = self.kwargs['job_id']
-            task_group = self.kwargs['task_group']
+            task_group = self.determine_task_group(data)
+            default_scanners = self.DEFAULT_SCANNERS.get(task_group, {})
 
-            # Pre-validation checks based on scanner type
+            # Merge default scanners with the execution plan
+            execution_plan = {**default_scanners, **execution_plan}
+
+            # Run pre-check based on task group
             if task_group == "file_bounding":
                 self.check.file_exists(data)
             elif task_group == "image_bounding":
                 self.check.check_image(data)
-            elif task_group == "numeric_bounding":
-                self.check.check_numeric(data)
             elif task_group == "text_bounding":
                 self.check.check_text(data)
+            elif task_group == "structured_bounding":
+                self.check.check_structure(data)
             else:
                 error_code = "FRDIOS0006"
-                error_message = ERROR_CODE_DICT["FRDIOS0006"].format(str(task_group))
+                error_message = ERROR_CODE_DICT[error_code].format(str(task_group))
                 LogUtil.log(LogType.ERROR, LogLevel.ERROR, "Running ended with error", jid=job_id, error=error_message)
-                return None, error_code,error_message
+                return None, error_code, error_message
             
             if self.response.status == "failed":
                 error_code = self.response.error_code
                 error_message = self.response.error_message
                 LogUtil.log(LogType.ERROR, LogLevel.ERROR, "Running ended with error", jid=job_id, error=error_message)
-                return None, error_code,error_message
+                return None, error_code, error_message
             
-            # Run each scanner in the execution plan
+            # Run each scanner
             for scanner_nm, param in execution_plan.items():
                 result = self.run_scanner(data, scanner_nm, param, **kwargs)
-                # Update data if sanitized_data is not None
-                data = (
-                    data if result["sanitized_data"] is None else result["sanitized_data"]
-                )
+                data = data if result["sanitized_data"] is None else result["sanitized_data"]
                 
                 if self.response.status == "failed":
                     error_code = self.response.error_code
                     error_message = self.response.error_message
                     LogUtil.log(LogType.ERROR, LogLevel.ERROR, "Running ended with error", jid=job_id, error=error_message)
-                    return None, error_code,error_message
-                
-            return self.combined_result,error_code,error_message
+                    return None, error_code, error_message
+
+            return self.combined_result, "", ""
 
         except Exception as e:
             LogUtil.log(LogType.ERROR, LogLevel.ERROR, "Running ended with error", jid=job_id, error=str(e))
             LogUtil.log(LogType.ERROR, LogLevel.ERROR, traceback.format_exc())
             error_code = "FRDIOS9000"
             error_message = ERROR_CODE_DICT[error_code].format(str(e))
-        
+
         finally:
             if save_path:
-                response_json_path = os.path.join(save_path, task_group+"_response.json")
+                response_json_path = os.path.join(save_path, task_group + "_response.json")
                 self.response.save_results(combined_result=self.combined_result)
                 self.response.return_response(response_json_path, error_code, error_message)
 
 if __name__ == "__main__":
-    # text_data = """what is the arbitrary code execution mean? <link rel="shortcut icon" href="/favicon.ico" mce_href="/favicon.ico" type="image/x-icon"/>"""
-    # execution_plan_for_text = {
-    #     "ProfanityCheck":{},
-    #     "HarmfulString": {"case_sensitive":False},
-    #     "TokenLimit": {'token_limit': 100,'token_method':'nltk'},
-    #     "ExecutableScript":{}
-    # }
-
-    # image_data = r"llm_sanitation\scanners\image_bounding\image_dimension_check\tests\image_dimension_check_test.jpg"
-    # execution_plan_for_image = {
-    #     "ImageBlurCheck":{'score_thresh': 0.6, "save_folder":"save_folder"},
-    #     "ImageDPICheck": {'x_dpi_thresh': 20, 'y_dpi_thresh': 20, "save_folder":"save_folder"},
-    #     "ImageDimCheck":{'img_dim_thresh': (1024, 1024)},
-    #     "ImageMemoryCheck":{'max_size':4096,'min_size':2048}
-    # }
-
-    # file_data = r"llm_sanitation\scanners\file_bounding\software_check\tests\LIME.pdf"
-    # execution_plan_for_file = {
-    #     "EncryptionDetector":{},
-    #     "FormatCheck": {'format_list':['jpg','png','jpeg','PNG','pdf']},
-    #     "SoftwareCheck":{'software_blacklist': ["","Photoshop","Corel","PhotoScape","PhotoPlus","GIMP","Pixelmator","Illustrator","Windows Photo Editor","ilovepdf"]}
-    # }
-
-    # numeric_data = 90
-    # execution_plan_for_numeric = {
-    #     "BinTransform":{'catagories':[{"name": "high", "range": [70, 100]},{"name": "medium", "range": [40, 60]},{"name": "low", "range": [0, 39]},],
-    #                     'default':"undefined"}
-    # }
-
-
-    payload = {
-    "job_params": {
-        "jobid": "JID-54ca58ba-c495-11ed-b20c-0a586e830578",
-        "task_id": "TID-54ca58ba-c495-11ed-b20c-0a586e830578",
-        "app_name": "synthesizer",
-        "use_case": "aadhar_redact",
-        "save_path": r"C:\Users\1657820\Desktop\51433-swoosh-io-bounding",
-    },
-    "service_params": {
-        "callback_url": "http://service-swoosh-orchestrator.swoosh-dev.svc.cluster.local:8889/api/v1/callback",
-        "job_object": {
-            "io": "i",
-            "policy_id": "policy_00001",
-            "task_group":"file_bounding",
-            "execution_plan": {
-        "EncryptionDetector":{},
-        "FormatCheck": {'format_list':['jpg','png','jpeg','PNG','pdf']},
-        "SoftwareCheck":{'software_blacklist': ["","Photoshop","Corel","PhotoScape","PhotoPlus","GIMP","Pixelmator","Illustrator","Windows Photo Editor","ilovepdf"]}},
-            "data": r"llm_sanitation\scanners\file_bounding\software_check\tests\LIME.pdf"
-        }
-    }
-}
-
-    kwargs = {
-        "job_id" : payload["job_params"].get("jobid", "NA"),
-        'task_id':payload["job_params"].get("task_id", "NA"),
-        "use_case" : payload["job_params"].get("use_case", "NA"),
-        "io" : payload["service_params"].get("job_object", {}).get("io", "NA"),
-        "policy_id" : payload["service_params"].get("job_object", {}).get("policy_id", "NA"),
-        "task_group" : payload["service_params"].get("job_object", {}).get("task_group", "NA"),
-    }
-
-    execution_plan = payload["service_params"].get("job_object", {}).get("execution_plan", {})
-    data = payload["service_params"].get("job_object", {}).get("data", "")
-    save_path = payload["job_params"].get("save_path", "NA")
-
-    action_obj = Action(**kwargs)
-    result,error_code,error_message = action_obj.run_action(execution_plan, data, save_path)
-    print("Action completed")
-    print(result)
+    # Example main function
+    # Additional code for loading payload and executing `run_action` based on task group.
