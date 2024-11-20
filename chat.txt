@@ -1,14 +1,78 @@
-Thank you for inviting me to share feedback. It’s been a privilege to work with you on the input and output sanitation initiative. Here are my thoughts:
+import json
+import os
 
-1. Things You Have Done Well:
+class Action:
+    def __init__(self, **kwargs):
+        LogUtil.log(LogType.TRANSACTION, LogLevel.INFO, "Running Initialized")
+        self.response = Callback(**kwargs)
+        self.check = Checks(self.response)
+        self.kwargs = kwargs
+        self.combined_result = []
+        self.nstp_result = []
+        self.default_scanners = self.load_default_scanners("default_scanners.json")  # Load JSON config
 
-	•	Vision and Strategy: Your ability to define a clear vision for the sanitation process was impressive. You emphasized not just solving immediate problems but also laying the foundation for a scalable and future-proof system.
-	•	Empowering Collaboration: You created an environment where ideas and suggestions were valued, fostering teamwork and ensuring everyone felt invested in the project’s success.
-	•	Commitment to Excellence: Your attention to detail and focus on quality assurance were inspiring. It ensured we delivered a solution that was both robust and reliable.
+    @staticmethod
+    def load_default_scanners(config_path):
+        """Loads default scanner configurations from a JSON file."""
+        try:
+            with open(config_path, "r") as file:
+                return json.load(file)
+        except Exception as e:
+            LogUtil.log(LogType.ERROR, LogLevel.ERROR, f"Error loading default scanners: {e}")
+            return {}
 
-2. Things You Could Do Better:
+    def merge_execution_plan(self, task_group, execution_plan):
+        """Merge default scanners with additional execution plan."""
+        default_plan = self.default_scanners.get(task_group, {})
+        return {**default_plan, **execution_plan}  # Default scanners take precedence
 
-	•	Future Planning: While we had a strong immediate goal, incorporating a more defined roadmap for long-term maintenance and evolution of the sanitation framework could be beneficial.
-	•	Delegation Opportunities: At times, diving into details personally might have taken focus away from higher-level strategic decisions. Delegating more of the operational tasks could free you to focus on overarching objectives.
+    def run_action(self, execution_plan, data, save_path):
+        """Executes the scanning process based on the provided execution plan and scanner type."""
+        try:
+            task_group = self.kwargs.get("task_group", "unknown")
+            # Merge default scanners with provided execution plan
+            combined_plan = self.merge_execution_plan(task_group, execution_plan)
+            LogUtil.log(LogType.INFO, LogLevel.INFO, f"Combined Execution Plan: {combined_plan}")
 
-Overall, your leadership throughout this project has been exemplary. I have learned a great deal from your approach, and it has been a rewarding experience to collaborate with you.
+            # Pre-validation checks based on scanner type
+            if task_group == "file_bounding":
+                self.check.file_exists(data)
+            elif task_group == "image_bounding":
+                self.check.check_image(data)
+            elif task_group == "numeric_bounding":
+                self.check.check_numeric(data)
+            elif task_group == "text_bounding":
+                self.check.check_text(data)
+            else:
+                error_code = "FRDIOS0006"
+                error_message = ERROR_CODE_DICT["FRDIOS0006"].format(str(task_group))
+                LogUtil.log(LogType.ERROR, LogLevel.ERROR, "Running ended with error", jid=self.kwargs['job_id'], error=error_message)
+                return None, error_code, error_message
+
+            if self.response.status == "failed":
+                error_code = self.response.error_code
+                error_message = self.response.error_message
+                LogUtil.log(LogType.ERROR, LogLevel.ERROR, "Running ended with error", jid=self.kwargs['job_id'], error=error_message)
+                return None, error_code, error_message
+            
+            # Execute scanners
+            for scanner_nm, param in combined_plan.items():
+                result = self.run_scanner(data, scanner_nm, param, **self.kwargs)
+                data = data if result["sanitized_data"] is None else result["sanitized_data"]
+                if self.response.status == "failed":
+                    error_code = self.response.error_code
+                    error_message = self.response.error_message
+                    LogUtil.log(LogType.ERROR, LogLevel.ERROR, "Running ended with error", jid=self.kwargs['job_id'], error=error_message)
+                    return None, error_code, error_message
+
+            return self.combined_result, "", ""
+        except Exception as e:
+            LogUtil.log(LogType.ERROR, LogLevel.ERROR, "Running ended with error", jid=self.kwargs['job_id'], error=str(e))
+            LogUtil.log(LogType.ERROR, LogLevel.ERROR, traceback.format_exc())
+            error_code = "FRDIOS9000"
+            error_message = ERROR_CODE_DICT[error_code].format(str(e))
+        finally:
+            if save_path:
+                response_json_path = os.path.join(save_path, task_group+"_response.json")
+                self.response.save_results(combined_result=self.combined_result)
+                self.response.return_response(response_json_path, "", "")
