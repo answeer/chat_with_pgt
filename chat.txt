@@ -1,78 +1,42 @@
-import json
-import os
-
-class Action:
-    def __init__(self, **kwargs):
-        LogUtil.log(LogType.TRANSACTION, LogLevel.INFO, "Running Initialized")
-        self.response = Callback(**kwargs)
-        self.check = Checks(self.response)
-        self.kwargs = kwargs
-        self.combined_result = []
-        self.nstp_result = []
-        self.default_scanners = self.load_default_scanners("default_scanners.json")  # Load JSON config
-
-    @staticmethod
-    def load_default_scanners(config_path):
-        """Loads default scanner configurations from a JSON file."""
-        try:
-            with open(config_path, "r") as file:
-                return json.load(file)
-        except Exception as e:
-            LogUtil.log(LogType.ERROR, LogLevel.ERROR, f"Error loading default scanners: {e}")
-            return {}
-
-    def merge_execution_plan(self, task_group, execution_plan):
-        """Merge default scanners with additional execution plan."""
-        default_plan = self.default_scanners.get(task_group, {})
-        return {**default_plan, **execution_plan}  # Default scanners take precedence
-
-    def run_action(self, execution_plan, data, save_path):
-        """Executes the scanning process based on the provided execution plan and scanner type."""
-        try:
-            task_group = self.kwargs.get("task_group", "unknown")
-            # Merge default scanners with provided execution plan
-            combined_plan = self.merge_execution_plan(task_group, execution_plan)
-            LogUtil.log(LogType.INFO, LogLevel.INFO, f"Combined Execution Plan: {combined_plan}")
-
-            # Pre-validation checks based on scanner type
-            if task_group == "file_bounding":
-                self.check.file_exists(data)
-            elif task_group == "image_bounding":
-                self.check.check_image(data)
-            elif task_group == "numeric_bounding":
-                self.check.check_numeric(data)
-            elif task_group == "text_bounding":
-                self.check.check_text(data)
-            else:
-                error_code = "FRDIOS0006"
-                error_message = ERROR_CODE_DICT["FRDIOS0006"].format(str(task_group))
-                LogUtil.log(LogType.ERROR, LogLevel.ERROR, "Running ended with error", jid=self.kwargs['job_id'], error=error_message)
-                return None, error_code, error_message
-
-            if self.response.status == "failed":
-                error_code = self.response.error_code
-                error_message = self.response.error_message
-                LogUtil.log(LogType.ERROR, LogLevel.ERROR, "Running ended with error", jid=self.kwargs['job_id'], error=error_message)
-                return None, error_code, error_message
-            
-            # Execute scanners
-            for scanner_nm, param in combined_plan.items():
-                result = self.run_scanner(data, scanner_nm, param, **self.kwargs)
-                data = data if result["sanitized_data"] is None else result["sanitized_data"]
-                if self.response.status == "failed":
-                    error_code = self.response.error_code
-                    error_message = self.response.error_message
-                    LogUtil.log(LogType.ERROR, LogLevel.ERROR, "Running ended with error", jid=self.kwargs['job_id'], error=error_message)
-                    return None, error_code, error_message
-
-            return self.combined_result, "", ""
-        except Exception as e:
-            LogUtil.log(LogType.ERROR, LogLevel.ERROR, "Running ended with error", jid=self.kwargs['job_id'], error=str(e))
-            LogUtil.log(LogType.ERROR, LogLevel.ERROR, traceback.format_exc())
-            error_code = "FRDIOS9000"
-            error_message = ERROR_CODE_DICT[error_code].format(str(e))
-        finally:
-            if save_path:
-                response_json_path = os.path.join(save_path, task_group+"_response.json")
-                self.response.save_results(combined_result=self.combined_result)
-                self.response.return_response(response_json_path, "", "")
+{
+  "file_bounding": {
+    "FormatCheck": {"format_list": ["jpg", "png", "jpeg", "PNG", "pdf"]},
+    "EncryptionDetector": {},
+    "SoftwareCheck": {
+      "software_blacklist": [
+        "",
+        "Photoshop",
+        "Corel",
+        "PhotoScape",
+        "PhotoPlus",
+        "GIMP",
+        "Pixelmator",
+        "Illustrator",
+        "Windows Photo Editor",
+        "ilovepdf"
+      ]
+    }
+  },
+  "image_bounding": {
+    "ImageBlurCheck": {"score_thresh": 0.6, "save_folder": "save_folder"},
+    "ImageDPICheck": {"x_dpi_thresh": 20, "y_dpi_thresh": 20, "save_folder": "save_folder"},
+    "ImageDimCheck": {"img_dim_thresh": [1024, 1024]},
+    "ImageMemoryCheck": {"max_size": 4096, "min_size": 2048}
+  },
+  "text_bounding": {
+    "ProfanityCheck": {},
+    "HarmfulString": {"case_sensitive": false},
+    "TokenLimit": {"token_limit": 100, "token_method": "nltk"},
+    "ExecutableScript": {}
+  },
+  "numeric_bounding": {
+    "BinTransform": {
+      "categories": [
+        {"name": "high", "range": [70, 100]},
+        {"name": "medium", "range": [40, 60]},
+        {"name": "low", "range": [0, 39]}
+      ],
+      "default": "undefined"
+    }
+  }
+}
