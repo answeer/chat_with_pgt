@@ -1,42 +1,11 @@
-import cv2
-import numpy as np
+As part of the performance review, we expect all colleagues to have a conversation with their people leaders. One of the ways you can prepare for this is by conducting a self reflection. 
 
-def align_and_overlay(template_path, input_path, output_path):
-    # Step 1: 读取模板和输入图像
-    template = cv2.imread(template_path, cv2.IMREAD_GRAYSCALE)
-    input_image = cv2.imread(input_path, cv2.IMREAD_GRAYSCALE)
+ 
 
-    if template is None or input_image is None:
-        raise ValueError("无法读取输入文件或模板文件，请检查路径。")
+It is not mandatory but we would encourage you to capture your thoughts and share them with your people leader using this tool. Refer to the feedback you have gathered and the achievements you have noted and summarise the key themes and highlights of your year.
 
-    # Step 2: 使用 ORB 提取特征点和描述符
-    orb = cv2.ORB_create(5000)
-    keypoints1, descriptors1 = orb.detectAndCompute(template, None)
-    keypoints2, descriptors2 = orb.detectAndCompute(input_image, None)
+Valued Behaviour Commentary	:
 
-    # Step 3: 使用暴力匹配器进行特征匹配
-    bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
-    matches = bf.match(descriptors1, descriptors2)
-    matches = sorted(matches, key=lambda x: x.distance)  # 根据距离排序
+​
+Performance Commentary (if you lead a team, ensure that you include commentary on your performance as a People Leader)	:
 
-    # Step 4: 提取匹配点
-    src_pts = np.float32([keypoints1[m.queryIdx].pt for m in matches]).reshape(-1, 1, 2)
-    dst_pts = np.float32([keypoints2[m.trainIdx].pt for m in matches]).reshape(-1, 1, 2)
-
-    # Step 5: 计算单应性矩阵
-    M, mask = cv2.findHomography(dst_pts, src_pts, cv2.RANSAC, 5.0)
-
-    # Step 6: 对齐输入图像到模板
-    h, w = template.shape
-    aligned_image = cv2.warpPerspective(cv2.imread(input_path), M, (w, h))
-
-    # Step 7: 创建叠加效果
-    template_color = cv2.cvtColor(template, cv2.COLOR_GRAY2BGR)  # 转换为彩色图
-    aligned_resized = cv2.resize(aligned_image, (w, h))  # 调整大小确保一致
-    overlay = cv2.addWeighted(template_color, 0.5, aligned_resized, 0.5, 0)  # 半透明叠加
-
-    # Step 8: 保存叠加结果
-    cv2.imwrite(output_path, overlay)
-
-# 示例使用
-align_and_overlay("template_image.tiff", "input_image.tiff", "overlay_result.tiff")
