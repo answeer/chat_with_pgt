@@ -1,29 +1,22 @@
+Valued Behaviour Commentary
+
+	•	I have been instrumental in enhancing the organization’s data processing capabilities by developing a robustness engine for image and text, ensuring reliable performance across diverse use cases.
+	•	My efforts in data sanitation have significantly improved the quality and integrity of input data, directly supporting the success of downstream AI models.
+	•	I have maintained a focus on collaboration and continuous improvement, working closely with cross-functional teams to align my work with organizational priorities.
+	•	Through my dedication to quality and compliance, I have ensured that all developments meet industry standards and internal guidelines.
+
+Performance Commentary
+
+	•	Robustness Engine Development: Delivered a scalable and efficient robustness engine for image and text data, addressing key challenges such as error handling and variability in input data. This has enhanced the resilience and reliability of AI-driven processes.
+	•	Data Sanitation Excellence: Designed and implemented comprehensive data sanitation processes, including bounding, validation, and sanitation tasks. These efforts have streamlined data workflows and improved overall accuracy.
+	•	Collaboration: Partnered with technical and business teams to integrate the robustness engine and sanitation processes seamlessly into the existing AIML ecosystem.
+	•	Compliance and Quality Assurance: Ensured that all developments adhered to regulatory standards and organizational policies, reinforcing trust and accountability.
+	•	Leadership (if applicable): Supported team members by sharing expertise in robustness and data sanitation, fostering an environment of growth and learning.
 
 
-Build enterprise Intelligent Document Processing platform with AI
- 
-Embed cutting edge AI Foundation models into the AIML ecosystem that caters to organization's needs
- 
-Successful Delivery of AI use cases
- 
-Audit and Compliance
- 
-Successful Delivery of AI use cases
- 
-Audit and Compliance
- 
-Embed advanced AI technologies into the AIML ecosystem
+Key Achievements
 
-
-
-As part of the performance review, we expect all colleagues to have a conversation with their people leaders. One of the ways you can prepare for this is by conducting a self reflection. 
-
- 
-
-It is not mandatory but we would encourage you to capture your thoughts and share them with your people leader using this tool. Refer to the feedback you have gathered and the achievements you have noted and summarise the key themes and highlights of your year.
-
-Valued Behaviour Commentary	:
-
-​
-Performance Commentary (if you lead a team, ensure that you include commentary on your performance as a People Leader)	:
-
+	•	Successfully delivered a robustness engine that supports diverse image and text use cases, significantly enhancing system reliability.
+	•	Streamlined data workflows through the design and deployment of a data sanitation pipeline, ensuring clean, high-quality input data.
+	•	Contributed to the integration of advanced AI technologies into the AIML ecosystem, aligning with organizational goals.
+	•	Maintained compliance and quality across all projects, supporting audit and operational excellence.
