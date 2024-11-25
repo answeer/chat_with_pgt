@@ -1,89 +1,109 @@
 import cv2
+import os
+import glob
 import numpy as np
+import itertools
 import matplotlib.pyplot as plt
 from skimage.metrics import structural_similarity as ssim
 
-# === 关键点误差分析 ===
-def evaluate_keypoint_error(template, aligned_image):
+# === 图像路径加载函数 ===
+def load_image_paths(root_dir, extensions=('*.tiff', '*.png', '*.jpg')):
+    image_paths = []
+    for ext in extensions:
+        image_paths.extend(glob.glob(os.path.join(root_dir, ext)))
+    return image_paths
+
+# === 算法封装（参考前述示例） ===
+def alignment_algorithm_1(template, target):
     orb = cv2.ORB_create()
     kp1, desc1 = orb.detectAndCompute(template, None)
-    kp2, desc2 = orb.detectAndCompute(aligned_image, None)
+    kp2, desc2 = orb.detectAndCompute(target, None)
     bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
     matches = bf.match(desc1, desc2)
-    errors = []
-    for match in matches:
-        pt1 = np.array(kp1[match.queryIdx].pt)
-        pt2 = np.array(kp2[match.trainIdx].pt)
-        errors.append(np.linalg.norm(pt1 - pt2))
-    return errors
+    src_pts = np.float32([kp1[m.queryIdx].pt for m in matches]).reshape(-1, 1, 2)
+    dst_pts = np.float32([kp2[m.trainIdx].pt for m in matches]).reshape(-1, 1, 2)
+    matrix, _ = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, 5.0)
+    aligned = cv2.warpPerspective(target, matrix, (template.shape[1], template.shape[0]))
+    return aligned
 
-# === 结构相似性 (SSIM) ===
-def evaluate_ssim(template, aligned_image):
-    score, _ = ssim(template, aligned_image, full=True)
-    return score
+def alignment_algorithm_2(template, target):
+    warp_matrix = np.eye(3, 3, dtype=np.float32)
+    _, warp_matrix = cv2.findTransformECC(template, target, warp_matrix, cv2.MOTION_HOMOGRAPHY)
+    aligned = cv2.warpPerspective(target, warp_matrix, (template.shape[1], template.shape[0]))
+    return aligned
 
-# === 像素差异分析 ===
-def evaluate_pixel_difference(template, aligned_image):
-    diff = cv2.absdiff(template, aligned_image)
-    mean_error = np.mean(diff)
-    total_error = np.sum(diff)
-    return mean_error, total_error
+def alignment_algorithm_3(template, target):
+    akaze = cv2.AKAZE_create()
+    kp1, desc1 = akaze.detectAndCompute(template, None)
+    kp2, desc2 = akaze.detectAndCompute(target, None)
+    bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
+    matches = bf.match(desc1, desc2)
+    src_pts = np.float32([kp1[m.queryIdx].pt for m in matches]).reshape(-1, 1, 2)
+    dst_pts = np.float32([kp2[m.trainIdx].pt for m in matches]).reshape(-1, 1, 2)
+    matrix, _ = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, 5.0)
+    aligned = cv2.warpPerspective(target, matrix, (template.shape[1], template.shape[0]))
+    return aligned
 
-# === 面积重叠 (IoU) ===
-def evaluate_iou(template, aligned_image):
+# === 评估函数 ===
+def evaluate_metrics(template, aligned_image):
+    ssim_score = ssim(template, aligned_image, full=False)
     _, binary_template = cv2.threshold(template, 128, 255, cv2.THRESH_BINARY)
     _, binary_aligned = cv2.threshold(aligned_image, 128, 255, cv2.THRESH_BINARY)
     intersection = np.logical_and(binary_template, binary_aligned).sum()
     union = np.logical_or(binary_template, binary_aligned).sum()
-    return intersection / union
+    iou_score = intersection / union
+    diff = cv2.absdiff(template, aligned_image)
+    mean_pixel_error = np.mean(diff)
+    return ssim_score, iou_score, mean_pixel_error
 
-# === 可视化综合评估 ===
-def visualize_evaluation(template_path, aligned_image_path):
-    # 读取图片
-    template = cv2.imread(template_path, cv2.IMREAD_GRAYSCALE)
-    aligned_image = cv2.imread(aligned_image_path, cv2.IMREAD_GRAYSCALE)
+# === 主测试函数 ===
+def batch_evaluation(root_dir, algorithms):
+    image_paths = load_image_paths(root_dir)
+    results = {f"Algorithm {i+1}": [] for i in range(len(algorithms))}
+    pairs = list(itertools.combinations(image_paths, 2))
     
-    # 各指标评估
-    keypoint_errors = evaluate_keypoint_error(template, aligned_image)
-    mean_keypoint_error = np.mean(keypoint_errors)
-    max_keypoint_error = np.max(keypoint_errors)
-    ssim_score = evaluate_ssim(template, aligned_image)
-    mean_pixel_error, total_pixel_error = evaluate_pixel_difference(template, aligned_image)
-    iou_score = evaluate_iou(template, aligned_image)
+    for template_path, target_path in pairs:
+        template = cv2.imread(template_path, cv2.IMREAD_GRAYSCALE)
+        target = cv2.imread(target_path, cv2.IMREAD_GRAYSCALE)
+        
+        for i, algorithm in enumerate(algorithms):
+            aligned_image = algorithm(template, target)
+            metrics = evaluate_metrics(template, aligned_image)
+            results[f"Algorithm {i+1}"].append(metrics)
+
+    summary = {}
+    for key, values in results.items():
+        metrics = np.array(values)
+        avg_metrics = np.mean(metrics, axis=0)
+        var_metrics = np.var(metrics, axis=0)
+        summary[key] = {
+            "Average": avg_metrics,
+            "Variance": var_metrics
+        }
     
-    # 1. 关键点误差分布图
-    plt.figure(figsize=(10, 6))
-    plt.subplot(2, 2, 1)
-    plt.hist(keypoint_errors, bins=20, color='blue', alpha=0.7)
-    plt.axvline(mean_keypoint_error, color='red', linestyle='dashed', linewidth=1, label=f"平均误差: {mean_keypoint_error:.2f}")
-    plt.axvline(max_keypoint_error, color='green', linestyle='dashed', linewidth=1, label=f"最大误差: {max_keypoint_error:.2f}")
-    plt.title("关键点误差分布")
-    plt.xlabel("误差值（像素）")
-    plt.ylabel("数量")
-    plt.legend()
+    return summary
 
-    # 2. SSIM、像素差异和 IoU 的柱状图
-    plt.subplot(2, 2, 2)
-    metrics = ['SSIM', 'Mean Pixel Error', 'IoU']
-    values = [ssim_score, mean_pixel_error, iou_score]
-    plt.bar(metrics, values, color=['orange', 'purple', 'cyan'])
-    plt.title("关键性能指标")
-    plt.ylabel("得分")
-    for i, v in enumerate(values):
-        plt.text(i, v + 0.02, f"{v:.2f}", ha='center', va='bottom')
-
-    # 3. 对齐前后图像叠加效果
-    plt.subplot(2, 1, 2)
-    overlay = cv2.addWeighted(template, 0.5, aligned_image, 0.5, 0)
-    plt.imshow(overlay, cmap='gray')
-    plt.title("对齐前后图像叠加效果")
-    plt.axis('off')
-
-    # 显示图表
+# === 可视化函数 ===
+def visualize_results(summary):
+    algorithms = list(summary.keys())
+    metrics = ['SSIM', 'IoU', 'Mean Pixel Error']
+    
+    avg_values = [summary[algo]["Average"] for algo in algorithms]
+    avg_values = np.array(avg_values).T  # 转置以便绘图
+    
+    plt.figure(figsize=(12, 6))
+    for i, metric in enumerate(metrics):
+        plt.subplot(1, 3, i+1)
+        plt.bar(algorithms, avg_values[i], color=['blue', 'orange', 'green'])
+        plt.title(metric)
+        plt.ylabel('Score' if i < 2 else 'Error')
+        for j, value in enumerate(avg_values[i]):
+            plt.text(j, value + 0.01, f"{value:.2f}", ha='center')
     plt.tight_layout()
     plt.show()
 
-# 示例调用
-template_path = "template_image.tiff"
-aligned_image_path = "aligned_output.tiff"
-visualize_evaluation(template_path, aligned_image_path)
+# === 运行测试 ===
+root_dir = "path/to/images"  # 替换为图片根目录
+algorithms = [alignment_algorithm_1, alignment_algorithm_2, alignment_algorithm_3]
+summary = batch_evaluation(root_dir, algorithms)
+visualize_results(summary)
