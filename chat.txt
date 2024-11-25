@@ -1,22 +1,89 @@
-Valued Behaviour Commentary
+import cv2
+import numpy as np
+import matplotlib.pyplot as plt
+from skimage.metrics import structural_similarity as ssim
 
-	•	I have been instrumental in enhancing the organization’s data processing capabilities by developing a robustness engine for image and text, ensuring reliable performance across diverse use cases.
-	•	My efforts in data sanitation have significantly improved the quality and integrity of input data, directly supporting the success of downstream AI models.
-	•	I have maintained a focus on collaboration and continuous improvement, working closely with cross-functional teams to align my work with organizational priorities.
-	•	Through my dedication to quality and compliance, I have ensured that all developments meet industry standards and internal guidelines.
+# === 关键点误差分析 ===
+def evaluate_keypoint_error(template, aligned_image):
+    orb = cv2.ORB_create()
+    kp1, desc1 = orb.detectAndCompute(template, None)
+    kp2, desc2 = orb.detectAndCompute(aligned_image, None)
+    bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
+    matches = bf.match(desc1, desc2)
+    errors = []
+    for match in matches:
+        pt1 = np.array(kp1[match.queryIdx].pt)
+        pt2 = np.array(kp2[match.trainIdx].pt)
+        errors.append(np.linalg.norm(pt1 - pt2))
+    return errors
 
-Performance Commentary
+# === 结构相似性 (SSIM) ===
+def evaluate_ssim(template, aligned_image):
+    score, _ = ssim(template, aligned_image, full=True)
+    return score
 
-	•	Robustness Engine Development: Delivered a scalable and efficient robustness engine for image and text data, addressing key challenges such as error handling and variability in input data. This has enhanced the resilience and reliability of AI-driven processes.
-	•	Data Sanitation Excellence: Designed and implemented comprehensive data sanitation processes, including bounding, validation, and sanitation tasks. These efforts have streamlined data workflows and improved overall accuracy.
-	•	Collaboration: Partnered with technical and business teams to integrate the robustness engine and sanitation processes seamlessly into the existing AIML ecosystem.
-	•	Compliance and Quality Assurance: Ensured that all developments adhered to regulatory standards and organizational policies, reinforcing trust and accountability.
-	•	Leadership (if applicable): Supported team members by sharing expertise in robustness and data sanitation, fostering an environment of growth and learning.
+# === 像素差异分析 ===
+def evaluate_pixel_difference(template, aligned_image):
+    diff = cv2.absdiff(template, aligned_image)
+    mean_error = np.mean(diff)
+    total_error = np.sum(diff)
+    return mean_error, total_error
 
+# === 面积重叠 (IoU) ===
+def evaluate_iou(template, aligned_image):
+    _, binary_template = cv2.threshold(template, 128, 255, cv2.THRESH_BINARY)
+    _, binary_aligned = cv2.threshold(aligned_image, 128, 255, cv2.THRESH_BINARY)
+    intersection = np.logical_and(binary_template, binary_aligned).sum()
+    union = np.logical_or(binary_template, binary_aligned).sum()
+    return intersection / union
 
-Key Achievements
+# === 可视化综合评估 ===
+def visualize_evaluation(template_path, aligned_image_path):
+    # 读取图片
+    template = cv2.imread(template_path, cv2.IMREAD_GRAYSCALE)
+    aligned_image = cv2.imread(aligned_image_path, cv2.IMREAD_GRAYSCALE)
+    
+    # 各指标评估
+    keypoint_errors = evaluate_keypoint_error(template, aligned_image)
+    mean_keypoint_error = np.mean(keypoint_errors)
+    max_keypoint_error = np.max(keypoint_errors)
+    ssim_score = evaluate_ssim(template, aligned_image)
+    mean_pixel_error, total_pixel_error = evaluate_pixel_difference(template, aligned_image)
+    iou_score = evaluate_iou(template, aligned_image)
+    
+    # 1. 关键点误差分布图
+    plt.figure(figsize=(10, 6))
+    plt.subplot(2, 2, 1)
+    plt.hist(keypoint_errors, bins=20, color='blue', alpha=0.7)
+    plt.axvline(mean_keypoint_error, color='red', linestyle='dashed', linewidth=1, label=f"平均误差: {mean_keypoint_error:.2f}")
+    plt.axvline(max_keypoint_error, color='green', linestyle='dashed', linewidth=1, label=f"最大误差: {max_keypoint_error:.2f}")
+    plt.title("关键点误差分布")
+    plt.xlabel("误差值（像素）")
+    plt.ylabel("数量")
+    plt.legend()
 
-	•	Successfully delivered a robustness engine that supports diverse image and text use cases, significantly enhancing system reliability.
-	•	Streamlined data workflows through the design and deployment of a data sanitation pipeline, ensuring clean, high-quality input data.
-	•	Contributed to the integration of advanced AI technologies into the AIML ecosystem, aligning with organizational goals.
-	•	Maintained compliance and quality across all projects, supporting audit and operational excellence.
+    # 2. SSIM、像素差异和 IoU 的柱状图
+    plt.subplot(2, 2, 2)
+    metrics = ['SSIM', 'Mean Pixel Error', 'IoU']
+    values = [ssim_score, mean_pixel_error, iou_score]
+    plt.bar(metrics, values, color=['orange', 'purple', 'cyan'])
+    plt.title("关键性能指标")
+    plt.ylabel("得分")
+    for i, v in enumerate(values):
+        plt.text(i, v + 0.02, f"{v:.2f}", ha='center', va='bottom')
+
+    # 3. 对齐前后图像叠加效果
+    plt.subplot(2, 1, 2)
+    overlay = cv2.addWeighted(template, 0.5, aligned_image, 0.5, 0)
+    plt.imshow(overlay, cmap='gray')
+    plt.title("对齐前后图像叠加效果")
+    plt.axis('off')
+
+    # 显示图表
+    plt.tight_layout()
+    plt.show()
+
+# 示例调用
+template_path = "template_image.tiff"
+aligned_image_path = "aligned_output.tiff"
+visualize_evaluation(template_path, aligned_image_path)
