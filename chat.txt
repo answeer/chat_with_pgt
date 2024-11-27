@@ -1,34 +1,60 @@
-def remove_white_borders(image):
-    """Remove white borders from an image using edge detection and contours."""
+def detect_document_region(image):
+    """Detect and extract the document region from an image."""
     # Convert to grayscale if needed
     if len(image.shape) == 3:
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     else:
         gray = image
 
-    # Threshold to create a binary image
-    _, binary = cv2.threshold(gray, 240, 255, cv2.THRESH_BINARY)
+    # Apply GaussianBlur to reduce noise
+    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
 
-    # Invert binary image
-    binary = cv2.bitwise_not(binary)
+    # Edge detection
+    edges = cv2.Canny(blurred, 50, 150)
 
     # Find contours
-    contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-    # Find the largest contour
-    if contours:
-        largest_contour = max(contours, key=cv2.contourArea)
-        x, y, w, h = cv2.boundingRect(largest_contour)
+    # Sort contours by area and find the largest one
+    contours = sorted(contours, key=cv2.contourArea, reverse=True)
+    for contour in contours:
+        # Approximate the contour to a polygon
+        peri = cv2.arcLength(contour, True)
+        approx = cv2.approxPolyDP(contour, 0.02 * peri, True)
 
-        # Crop the image to the bounding box
-        cropped = image[y:y+h, x:x+w]
-        return cropped
+        # If the polygon has 4 points, we assume it's the document
+        if len(approx) == 4:
+            return approx
 
-    # If no contour is found, return the original image
-    return image
+    return None
 
-def preprocess_image(image_path):
-    """Load an image and remove white borders."""
-    image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
-    processed_image = remove_white_borders(image)
-    return processed_image
+def warp_document(image, contour):
+    """Warp the detected document region to a standard rectangle."""
+    # Define the desired output dimensions
+    rect = np.array([[0, 0],
+                     [800, 0],
+                     [800, 1000],
+                     [0, 1000]], dtype="float32")
+
+    # Order the points in the contour to match the rect
+    contour = contour.reshape(4, 2)
+    contour = sorted(contour, key=lambda x: x[0])  # Sort by x-coordinate
+    left = sorted(contour[:2], key=lambda x: x[1])  # Top-left, bottom-left
+    right = sorted(contour[2:], key=lambda x: x[1])  # Top-right, bottom-right
+    ordered_contour = np.array(left + right, dtype="float32")
+
+    # Compute the perspective transform matrix and apply it
+    matrix = cv2.getPerspectiveTransform(ordered_contour, rect)
+    warped = cv2.warpPerspective(image, matrix, (800, 1000))
+    return warped
+
+def process_image_for_document_detection(image_path):
+    """Detect and extract the document from an image."""
+    image = cv2.imread(image_path)
+    contour = detect_document_region(image)
+    if contour is not None:
+        warped = warp_document(image, contour)
+        return warped
+    else:
+        print(f"Document not detected in {image_path}")
+        return None
