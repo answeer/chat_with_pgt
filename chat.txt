@@ -14,23 +14,35 @@ def preprocess_image(image):
     return processed
 
 def align_images(template, target):
-    """Align the target image to the template using feature matching."""
+    """Align the target image to the template using affine or homography transformation."""
     template_proc = preprocess_image(template)
     target_proc = preprocess_image(target)
 
+    # Detect ORB keypoints and descriptors
     orb = cv2.ORB_create(5000)
     kp1, desc1 = orb.detectAndCompute(template_proc, None)
     kp2, desc2 = orb.detectAndCompute(target_proc, None)
 
+    # Match descriptors using BFMatcher
     bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
     matches = bf.match(desc1, desc2)
     matches = sorted(matches, key=lambda x: x.distance)
 
+    # Extract matched keypoints
     src_pts = np.float32([kp1[m.queryIdx].pt for m in matches]).reshape(-1, 1, 2)
     dst_pts = np.float32([kp2[m.trainIdx].pt for m in matches]).reshape(-1, 1, 2)
 
-    matrix, _ = cv2.findHomography(dst_pts, src_pts, cv2.RANSAC, 5.0)
-    aligned = cv2.warpPerspective(target, matrix, (template.shape[1], template.shape[0]))
+    if len(matches) >= 3:
+        # Affine transformation requires at least 3 points
+        matrix = cv2.estimateAffinePartial2D(dst_pts, src_pts, method=cv2.RANSAC)[0]
+        aligned = cv2.warpAffine(target, matrix, (template.shape[1], template.shape[0]))
+    elif len(matches) >= 4:
+        # Fall back to homography transformation if 4 or more matches are found
+        matrix, _ = cv2.findHomography(dst_pts, src_pts, cv2.RANSAC, 5.0)
+        aligned = cv2.warpPerspective(target, matrix, (template.shape[1], template.shape[0]))
+    else:
+        raise ValueError("Not enough matches found for alignment.")
+
     return aligned, matrix
 
 def overlay_images(template, aligned, alpha=0.5):
@@ -60,15 +72,19 @@ def process_transfer_slips(template_path, filled_slip_folder, output_dir):
 
     for idx, slip_path in enumerate(tqdm(filled_slip_paths, desc="Processing Transfer Slips")):
         target = cv2.imread(slip_path, cv2.IMREAD_GRAYSCALE)
-        aligned, _ = align_images(template, target)
-        overlay = overlay_images(template, aligned)
 
-        aligned_path = os.path.join(output_dir, f"aligned_{idx + 1}.png")
-        overlay_path = os.path.join(output_dir, f"overlay_{idx + 1}.png")
-        cv2.imwrite(aligned_path, aligned)
-        cv2.imwrite(overlay_path, overlay)
+        try:
+            aligned, _ = align_images(template, target)
+            overlay = overlay_images(template, aligned)
 
-        print(f"Processed {slip_path}: Aligned saved to {aligned_path}, Overlay saved to {overlay_path}")
+            aligned_path = os.path.join(output_dir, f"aligned_{idx + 1}.png")
+            overlay_path = os.path.join(output_dir, f"overlay_{idx + 1}.png")
+            cv2.imwrite(aligned_path, aligned)
+            cv2.imwrite(overlay_path, overlay)
+
+            print(f"Processed {slip_path}: Aligned saved to {aligned_path}, Overlay saved to {overlay_path}")
+        except ValueError as e:
+            print(f"Skipping {slip_path}: {str(e)}")
 
 # Example Usage
 if __name__ == "__main__":
