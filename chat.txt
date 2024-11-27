@@ -5,79 +5,64 @@ from tqdm import tqdm
 
 def preprocess_image(image):
     """Preprocess the image to enhance structural elements."""
-    # Convert to grayscale if the image is in color
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if len(image.shape) == 3 else image
-
-    # Apply adaptive threshold to enhance lines and borders
     binary = cv2.adaptiveThreshold(
         gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 15, 10
     )
-
-    # Morphological operations to clean noise
     kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
     processed = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
-
     return processed
 
 def align_images(template, target):
     """Align the target image to the template using feature matching."""
-    # Preprocess both images
     template_proc = preprocess_image(template)
     target_proc = preprocess_image(target)
 
-    # Detect ORB keypoints and descriptors
     orb = cv2.ORB_create(5000)
     kp1, desc1 = orb.detectAndCompute(template_proc, None)
     kp2, desc2 = orb.detectAndCompute(target_proc, None)
 
-    # Match descriptors using BFMatcher
     bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
     matches = bf.match(desc1, desc2)
     matches = sorted(matches, key=lambda x: x.distance)
 
-    # Extract matched keypoints
     src_pts = np.float32([kp1[m.queryIdx].pt for m in matches]).reshape(-1, 1, 2)
     dst_pts = np.float32([kp2[m.trainIdx].pt for m in matches]).reshape(-1, 1, 2)
 
-    # Compute homography
     matrix, _ = cv2.findHomography(dst_pts, src_pts, cv2.RANSAC, 5.0)
-
-    # Warp the target image to align with the template
     aligned = cv2.warpPerspective(target, matrix, (template.shape[1], template.shape[0]))
-
     return aligned, matrix
 
 def overlay_images(template, aligned, alpha=0.5):
     """Overlay the aligned image onto the template."""
-    # Convert to color for overlay if grayscale
     if len(template.shape) == 2:
         template = cv2.cvtColor(template, cv2.COLOR_GRAY2BGR)
     if len(aligned.shape) == 2:
         aligned = cv2.cvtColor(aligned, cv2.COLOR_GRAY2BGR)
-
     overlay = cv2.addWeighted(template, alpha, aligned, 1 - alpha, 0)
     return overlay
 
-def process_transfer_slips(template_path, filled_slip_paths, output_dir):
-    """Align all filled slips with the template and save results."""
-    # Load template
-    template = cv2.imread(template_path, cv2.IMREAD_GRAYSCALE)
+def get_image_paths_from_folder(folder_path):
+    """Retrieve all image file paths from the specified folder."""
+    valid_extensions = {".png", ".jpg", ".jpeg", ".bmp", ".tiff"}
+    image_paths = [
+        os.path.join(folder_path, fname)
+        for fname in os.listdir(folder_path)
+        if os.path.splitext(fname.lower())[1] in valid_extensions
+    ]
+    return image_paths
 
-    # Ensure output directory exists
+def process_transfer_slips(template_path, filled_slip_folder, output_dir):
+    """Align all filled slips with the template and save results."""
+    template = cv2.imread(template_path, cv2.IMREAD_GRAYSCALE)
+    filled_slip_paths = get_image_paths_from_folder(filled_slip_folder)
     os.makedirs(output_dir, exist_ok=True)
 
-    # Process each filled slip
     for idx, slip_path in enumerate(tqdm(filled_slip_paths, desc="Processing Transfer Slips")):
-        # Load filled slip
         target = cv2.imread(slip_path, cv2.IMREAD_GRAYSCALE)
-
-        # Align the filled slip to the template
         aligned, _ = align_images(template, target)
-
-        # Overlay for visualization
         overlay = overlay_images(template, aligned)
 
-        # Save the results
         aligned_path = os.path.join(output_dir, f"aligned_{idx + 1}.png")
         overlay_path = os.path.join(output_dir, f"overlay_{idx + 1}.png")
         cv2.imwrite(aligned_path, aligned)
@@ -88,11 +73,7 @@ def process_transfer_slips(template_path, filled_slip_paths, output_dir):
 # Example Usage
 if __name__ == "__main__":
     template_path = "path_to_template_image.png"  # Path to the blank transfer slip
-    filled_slip_paths = [  # List of paths to filled slips
-        "path_to_filled_slip_1.png",
-        "path_to_filled_slip_2.png",
-        # Add more paths as needed
-    ]
+    filled_slip_folder = "path_to_filled_slips_folder"  # Folder containing all filled slips
     output_dir = "output_directory"  # Directory to save results
 
-    process_transfer_slips(template_path, filled_slip_paths, output_dir)
+    process_transfer_slips(template_path, filled_slip_folder, output_dir)
