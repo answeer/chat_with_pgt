@@ -5,6 +5,7 @@ import numpy as np
 import itertools
 import matplotlib.pyplot as plt
 from skimage.metrics import structural_similarity as ssim
+from tqdm import tqdm
 
 # === 图像路径加载函数 ===
 def load_image_paths(root_dir, extensions=('*.tiff', '*.png', '*.jpg')):
@@ -13,7 +14,13 @@ def load_image_paths(root_dir, extensions=('*.tiff', '*.png', '*.jpg')):
         image_paths.extend(glob.glob(os.path.join(root_dir, ext)))
     return image_paths
 
-# === 算法封装（参考前述示例） ===
+# === 保存对齐效果函数 ===
+def save_overlay_image(template, aligned_image, output_path, alpha=0.5):
+    # 将对齐图片与模板叠加
+    overlay = cv2.addWeighted(template, alpha, aligned_image, 1 - alpha, 0)
+    cv2.imwrite(output_path, overlay)
+
+# === 算法封装 ===
 def alignment_algorithm_1(template, target):
     orb = cv2.ORB_create()
     kp1, desc1 = orb.detectAndCompute(template, None)
@@ -62,26 +69,31 @@ def batch_evaluation(root_dir, algorithms):
     results = {f"Algorithm {i+1}": [] for i in range(len(algorithms))}
     pairs = list(itertools.combinations(image_paths, 2))
     
-    for template_path, target_path in pairs:
-        template = cv2.imread(template_path, cv2.IMREAD_GRAYSCALE)
-        target = cv2.imread(target_path, cv2.IMREAD_GRAYSCALE)
+    for algo_idx, algorithm in enumerate(algorithms):
+        algo_name = f"Algorithm {algo_idx+1}"
+        output_dir = f"./results/{algo_name}"
+        os.makedirs(output_dir, exist_ok=True)
+        print(f"Running {algo_name}...")
         
-        for i, algorithm in enumerate(algorithms):
+        for template_path, target_path in tqdm(pairs, desc=f"Processing {algo_name}"):
+            template = cv2.imread(template_path, cv2.IMREAD_GRAYSCALE)
+            target = cv2.imread(target_path, cv2.IMREAD_GRAYSCALE)
             aligned_image = algorithm(template, target)
+            
+            # 评估指标
             metrics = evaluate_metrics(template, aligned_image)
-            results[f"Algorithm {i+1}"].append(metrics)
+            results[algo_name].append(metrics)
+            
+            # 保存叠加效果
+            overlay_path = os.path.join(output_dir, f"overlay_{os.path.basename(template_path)}_{os.path.basename(target_path)}.png")
+            save_overlay_image(template, aligned_image, overlay_path)
 
-    summary = {}
-    for key, values in results.items():
-        metrics = np.array(values)
-        avg_metrics = np.mean(metrics, axis=0)
-        var_metrics = np.var(metrics, axis=0)
-        summary[key] = {
-            "Average": avg_metrics,
-            "Variance": var_metrics
-        }
+            # 打印日志
+            ssim_score, iou_score, mean_error = metrics
+            print(f"Template: {os.path.basename(template_path)}, Target: {os.path.basename(target_path)}")
+            print(f"SSIM: {ssim_score:.4f}, IoU: {iou_score:.4f}, Mean Pixel Error: {mean_error:.2f}")
     
-    return summary
+    return results
 
 # === 可视化函数 ===
 def visualize_results(summary):
@@ -105,5 +117,17 @@ def visualize_results(summary):
 # === 运行测试 ===
 root_dir = "path/to/images"  # 替换为图片根目录
 algorithms = [alignment_algorithm_1, alignment_algorithm_2, alignment_algorithm_3]
-summary = batch_evaluation(root_dir, algorithms)
+results = batch_evaluation(root_dir, algorithms)
+
+# 计算平均值和方差
+summary = {}
+for algo_name, values in results.items():
+    metrics = np.array(values)
+    avg_metrics = np.mean(metrics, axis=0)
+    var_metrics = np.var(metrics, axis=0)
+    summary[algo_name] = {
+        "Average": avg_metrics,
+        "Variance": var_metrics
+    }
+
 visualize_results(summary)
