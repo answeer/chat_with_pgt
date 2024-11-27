@@ -1,60 +1,98 @@
-def detect_document_region(image):
-    """Detect and extract the document region from an image."""
-    # Convert to grayscale if needed
-    if len(image.shape) == 3:
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    else:
-        gray = image
+import cv2
+import numpy as np
+import os
+from tqdm import tqdm
 
-    # Apply GaussianBlur to reduce noise
-    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+def preprocess_image(image):
+    """Preprocess the image to enhance structural elements."""
+    # Convert to grayscale if the image is in color
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if len(image.shape) == 3 else image
 
-    # Edge detection
-    edges = cv2.Canny(blurred, 50, 150)
+    # Apply adaptive threshold to enhance lines and borders
+    binary = cv2.adaptiveThreshold(
+        gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 15, 10
+    )
 
-    # Find contours
-    contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    # Morphological operations to clean noise
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+    processed = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
 
-    # Sort contours by area and find the largest one
-    contours = sorted(contours, key=cv2.contourArea, reverse=True)
-    for contour in contours:
-        # Approximate the contour to a polygon
-        peri = cv2.arcLength(contour, True)
-        approx = cv2.approxPolyDP(contour, 0.02 * peri, True)
+    return processed
 
-        # If the polygon has 4 points, we assume it's the document
-        if len(approx) == 4:
-            return approx
+def align_images(template, target):
+    """Align the target image to the template using feature matching."""
+    # Preprocess both images
+    template_proc = preprocess_image(template)
+    target_proc = preprocess_image(target)
 
-    return None
+    # Detect ORB keypoints and descriptors
+    orb = cv2.ORB_create(5000)
+    kp1, desc1 = orb.detectAndCompute(template_proc, None)
+    kp2, desc2 = orb.detectAndCompute(target_proc, None)
 
-def warp_document(image, contour):
-    """Warp the detected document region to a standard rectangle."""
-    # Define the desired output dimensions
-    rect = np.array([[0, 0],
-                     [800, 0],
-                     [800, 1000],
-                     [0, 1000]], dtype="float32")
+    # Match descriptors using BFMatcher
+    bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
+    matches = bf.match(desc1, desc2)
+    matches = sorted(matches, key=lambda x: x.distance)
 
-    # Order the points in the contour to match the rect
-    contour = contour.reshape(4, 2)
-    contour = sorted(contour, key=lambda x: x[0])  # Sort by x-coordinate
-    left = sorted(contour[:2], key=lambda x: x[1])  # Top-left, bottom-left
-    right = sorted(contour[2:], key=lambda x: x[1])  # Top-right, bottom-right
-    ordered_contour = np.array(left + right, dtype="float32")
+    # Extract matched keypoints
+    src_pts = np.float32([kp1[m.queryIdx].pt for m in matches]).reshape(-1, 1, 2)
+    dst_pts = np.float32([kp2[m.trainIdx].pt for m in matches]).reshape(-1, 1, 2)
 
-    # Compute the perspective transform matrix and apply it
-    matrix = cv2.getPerspectiveTransform(ordered_contour, rect)
-    warped = cv2.warpPerspective(image, matrix, (800, 1000))
-    return warped
+    # Compute homography
+    matrix, _ = cv2.findHomography(dst_pts, src_pts, cv2.RANSAC, 5.0)
 
-def process_image_for_document_detection(image_path):
-    """Detect and extract the document from an image."""
-    image = cv2.imread(image_path)
-    contour = detect_document_region(image)
-    if contour is not None:
-        warped = warp_document(image, contour)
-        return warped
-    else:
-        print(f"Document not detected in {image_path}")
-        return None
+    # Warp the target image to align with the template
+    aligned = cv2.warpPerspective(target, matrix, (template.shape[1], template.shape[0]))
+
+    return aligned, matrix
+
+def overlay_images(template, aligned, alpha=0.5):
+    """Overlay the aligned image onto the template."""
+    # Convert to color for overlay if grayscale
+    if len(template.shape) == 2:
+        template = cv2.cvtColor(template, cv2.COLOR_GRAY2BGR)
+    if len(aligned.shape) == 2:
+        aligned = cv2.cvtColor(aligned, cv2.COLOR_GRAY2BGR)
+
+    overlay = cv2.addWeighted(template, alpha, aligned, 1 - alpha, 0)
+    return overlay
+
+def process_transfer_slips(template_path, filled_slip_paths, output_dir):
+    """Align all filled slips with the template and save results."""
+    # Load template
+    template = cv2.imread(template_path, cv2.IMREAD_GRAYSCALE)
+
+    # Ensure output directory exists
+    os.makedirs(output_dir, exist_ok=True)
+
+    # Process each filled slip
+    for idx, slip_path in enumerate(tqdm(filled_slip_paths, desc="Processing Transfer Slips")):
+        # Load filled slip
+        target = cv2.imread(slip_path, cv2.IMREAD_GRAYSCALE)
+
+        # Align the filled slip to the template
+        aligned, _ = align_images(template, target)
+
+        # Overlay for visualization
+        overlay = overlay_images(template, aligned)
+
+        # Save the results
+        aligned_path = os.path.join(output_dir, f"aligned_{idx + 1}.png")
+        overlay_path = os.path.join(output_dir, f"overlay_{idx + 1}.png")
+        cv2.imwrite(aligned_path, aligned)
+        cv2.imwrite(overlay_path, overlay)
+
+        print(f"Processed {slip_path}: Aligned saved to {aligned_path}, Overlay saved to {overlay_path}")
+
+# Example Usage
+if __name__ == "__main__":
+    template_path = "path_to_template_image.png"  # Path to the blank transfer slip
+    filled_slip_paths = [  # List of paths to filled slips
+        "path_to_filled_slip_1.png",
+        "path_to_filled_slip_2.png",
+        # Add more paths as needed
+    ]
+    output_dir = "output_directory"  # Directory to save results
+
+    process_transfer_slips(template_path, filled_slip_paths, output_dir)
