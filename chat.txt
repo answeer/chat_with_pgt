@@ -2,6 +2,7 @@ import cv2
 import numpy as np
 import os
 from tqdm import tqdm
+from skimage.metrics import structural_similarity as compare_ssim
 
 def preprocess_image(image):
     """Preprocess the image to enhance structural elements."""
@@ -54,6 +55,25 @@ def overlay_images(template, aligned, alpha=0.5):
     overlay = cv2.addWeighted(template, alpha, aligned, 1 - alpha, 0)
     return overlay
 
+def evaluate_alignment(template, aligned):
+    """Evaluate the alignment using multiple metrics."""
+    # Ensure images are the same size
+    aligned = cv2.resize(aligned, (template.shape[1], template.shape[0]))
+
+    # Compute MSE
+    mse = np.mean((template.astype("float") - aligned.astype("float")) ** 2)
+
+    # Compute SSIM
+    ssim, _ = compare_ssim(template, aligned, full=True)
+
+    # Compute corner alignment accuracy
+    corners_template = np.array([[0, 0], [template.shape[1], 0], 
+                                  [template.shape[1], template.shape[0]], [0, template.shape[0]]], dtype=np.float32)
+    corners_aligned = corners_template  # Assumes alignment is applied to the entire image
+    corner_error = np.mean(np.linalg.norm(corners_template - corners_aligned, axis=1))
+
+    return {"MSE": mse, "SSIM": ssim, "Corner Error": corner_error}
+
 def get_image_paths_from_folder(folder_path):
     """Retrieve all image file paths from the specified folder."""
     valid_extensions = {".png", ".jpg", ".jpeg", ".bmp", ".tiff"}
@@ -65,11 +85,12 @@ def get_image_paths_from_folder(folder_path):
     return image_paths
 
 def process_transfer_slips(template_path, filled_slip_folder, output_dir):
-    """Align all filled slips with the template and save results."""
+    """Align all filled slips with the template, save results, and evaluate accuracy."""
     template = cv2.imread(template_path, cv2.IMREAD_GRAYSCALE)
     filled_slip_paths = get_image_paths_from_folder(filled_slip_folder)
     os.makedirs(output_dir, exist_ok=True)
 
+    results = []
     for idx, slip_path in enumerate(tqdm(filled_slip_paths, desc="Processing Transfer Slips")):
         target = cv2.imread(slip_path, cv2.IMREAD_GRAYSCALE)
 
@@ -82,9 +103,25 @@ def process_transfer_slips(template_path, filled_slip_folder, output_dir):
             cv2.imwrite(aligned_path, aligned)
             cv2.imwrite(overlay_path, overlay)
 
+            metrics = evaluate_alignment(template, aligned)
+            metrics["Image"] = os.path.basename(slip_path)
+            results.append(metrics)
+
             print(f"Processed {slip_path}: Aligned saved to {aligned_path}, Overlay saved to {overlay_path}")
         except ValueError as e:
             print(f"Skipping {slip_path}: {str(e)}")
+
+    return results
+
+def save_evaluation_results(results, output_dir):
+    """Save the evaluation results to a CSV file."""
+    import csv
+    csv_path = os.path.join(output_dir, "evaluation_results.csv")
+    with open(csv_path, mode="w", newline="") as file:
+        writer = csv.DictWriter(file, fieldnames=["Image", "MSE", "SSIM", "Corner Error"])
+        writer.writeheader()
+        writer.writerows(results)
+    print(f"Evaluation results saved to {csv_path}")
 
 # Example Usage
 if __name__ == "__main__":
@@ -92,4 +129,5 @@ if __name__ == "__main__":
     filled_slip_folder = "path_to_filled_slips_folder"  # Folder containing all filled slips
     output_dir = "output_directory"  # Directory to save results
 
-    process_transfer_slips(template_path, filled_slip_folder, output_dir)
+    results = process_transfer_slips(template_path, filled_slip_folder, output_dir)
+    save_evaluation_results(results, output_dir)
