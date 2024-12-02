@@ -65,4 +65,27 @@ def process_transfer_slips(template_path, filled_slip_folder, excel_path, output
                 updated_df = pd.DataFrame(updated_rows)
                 df.update(updated_df)
 
-                # Draw bounding boxes on
+                # Draw bounding boxes on the aligned image
+                image_with_boxes = draw_bounding_boxes(aligned, bounding_boxes)
+                boxes_path = os.path.join(output_dir, f"boxes_{idx + 1}.png")
+                cv2.imwrite(boxes_path, image_with_boxes)
+
+                print(f"Updated coordinates and saved bounding boxes for {file_name} (matched to {matched_name})")
+            else:
+                print(f"No match found for {file_name}")
+
+        except ValueError as e:
+            print(f"Skipping {file_name}: {str(e)}")
+
+    updated_excel_path = os.path.join(output_dir, "updated_coordinates.xlsx")
+    df.to_excel(updated_excel_path, index=False)
+    print(f"Updated Excel saved to {updated_excel_path}")
+
+# Example Usage
+if __name__ == "__main__":
+    template_path = "path_to_template_image.png"
+    filled_slip_folder = "path_to_filled_slips_folder"
+    excel_path = "path_to_excel_file.xlsx"
+    output_dir = "output_directory"
+
+    process_transfer_slips(template_path, filled_slip_folder, excel_path, output_dir)
