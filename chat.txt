@@ -1,68 +1,23 @@
-import cv2
-import numpy as np
-import os
-import pandas as pd
-from tqdm import tqdm
+def draw_bounding_boxes(image, bounding_boxes):
+    """
+    Draw bounding boxes on the image.
+    
+    Args:
+        image: Aligned image (numpy array).
+        bounding_boxes: List of bounding boxes in the form [(x_min, y_min, x_max, y_max), ...].
+        
+    Returns:
+        Image with bounding boxes drawn.
+    """
+    image_with_boxes = image.copy()
+    if len(image_with_boxes.shape) == 2:  # Convert grayscale to BGR for color visualization
+        image_with_boxes = cv2.cvtColor(image_with_boxes, cv2.COLOR_GRAY2BGR)
 
-def preprocess_image(image):
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if len(image.shape) == 3 else image
-    binary = cv2.adaptiveThreshold(
-        gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 15, 10
-    )
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-    processed = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
-    return processed
-
-def align_images(template, target):
-    template_proc = preprocess_image(template)
-    target_proc = preprocess_image(target)
-
-    orb = cv2.ORB_create(5000)
-    kp1, desc1 = orb.detectAndCompute(template_proc, None)
-    kp2, desc2 = orb.detectAndCompute(target_proc, None)
-
-    bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
-    matches = bf.match(desc1, desc2)
-    matches = sorted(matches, key=lambda x: x.distance)
-
-    src_pts = np.float32([kp1[m.queryIdx].pt for m in matches]).reshape(-1, 1, 2)
-    dst_pts = np.float32([kp2[m.trainIdx].pt for m in matches]).reshape(-1, 1, 2)
-
-    if len(matches) >= 3:
-        matrix = cv2.estimateAffinePartial2D(dst_pts, src_pts, method=cv2.RANSAC)[0]
-        aligned = cv2.warpAffine(target, matrix, (template.shape[1], template.shape[0]))
-    elif len(matches) >= 4:
-        matrix, _ = cv2.findHomography(dst_pts, src_pts, cv2.RANSAC, 5.0)
-        aligned = cv2.warpPerspective(target, matrix, (template.shape[1], template.shape[0]))
-    else:
-        raise ValueError("Not enough matches found for alignment.")
-
-    return aligned, matrix
-
-def transform_coordinates(coordinates, matrix):
-    coords = np.array([[x, y, 1] if len(matrix) == 3 else [x, y] for x, y in coordinates])
-    transformed_coords = np.dot(matrix, coords.T).T
-    return transformed_coords[:, :2]
-
-def overlay_images(template, aligned, alpha=0.5):
-    if len(template.shape) == 2:
-        template = cv2.cvtColor(template, cv2.COLOR_GRAY2BGR)
-    if len(aligned.shape) == 2:
-        aligned = cv2.cvtColor(aligned, cv2.COLOR_GRAY2BGR)
-    overlay = cv2.addWeighted(template, alpha, aligned, 1 - alpha, 0)
-    return overlay
-
-def clean_name(name):
-    """Remove underscores and standardize the name."""
-    return name.replace("_", "").lower()
-
-def find_match(file_name, names):
-    """Find a matching name by checking substring presence."""
-    cleaned_file_name = clean_name(file_name)
-    for name in names:
-        if clean_name(name) in cleaned_file_name:
-            return name
-    return None
+    for box in bounding_boxes:
+        x_min, y_min, x_max, y_max = map(int, box)
+        cv2.rectangle(image_with_boxes, (x_min, y_min), (x_max, y_max), (0, 255, 0), 2)
+    
+    return image_with_boxes
 
 def process_transfer_slips(template_path, filled_slip_folder, excel_path, output_dir):
     template = cv2.imread(template_path, cv2.IMREAD_GRAYSCALE)
@@ -87,11 +42,17 @@ def process_transfer_slips(template_path, filled_slip_folder, excel_path, output
             matched_name = find_match(file_name, df['name'].values)
             if matched_name:
                 matched_rows = df[df['name'] == matched_name]
+                bounding_boxes = []
                 updated_rows = []
 
                 for _, row in matched_rows.iterrows():
                     coordinates = [(row['x-min'], row['y-min']), (row['x-max'], row['y-max'])]
                     transformed_coordinates = transform_coordinates(coordinates, matrix)
+
+                    bounding_boxes.append(
+                        [transformed_coordinates[0][0], transformed_coordinates[0][1],
+                         transformed_coordinates[1][0], transformed_coordinates[1][1]]
+                    )
 
                     updated_rows.append({
                         'name': row['name'],
@@ -103,22 +64,5 @@ def process_transfer_slips(template_path, filled_slip_folder, excel_path, output
 
                 updated_df = pd.DataFrame(updated_rows)
                 df.update(updated_df)
-                print(f"Updated coordinates for {file_name} (matched to {matched_name})")
-            else:
-                print(f"No match found for {file_name}")
 
-        except ValueError as e:
-            print(f"Skipping {file_name}: {str(e)}")
-
-    updated_excel_path = os.path.join(output_dir, "updated_coordinates.xlsx")
-    df.to_excel(updated_excel_path, index=False)
-    print(f"Updated Excel saved to {updated_excel_path}")
-
-# Example Usage
-if __name__ == "__main__":
-    template_path = "path_to_template_image.png"
-    filled_slip_folder = "path_to_filled_slips_folder"
-    excel_path = "path_to_excel_file.xlsx"
-    output_dir = "output_directory"
-
-    process_transfer_slips(template_path, filled_slip_folder, excel_path, output_dir)
+                # Draw bounding boxes on
