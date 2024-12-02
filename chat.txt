@@ -68,4 +68,78 @@ def transform_coordinates(coordinates, matrix, transform_type="perspective"):
     coords = np.array([[x_min, y_min, 1] for x_min, y_min in coordinates])
     transformed_coords = np.dot(coords, matrix.T)
     transformed_coords = transformed_coords[:, :2] / transformed_coords[:, 2:3]
-    return transformed_coords
+    return transformed_coords.tolist()
+
+
+def draw_bounding_boxes(image, bounding_boxes):
+    """
+    Draw bounding boxes on the image.
+
+    Args:
+        image: Aligned image (numpy array).
+        bounding_boxes: List of bounding boxes in the form [(x_min, y_min, x_max, y_max), ...].
+
+    Returns:
+        Image with bounding boxes drawn.
+    """
+    image_with_boxes = image.copy()
+    if len(image_with_boxes.shape) == 2:  # Convert grayscale to BGR
+        image_with_boxes = cv2.cvtColor(image_with_boxes, cv2.COLOR_GRAY2BGR)
+
+    for box in bounding_boxes:
+        x_min, y_min, x_max, y_max = map(int, box)
+        cv2.rectangle(image_with_boxes, (x_min, y_min), (x_max, y_max), (0, 255, 0), 2)
+
+    return image_with_boxes
+
+
+# Main pipeline
+def main(template_path, filled_slip_folder, excel_path, output_folder):
+    # Load template
+    template = cv2.imread(template_path, cv2.IMREAD_GRAYSCALE)
+    if template is None:
+        print(f"Error: Cannot load template image from {template_path}")
+        return
+
+    # Load Excel with bounding box information
+    df = pd.read_excel(excel_path)
+    os.makedirs(output_folder, exist_ok=True)
+
+    for idx, row in tqdm(df.iterrows(), total=len(df)):
+        name = row["name"]
+        x_min, y_min, x_max, y_max = row["x-min"], row["y-min"], row["x-max"], row["y-max"]
+
+        # Match name to file
+        target_path = find_matching_file(name, filled_slip_folder)
+        if target_path is None:
+            continue
+
+        # Load target image
+        target = cv2.imread(target_path, cv2.IMREAD_GRAYSCALE)
+        if target is None:
+            print(f"[ERROR] Cannot load target image from {target_path}")
+            continue
+
+        # Align image
+        aligned_image, matrix = align_image(template, target)
+
+        # Transform bounding box coordinates
+        bounding_boxes = [(x_min, y_min), (x_max, y_max)]
+        transformed_boxes = transform_coordinates(bounding_boxes, matrix)
+
+        # Draw bounding boxes on aligned image
+        image_with_boxes = draw_bounding_boxes(aligned_image, [transformed_boxes])
+
+        # Save results
+        output_image_path = os.path.join(output_folder, f"aligned_{name}.jpg")
+        cv2.imwrite(output_image_path, image_with_boxes)
+
+
+# Parameters
+template_path = "path/to/template.jpg"
+filled_slip_folder = "path/to/filled/slips/"
+excel_path = "path/to/excel.xlsx"
+output_folder = "path/to/output/"
+
+# Execute
+main(template_path, filled_slip_folder, excel_path, output_folder)
