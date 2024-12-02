@@ -1,43 +1,8 @@
-def transform_coordinates(coordinates, matrix, transformation_type='affine'):
-    """
-    Transforms bounding box coordinates using the given transformation matrix.
+# 假设 bounding_boxes 为原始框坐标 [(x_min, y_min, x_max, y_max), ...]
+# matrix 为对齐计算得到的矩阵
+bounding_boxes = [(50, 50, 200, 200), (300, 300, 400, 400)]
+aligned_bounding_boxes = transform_coordinates(bounding_boxes, matrix, transformation_type='affine')
 
-    Args:
-        coordinates: List of tuples [(x_min, y_min), (x_max, y_max)] representing bounding boxes.
-        matrix: Transformation matrix (2x3 for affine, 3x3 for perspective).
-        transformation_type: Type of transformation ('affine' or 'perspective').
-
-    Returns:
-        Transformed coordinates as a list of tuples [(x_min, y_min), (x_max, y_max)].
-    """
-    transformed_boxes = []
-    for (x_min, y_min, x_max, y_max) in coordinates:
-        # Convert corners to homogeneous coordinates
-        corners = np.array([
-            [x_min, y_min, 1],
-            [x_max, y_min, 1],
-            [x_min, y_max, 1],
-            [x_max, y_max, 1]
-        ])
-
-        # Apply the transformation matrix
-        if transformation_type == 'affine':
-            transformed_corners = np.dot(matrix, corners.T).T
-        elif transformation_type == 'perspective':
-            transformed_corners = np.dot(matrix, corners.T).T
-            # Normalize by the third (w) coordinate
-            transformed_corners[:, 0] /= transformed_corners[:, 2]
-            transformed_corners[:, 1] /= transformed_corners[:, 2]
-            transformed_corners = transformed_corners[:, :2]  # Drop w coordinate
-        else:
-            raise ValueError("Invalid transformation_type. Choose 'affine' or 'perspective'.")
-
-        # Extract new bounding box coordinates
-        x_min_new = np.min(transformed_corners[:, 0])
-        y_min_new = np.min(transformed_corners[:, 1])
-        x_max_new = np.max(transformed_corners[:, 0])
-        y_max_new = np.max(transformed_corners[:, 1])
-
-        transformed_boxes.append((x_min_new, y_min_new, x_max_new, y_max_new))
-
-    return transformed_boxes
+# 将结果绘制在对齐后的图片上
+aligned_image_with_boxes = draw_bounding_boxes(aligned_image, aligned_bounding_boxes)
+cv2.imwrite("aligned_with_boxes.png", aligned_image_with_boxes)
