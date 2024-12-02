@@ -1,25 +1,27 @@
-def transform_coordinates(coordinates, matrix):
+def transform_coordinates(coordinates, matrix, transform_type="affine"):
     """
     Transforms coordinates using the given transformation matrix.
     
     Args:
         coordinates: List of tuples [(x_min, y_min), (x_max, y_max)].
         matrix: Transformation matrix (2x3 for affine, 3x3 for perspective).
+        transform_type: Type of transformation ("affine" or "perspective").
         
     Returns:
         Transformed coordinates as a list of tuples [(x_min, y_min), (x_max, y_max)].
     """
     coords = np.array([[x, y, 1] for x, y in coordinates])  # Convert to homogeneous coordinates
     
-    # Apply transformation
-    if matrix.shape == (2, 3):  # Affine transformation
-        transformed_coords = np.dot(np.column_stack([coords[:, :2], np.ones(len(coords))]), matrix.T)
-    elif matrix.shape == (3, 3):  # Perspective transformation
+    if transform_type == "affine":
+        # For affine transformation (2x3 matrix)
+        transformed_coords = np.dot(coords[:, :2], matrix[:, :2].T) + matrix[:, 2]
+    elif transform_type == "perspective":
+        # For perspective transformation (3x3 matrix)
         transformed_coords = np.dot(coords, matrix.T)
-        transformed_coords = transformed_coords[:, :2] / transformed_coords[:, 2:3]  # Normalize by the homogeneous coordinate (w)
-
-    # Return as a list of tuples
-    return transformed_coords[:, :2].tolist()
+        transformed_coords = transformed_coords[:, :2] / transformed_coords[:, 2:]  # Normalize by w
+    
+    # Return transformed coordinates as a list of tuples
+    return transformed_coords.tolist()
 
 def draw_bounding_boxes(image, bounding_boxes):
     """
