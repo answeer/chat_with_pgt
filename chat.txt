@@ -5,7 +5,6 @@ import pandas as pd
 from tqdm import tqdm
 
 def preprocess_image(image):
-    """Preprocess the image to enhance structural elements."""
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if len(image.shape) == 3 else image
     binary = cv2.adaptiveThreshold(
         gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 15, 10
@@ -15,30 +14,24 @@ def preprocess_image(image):
     return processed
 
 def align_images(template, target):
-    """Align the target image to the template using affine or homography transformation."""
     template_proc = preprocess_image(template)
     target_proc = preprocess_image(target)
 
-    # Detect ORB keypoints and descriptors
     orb = cv2.ORB_create(5000)
     kp1, desc1 = orb.detectAndCompute(template_proc, None)
     kp2, desc2 = orb.detectAndCompute(target_proc, None)
 
-    # Match descriptors using BFMatcher
     bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
     matches = bf.match(desc1, desc2)
     matches = sorted(matches, key=lambda x: x.distance)
 
-    # Extract matched keypoints
     src_pts = np.float32([kp1[m.queryIdx].pt for m in matches]).reshape(-1, 1, 2)
     dst_pts = np.float32([kp2[m.trainIdx].pt for m in matches]).reshape(-1, 1, 2)
 
     if len(matches) >= 3:
-        # Affine transformation
         matrix = cv2.estimateAffinePartial2D(dst_pts, src_pts, method=cv2.RANSAC)[0]
         aligned = cv2.warpAffine(target, matrix, (template.shape[1], template.shape[0]))
     elif len(matches) >= 4:
-        # Homography transformation
         matrix, _ = cv2.findHomography(dst_pts, src_pts, cv2.RANSAC, 5.0)
         aligned = cv2.warpPerspective(target, matrix, (template.shape[1], template.shape[0]))
     else:
@@ -47,13 +40,11 @@ def align_images(template, target):
     return aligned, matrix
 
 def transform_coordinates(coordinates, matrix):
-    """Apply the transformation matrix to text coordinates."""
-    coords = np.array([[x, y, 1] if len(matrix) == 3 else [x, y] for x, y in coordinates])
+    coords = np.array([[x, y, 1] for x, y in coordinates])
     transformed_coords = np.dot(matrix, coords.T).T
     return transformed_coords[:, :2]
 
 def overlay_images(template, aligned, alpha=0.5):
-    """Overlay the aligned image onto the template."""
     if len(template.shape) == 2:
         template = cv2.cvtColor(template, cv2.COLOR_GRAY2BGR)
     if len(aligned.shape) == 2:
@@ -61,36 +52,34 @@ def overlay_images(template, aligned, alpha=0.5):
     overlay = cv2.addWeighted(template, alpha, aligned, 1 - alpha, 0)
     return overlay
 
-def match_file_with_name(file_name, name):
-    """Check if the `name` is a substring of the `file_name`."""
-    return name.lower() in file_name.lower()
+def clean_name(name):
+    """Remove underscores and normalize names for matching."""
+    return name.replace("_", "").lower()
 
 def process_transfer_slips(template_path, filled_slip_folder, excel_path, output_dir):
-    """Align all filled slips with the template, save results, and update text coordinates."""
     template = cv2.imread(template_path, cv2.IMREAD_GRAYSCALE)
     filled_slip_paths = [os.path.join(filled_slip_folder, f) for f in os.listdir(filled_slip_folder)]
     os.makedirs(output_dir, exist_ok=True)
 
-    # Load Excel file
     df = pd.read_excel(excel_path)
+    df['cleaned_name'] = df['name'].apply(clean_name)
 
     for idx, slip_path in enumerate(tqdm(filled_slip_paths, desc="Processing Transfer Slips")):
         target = cv2.imread(slip_path, cv2.IMREAD_GRAYSCALE)
         file_name = os.path.basename(slip_path)
+        cleaned_file_name = clean_name(file_name)
 
         try:
-            # Align image
             aligned, matrix = align_images(template, target)
             overlay = overlay_images(template, aligned)
 
-            # Save images
             aligned_path = os.path.join(output_dir, f"aligned_{idx + 1}.png")
             overlay_path = os.path.join(output_dir, f"overlay_{idx + 1}.png")
             cv2.imwrite(aligned_path, aligned)
             cv2.imwrite(overlay_path, overlay)
 
-            # Transform coordinates
-            matched_rows = df[df['name'].apply(lambda name: match_file_with_name(file_name, name))]
+            # Match file name with Excel data
+            matched_rows = df[df['cleaned_name'] == cleaned_file_name]
             if not matched_rows.empty:
                 updated_rows = []
 
@@ -106,25 +95,24 @@ def process_transfer_slips(template_path, filled_slip_folder, excel_path, output
                         'y-max': transformed_coordinates[1][1]
                     })
 
-                # Update Excel
                 updated_df = pd.DataFrame(updated_rows)
                 df.update(updated_df)
-
-                print(f"Updated coordinates for file {file_name}")
+                print(f"Updated coordinates for {file_name}")
+            else:
+                print(f"No match found for {file_name}")
 
         except ValueError as e:
             print(f"Skipping {file_name}: {str(e)}")
 
-    # Save updated Excel
     updated_excel_path = os.path.join(output_dir, "updated_coordinates.xlsx")
     df.to_excel(updated_excel_path, index=False)
     print(f"Updated Excel saved to {updated_excel_path}")
 
 # Example Usage
 if __name__ == "__main__":
-    template_path = "path_to_template_image.png"  # Path to the blank transfer slip
-    filled_slip_folder = "path_to_filled_slips_folder"  # Folder containing all filled slips
-    excel_path = "path_to_excel_file.xlsx"  # Path to the Excel file containing coordinates
-    output_dir = "output_directory"  # Directory to save results
+    template_path = "path_to_template_image.png"
+    filled_slip_folder = "path_to_filled_slips_folder"
+    excel_path = "path_to_excel_file.xlsx"
+    output_dir = "output_directory"
 
     process_transfer_slips(template_path, filled_slip_folder, excel_path, output_dir)
