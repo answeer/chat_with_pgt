@@ -10,13 +10,16 @@ def transform_coordinates(coordinates, matrix):
         Transformed coordinates as a list of tuples [(x_min, y_min), (x_max, y_max)].
     """
     coords = np.array([[x, y, 1] for x, y in coordinates])  # Convert to homogeneous coordinates
+    
+    # Apply transformation
     if matrix.shape == (2, 3):  # Affine transformation
-        transformed_coords = np.dot(matrix, coords.T).T  # Perform the affine transformation
+        transformed_coords = np.dot(np.column_stack([coords[:, :2], np.ones(len(coords))]), matrix.T)
     elif matrix.shape == (3, 3):  # Perspective transformation
-        transformed_coords = np.dot(matrix, coords.T).T  # Perform the perspective transformation
-        transformed_coords = transformed_coords[:, :2] / transformed_coords[:, 2:3]  # Normalize by w
+        transformed_coords = np.dot(coords, matrix.T)
+        transformed_coords = transformed_coords[:, :2] / transformed_coords[:, 2:3]  # Normalize by the homogeneous coordinate (w)
 
-    return transformed_coords[:, :2]
+    # Return as a list of tuples
+    return transformed_coords[:, :2].tolist()
 
 def draw_bounding_boxes(image, bounding_boxes):
     """
