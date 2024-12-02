@@ -1,8 +1,8 @@
 import cv2
 import numpy as np
 import os
+import pandas as pd
 from tqdm import tqdm
-from skimage.metrics import structural_similarity as compare_ssim
 
 def preprocess_image(image):
     """Preprocess the image to enhance structural elements."""
@@ -34,17 +34,23 @@ def align_images(template, target):
     dst_pts = np.float32([kp2[m.trainIdx].pt for m in matches]).reshape(-1, 1, 2)
 
     if len(matches) >= 3:
-        # Affine transformation requires at least 3 points
+        # Affine transformation
         matrix = cv2.estimateAffinePartial2D(dst_pts, src_pts, method=cv2.RANSAC)[0]
         aligned = cv2.warpAffine(target, matrix, (template.shape[1], template.shape[0]))
     elif len(matches) >= 4:
-        # Fall back to homography transformation if 4 or more matches are found
+        # Homography transformation
         matrix, _ = cv2.findHomography(dst_pts, src_pts, cv2.RANSAC, 5.0)
         aligned = cv2.warpPerspective(target, matrix, (template.shape[1], template.shape[0]))
     else:
         raise ValueError("Not enough matches found for alignment.")
 
     return aligned, matrix
+
+def transform_coordinates(coordinates, matrix):
+    """Apply the transformation matrix to text coordinates."""
+    coords = np.array([[x, y, 1] if len(matrix) == 3 else [x, y] for x, y in coordinates])
+    transformed_coords = np.dot(matrix, coords.T).T
+    return transformed_coords[:, :2]
 
 def overlay_images(template, aligned, alpha=0.5):
     """Overlay the aligned image onto the template."""
@@ -55,79 +61,63 @@ def overlay_images(template, aligned, alpha=0.5):
     overlay = cv2.addWeighted(template, alpha, aligned, 1 - alpha, 0)
     return overlay
 
-def evaluate_alignment(template, aligned):
-    """Evaluate the alignment using multiple metrics."""
-    # Ensure images are the same size
-    aligned = cv2.resize(aligned, (template.shape[1], template.shape[0]))
-
-    # Compute MSE
-    mse = np.mean((template.astype("float") - aligned.astype("float")) ** 2)
-
-    # Compute SSIM
-    ssim, _ = compare_ssim(template, aligned, full=True)
-
-    # Compute corner alignment accuracy
-    corners_template = np.array([[0, 0], [template.shape[1], 0], 
-                                  [template.shape[1], template.shape[0]], [0, template.shape[0]]], dtype=np.float32)
-    corners_aligned = corners_template  # Assumes alignment is applied to the entire image
-    corner_error = np.mean(np.linalg.norm(corners_template - corners_aligned, axis=1))
-
-    return {"MSE": mse, "SSIM": ssim, "Corner Error": corner_error}
-
-def get_image_paths_from_folder(folder_path):
-    """Retrieve all image file paths from the specified folder."""
-    valid_extensions = {".png", ".jpg", ".jpeg", ".bmp", ".tiff"}
-    image_paths = [
-        os.path.join(folder_path, fname)
-        for fname in os.listdir(folder_path)
-        if os.path.splitext(fname.lower())[1] in valid_extensions
-    ]
-    return image_paths
-
-def process_transfer_slips(template_path, filled_slip_folder, output_dir):
-    """Align all filled slips with the template, save results, and evaluate accuracy."""
+def process_transfer_slips(template_path, filled_slip_folder, excel_path, output_dir):
+    """Align all filled slips with the template, save results, and update text coordinates."""
     template = cv2.imread(template_path, cv2.IMREAD_GRAYSCALE)
-    filled_slip_paths = get_image_paths_from_folder(filled_slip_folder)
+    filled_slip_paths = [os.path.join(filled_slip_folder, f) for f in os.listdir(filled_slip_folder)]
     os.makedirs(output_dir, exist_ok=True)
 
-    results = []
+    # Load Excel file
+    df = pd.read_excel(excel_path)
+
     for idx, slip_path in enumerate(tqdm(filled_slip_paths, desc="Processing Transfer Slips")):
         target = cv2.imread(slip_path, cv2.IMREAD_GRAYSCALE)
+        image_name = os.path.basename(slip_path)
 
         try:
-            aligned, _ = align_images(template, target)
+            # Align image
+            aligned, matrix = align_images(template, target)
             overlay = overlay_images(template, aligned)
 
+            # Save images
             aligned_path = os.path.join(output_dir, f"aligned_{idx + 1}.png")
             overlay_path = os.path.join(output_dir, f"overlay_{idx + 1}.png")
             cv2.imwrite(aligned_path, aligned)
             cv2.imwrite(overlay_path, overlay)
 
-            metrics = evaluate_alignment(template, aligned)
-            metrics["Image"] = os.path.basename(slip_path)
-            results.append(metrics)
+            # Transform coordinates
+            image_data = df[df['name'] == image_name]
+            if not image_data.empty:
+                coordinates = image_data[['x-min', 'y-min', 'x-max', 'y-max']].values
+                transformed_coordinates = []
 
-            print(f"Processed {slip_path}: Aligned saved to {aligned_path}, Overlay saved to {overlay_path}")
+                for bbox in coordinates:
+                    top_left = (bbox[0], bbox[1])
+                    bottom_right = (bbox[2], bbox[3])
+                    new_top_left = transform_coordinates([top_left], matrix)
+                    new_bottom_right = transform_coordinates([bottom_right], matrix)
+                    transformed_coordinates.append([new_top_left[0][0], new_top_left[0][1],
+                                                    new_bottom_right[0][0], new_bottom_right[0][1]])
+
+                # Update Excel
+                transformed_df = pd.DataFrame(transformed_coordinates, columns=['x-min', 'y-min', 'x-max', 'y-max'])
+                df.update(transformed_df)
+
+                print(f"Updated coordinates for {image_name}")
+
         except ValueError as e:
             print(f"Skipping {slip_path}: {str(e)}")
 
-    return results
-
-def save_evaluation_results(results, output_dir):
-    """Save the evaluation results to a CSV file."""
-    import csv
-    csv_path = os.path.join(output_dir, "evaluation_results.csv")
-    with open(csv_path, mode="w", newline="") as file:
-        writer = csv.DictWriter(file, fieldnames=["Image", "MSE", "SSIM", "Corner Error"])
-        writer.writeheader()
-        writer.writerows(results)
-    print(f"Evaluation results saved to {csv_path}")
+    # Save updated Excel
+    updated_excel_path = os.path.join(output_dir, "updated_coordinates.xlsx")
+    df.to_excel(updated_excel_path, index=False)
+    print(f"Updated Excel saved to {updated_excel_path}")
 
 # Example Usage
 if __name__ == "__main__":
     template_path = "path_to_template_image.png"  # Path to the blank transfer slip
     filled_slip_folder = "path_to_filled_slips_folder"  # Folder containing all filled slips
+    excel_path = "path_to_excel_file.xlsx"  # Path to the Excel file containing coordinates
     output_dir = "output_directory"  # Directory to save results
 
-    results = process_transfer_slips(template_path, filled_slip_folder, output_dir)
-    save_evaluation_results(results, output_dir)
+    process_transfer_slips(template_path, filled_slip_folder, excel_path, output_dir)
