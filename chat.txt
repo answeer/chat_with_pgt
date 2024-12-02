@@ -52,6 +52,13 @@ def transform_coordinates(coordinates, matrix):
     transformed_coords = np.dot(matrix, coords.T).T
     return transformed_coords[:, :2]
 
+def match_name_with_file(file_name, df_names):
+    """Match file name to the closest 'name' in the DataFrame."""
+    for name in df_names:
+        if name in file_name:
+            return name
+    return None
+
 def overlay_images(template, aligned, alpha=0.5):
     """Overlay the aligned image onto the template."""
     if len(template.shape) == 2:
@@ -69,12 +76,19 @@ def process_transfer_slips(template_path, filled_slip_folder, excel_path, output
 
     # Load Excel file
     df = pd.read_excel(excel_path)
+    df_names = df['name'].tolist()
 
     for idx, slip_path in enumerate(tqdm(filled_slip_paths, desc="Processing Transfer Slips")):
         target = cv2.imread(slip_path, cv2.IMREAD_GRAYSCALE)
-        image_name = os.path.basename(slip_path)
+        file_name = os.path.basename(slip_path)
 
         try:
+            # Match name
+            matched_name = match_name_with_file(file_name, df_names)
+            if not matched_name:
+                print(f"No match found for {file_name}. Skipping...")
+                continue
+
             # Align image
             aligned, matrix = align_images(template, target)
             overlay = overlay_images(template, aligned)
@@ -86,7 +100,7 @@ def process_transfer_slips(template_path, filled_slip_folder, excel_path, output
             cv2.imwrite(overlay_path, overlay)
 
             # Transform coordinates
-            image_data = df[df['name'] == image_name]
+            image_data = df[df['name'] == matched_name]
             if not image_data.empty:
                 coordinates = image_data[['x-min', 'y-min', 'x-max', 'y-max']].values
                 transformed_coordinates = []
@@ -103,7 +117,7 @@ def process_transfer_slips(template_path, filled_slip_folder, excel_path, output
                 transformed_df = pd.DataFrame(transformed_coordinates, columns=['x-min', 'y-min', 'x-max', 'y-max'])
                 df.update(transformed_df)
 
-                print(f"Updated coordinates for {image_name}")
+                print(f"Updated coordinates for {matched_name}")
 
         except ValueError as e:
             print(f"Skipping {slip_path}: {str(e)}")
