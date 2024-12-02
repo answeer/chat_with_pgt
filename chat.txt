@@ -52,13 +52,6 @@ def transform_coordinates(coordinates, matrix):
     transformed_coords = np.dot(matrix, coords.T).T
     return transformed_coords[:, :2]
 
-def match_name_with_file(file_name, df_names):
-    """Match file name to the closest 'name' in the DataFrame."""
-    for name in df_names:
-        if name in file_name:
-            return name
-    return None
-
 def overlay_images(template, aligned, alpha=0.5):
     """Overlay the aligned image onto the template."""
     if len(template.shape) == 2:
@@ -68,6 +61,10 @@ def overlay_images(template, aligned, alpha=0.5):
     overlay = cv2.addWeighted(template, alpha, aligned, 1 - alpha, 0)
     return overlay
 
+def match_file_with_name(file_name, name):
+    """Check if the `name` is a substring of the `file_name`."""
+    return name.lower() in file_name.lower()
+
 def process_transfer_slips(template_path, filled_slip_folder, excel_path, output_dir):
     """Align all filled slips with the template, save results, and update text coordinates."""
     template = cv2.imread(template_path, cv2.IMREAD_GRAYSCALE)
@@ -76,19 +73,12 @@ def process_transfer_slips(template_path, filled_slip_folder, excel_path, output
 
     # Load Excel file
     df = pd.read_excel(excel_path)
-    df_names = df['name'].tolist()
 
     for idx, slip_path in enumerate(tqdm(filled_slip_paths, desc="Processing Transfer Slips")):
         target = cv2.imread(slip_path, cv2.IMREAD_GRAYSCALE)
         file_name = os.path.basename(slip_path)
 
         try:
-            # Match name
-            matched_name = match_name_with_file(file_name, df_names)
-            if not matched_name:
-                print(f"No match found for {file_name}. Skipping...")
-                continue
-
             # Align image
             aligned, matrix = align_images(template, target)
             overlay = overlay_images(template, aligned)
@@ -100,27 +90,30 @@ def process_transfer_slips(template_path, filled_slip_folder, excel_path, output
             cv2.imwrite(overlay_path, overlay)
 
             # Transform coordinates
-            image_data = df[df['name'] == matched_name]
-            if not image_data.empty:
-                coordinates = image_data[['x-min', 'y-min', 'x-max', 'y-max']].values
-                transformed_coordinates = []
+            matched_rows = df[df['name'].apply(lambda name: match_file_with_name(file_name, name))]
+            if not matched_rows.empty:
+                updated_rows = []
 
-                for bbox in coordinates:
-                    top_left = (bbox[0], bbox[1])
-                    bottom_right = (bbox[2], bbox[3])
-                    new_top_left = transform_coordinates([top_left], matrix)
-                    new_bottom_right = transform_coordinates([bottom_right], matrix)
-                    transformed_coordinates.append([new_top_left[0][0], new_top_left[0][1],
-                                                    new_bottom_right[0][0], new_bottom_right[0][1]])
+                for _, row in matched_rows.iterrows():
+                    coordinates = [(row['x-min'], row['y-min']), (row['x-max'], row['y-max'])]
+                    transformed_coordinates = transform_coordinates(coordinates, matrix)
+
+                    updated_rows.append({
+                        'name': row['name'],
+                        'x-min': transformed_coordinates[0][0],
+                        'y-min': transformed_coordinates[0][1],
+                        'x-max': transformed_coordinates[1][0],
+                        'y-max': transformed_coordinates[1][1]
+                    })
 
                 # Update Excel
-                transformed_df = pd.DataFrame(transformed_coordinates, columns=['x-min', 'y-min', 'x-max', 'y-max'])
-                df.update(transformed_df)
+                updated_df = pd.DataFrame(updated_rows)
+                df.update(updated_df)
 
-                print(f"Updated coordinates for {matched_name}")
+                print(f"Updated coordinates for file {file_name}")
 
         except ValueError as e:
-            print(f"Skipping {slip_path}: {str(e)}")
+            print(f"Skipping {file_name}: {str(e)}")
 
     # Save updated Excel
     updated_excel_path = os.path.join(output_dir, "updated_coordinates.xlsx")
