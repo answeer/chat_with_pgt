@@ -40,7 +40,7 @@ def align_images(template, target):
     return aligned, matrix
 
 def transform_coordinates(coordinates, matrix):
-    coords = np.array([[x, y, 1] for x, y in coordinates])
+    coords = np.array([[x, y, 1] if len(matrix) == 3 else [x, y] for x, y in coordinates])
     transformed_coords = np.dot(matrix, coords.T).T
     return transformed_coords[:, :2]
 
@@ -52,18 +52,28 @@ def overlay_images(template, aligned, alpha=0.5):
     overlay = cv2.addWeighted(template, alpha, aligned, 1 - alpha, 0)
     return overlay
 
+def clean_name(name):
+    """Remove underscores and standardize the name."""
+    return name.replace("_", "").lower()
+
+def find_match(file_name, names):
+    """Find a matching name by checking substring presence."""
+    cleaned_file_name = clean_name(file_name)
+    for name in names:
+        if clean_name(name) in cleaned_file_name:
+            return name
+    return None
+
 def process_transfer_slips(template_path, filled_slip_folder, excel_path, output_dir):
     template = cv2.imread(template_path, cv2.IMREAD_GRAYSCALE)
     filled_slip_paths = [os.path.join(filled_slip_folder, f) for f in os.listdir(filled_slip_folder)]
     os.makedirs(output_dir, exist_ok=True)
 
     df = pd.read_excel(excel_path)
-    df['name'] = df['name'].str.replace("_", "").str.lower()  # 简化处理
-    print("Processed Excel names for matching.")
 
     for idx, slip_path in enumerate(tqdm(filled_slip_paths, desc="Processing Transfer Slips")):
         target = cv2.imread(slip_path, cv2.IMREAD_GRAYSCALE)
-        file_name = os.path.basename(slip_path).replace("_", "").lower()  # 简化文件名处理
+        file_name = os.path.basename(slip_path)
 
         try:
             aligned, matrix = align_images(template, target)
@@ -74,9 +84,9 @@ def process_transfer_slips(template_path, filled_slip_folder, excel_path, output
             cv2.imwrite(aligned_path, aligned)
             cv2.imwrite(overlay_path, overlay)
 
-            # 匹配文件名与 Excel 数据
-            if file_name in df['name'].values:
-                matched_rows = df[df['name'] == file_name]
+            matched_name = find_match(file_name, df['name'].values)
+            if matched_name:
+                matched_rows = df[df['name'] == matched_name]
                 updated_rows = []
 
                 for _, row in matched_rows.iterrows():
@@ -93,7 +103,7 @@ def process_transfer_slips(template_path, filled_slip_folder, excel_path, output
 
                 updated_df = pd.DataFrame(updated_rows)
                 df.update(updated_df)
-                print(f"Updated coordinates for {file_name}")
+                print(f"Updated coordinates for {file_name} (matched to {matched_name})")
             else:
                 print(f"No match found for {file_name}")
 
