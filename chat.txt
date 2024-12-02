@@ -1,98 +1,43 @@
-def transform_bounding_boxes(bounding_boxes, matrix):
+def transform_coordinates(coordinates, matrix, transformation_type='affine'):
     """
-    Transforms a list of bounding boxes using the given transformation matrix.
-    
+    Transforms bounding box coordinates using the given transformation matrix.
+
     Args:
-        bounding_boxes: List of bounding boxes in [(x_min, y_min, x_max, y_max)] format.
+        coordinates: List of tuples [(x_min, y_min), (x_max, y_max)] representing bounding boxes.
         matrix: Transformation matrix (2x3 for affine, 3x3 for perspective).
-    
+        transformation_type: Type of transformation ('affine' or 'perspective').
+
     Returns:
-        Transformed bounding boxes as a list of [(x_min, y_min, x_max, y_max)].
+        Transformed coordinates as a list of tuples [(x_min, y_min), (x_max, y_max)].
     """
     transformed_boxes = []
-    for box in bounding_boxes:
-        # Extract points
-        points = np.array([
-            [box[0], box[1]],  # (x_min, y_min)
-            [box[2], box[1]],  # (x_max, y_min)
-            [box[0], box[3]],  # (x_min, y_max)
-            [box[2], box[3]]   # (x_max, y_max)
-        ], dtype=np.float32)
-        
-        # Transform points using the matrix
-        if matrix.shape == (2, 3):  # Affine transformation
-            transformed_points = cv2.transform(np.array([points]), matrix)[0]
-        elif matrix.shape == (3, 3):  # Perspective transformation
-            transformed_points = cv2.perspectiveTransform(np.array([points]), matrix)[0]
-        
-        # Get new bounding box by finding min and max coordinates
-        x_min, y_min = np.min(transformed_points, axis=0)
-        x_max, y_max = np.max(transformed_points, axis=0)
-        
-        # Append the new box
-        transformed_boxes.append((x_min, y_min, x_max, y_max))
-    
+    for (x_min, y_min, x_max, y_max) in coordinates:
+        # Convert corners to homogeneous coordinates
+        corners = np.array([
+            [x_min, y_min, 1],
+            [x_max, y_min, 1],
+            [x_min, y_max, 1],
+            [x_max, y_max, 1]
+        ])
+
+        # Apply the transformation matrix
+        if transformation_type == 'affine':
+            transformed_corners = np.dot(matrix, corners.T).T
+        elif transformation_type == 'perspective':
+            transformed_corners = np.dot(matrix, corners.T).T
+            # Normalize by the third (w) coordinate
+            transformed_corners[:, 0] /= transformed_corners[:, 2]
+            transformed_corners[:, 1] /= transformed_corners[:, 2]
+            transformed_corners = transformed_corners[:, :2]  # Drop w coordinate
+        else:
+            raise ValueError("Invalid transformation_type. Choose 'affine' or 'perspective'.")
+
+        # Extract new bounding box coordinates
+        x_min_new = np.min(transformed_corners[:, 0])
+        y_min_new = np.min(transformed_corners[:, 1])
+        x_max_new = np.max(transformed_corners[:, 0])
+        y_max_new = np.max(transformed_corners[:, 1])
+
+        transformed_boxes.append((x_min_new, y_min_new, x_max_new, y_max_new))
+
     return transformed_boxes
-
-def process_transfer_slips_with_boxes(template_path, filled_slip_folder, excel_path, output_dir):
-    template = cv2.imread(template_path, cv2.IMREAD_GRAYSCALE)
-    filled_slip_paths = [os.path.join(filled_slip_folder, f) for f in os.listdir(filled_slip_folder)]
-    os.makedirs(output_dir, exist_ok=True)
-
-    df = pd.read_excel(excel_path)
-
-    for idx, slip_path in enumerate(tqdm(filled_slip_paths, desc="Processing Transfer Slips")):
-        target = cv2.imread(slip_path, cv2.IMREAD_GRAYSCALE)
-        file_name = os.path.basename(slip_path)
-
-        try:
-            aligned, matrix = align_images(template, target)
-            overlay = overlay_images(template, aligned)
-
-            aligned_path = os.path.join(output_dir, f"aligned_{idx + 1}.png")
-            overlay_path = os.path.join(output_dir, f"overlay_{idx + 1}.png")
-            cv2.imwrite(aligned_path, aligned)
-            cv2.imwrite(overlay_path, overlay)
-
-            matched_name = find_match(file_name, df['name'].values)
-            if matched_name:
-                matched_rows = df[df['name'] == matched_name]
-                bounding_boxes = []
-
-                for _, row in matched_rows.iterrows():
-                    bounding_boxes.append([
-                        row['x-min'], row['y-min'], row['x-max'], row['y-max']
-                    ])
-
-                # Transform bounding boxes
-                transformed_boxes = transform_bounding_boxes(bounding_boxes, matrix)
-
-                # Update the DataFrame with transformed coordinates
-                updated_rows = []
-                for i, box in enumerate(transformed_boxes):
-                    updated_rows.append({
-                        'name': matched_name,
-                        'x-min': box[0],
-                        'y-min': box[1],
-                        'x-max': box[2],
-                        'y-max': box[3]
-                    })
-                
-                updated_df = pd.DataFrame(updated_rows)
-                df.update(updated_df)
-
-                # Visualize transformed bounding boxes
-                image_with_boxes = draw_bounding_boxes(aligned, transformed_boxes)
-                boxes_path = os.path.join(output_dir, f"boxes_{idx + 1}.png")
-                cv2.imwrite(boxes_path, image_with_boxes)
-
-                print(f"Updated coordinates and saved bounding boxes for {file_name} (matched to {matched_name})")
-            else:
-                print(f"No match found for {file_name}")
-
-        except ValueError as e:
-            print(f"Skipping {file_name}: {str(e)}")
-
-    updated_excel_path = os.path.join(output_dir, "updated_coordinates.xlsx")
-    df.to_excel(updated_excel_path, index=False)
-    print(f"Updated Excel saved to {updated_excel_path}")
