@@ -1,45 +1,71 @@
-def transform_coordinates(coordinates, matrix, transform_type="affine"):
+import os
+import cv2
+import numpy as np
+import pandas as pd
+from tqdm import tqdm
+
+
+def find_matching_file(name, folder_path):
     """
-    Transforms coordinates using the given transformation matrix.
-    
+    Find the file that matches the provided name in the given folder.
+
+    Args:
+        name: The exact name from the Excel file (e.g., "doc047.pdf_1.tiff").
+        folder_path: The directory where the images are stored.
+
+    Returns:
+        The matching file path if found, else None.
+    """
+    normalized_name = name.lower()
+    for filename in os.listdir(folder_path):
+        if filename.lower() == normalized_name:
+            return os.path.join(folder_path, filename)
+    print(f"[WARNING] No matching file found for name: {name}")
+    return None
+
+
+def align_image(template, target):
+    """
+    Align target image to the template using feature matching.
+
+    Args:
+        template: Template image (numpy array).
+        target: Target image to be aligned (numpy array).
+
+    Returns:
+        Aligned image and transformation matrix.
+    """
+    orb = cv2.ORB_create(5000)
+    kp1, des1 = orb.detectAndCompute(template, None)
+    kp2, des2 = orb.detectAndCompute(target, None)
+
+    bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
+    matches = bf.match(des1, des2)
+    matches = sorted(matches, key=lambda x: x.distance)
+
+    src_pts = np.float32([kp1[m.queryIdx].pt for m in matches]).reshape(-1, 1, 2)
+    dst_pts = np.float32([kp2[m.trainIdx].pt for m in matches]).reshape(-1, 1, 2)
+
+    matrix, _ = cv2.findHomography(dst_pts, src_pts, cv2.RANSAC, 5.0)
+    h, w = template.shape[:2]
+    aligned_image = cv2.warpPerspective(target, matrix, (w, h))
+
+    return aligned_image, matrix
+
+
+def transform_coordinates(coordinates, matrix, transform_type="perspective"):
+    """
+    Transform coordinates using the given transformation matrix.
+
     Args:
         coordinates: List of tuples [(x_min, y_min), (x_max, y_max)].
-        matrix: Transformation matrix (2x3 for affine, 3x3 for perspective).
+        matrix: Transformation matrix (3x3 for perspective).
         transform_type: Type of transformation ("affine" or "perspective").
-        
+
     Returns:
         Transformed coordinates as a list of tuples [(x_min, y_min), (x_max, y_max)].
     """
-    coords = np.array([[x, y, 1] for x, y in coordinates])  # Convert to homogeneous coordinates
-    
-    if transform_type == "affine":
-        # For affine transformation (2x3 matrix)
-        transformed_coords = np.dot(coords[:, :2], matrix[:, :2].T) + matrix[:, 2]
-    elif transform_type == "perspective":
-        # For perspective transformation (3x3 matrix)
-        transformed_coords = np.dot(coords, matrix.T)
-        transformed_coords = transformed_coords[:, :2] / transformed_coords[:, 2:]  # Normalize by w
-    
-    # Return transformed coordinates as a list of tuples
-    return transformed_coords.tolist()
-
-def draw_bounding_boxes(image, bounding_boxes):
-    """
-    Draw bounding boxes on the image.
-    
-    Args:
-        image: Aligned image (numpy array).
-        bounding_boxes: List of bounding boxes in the form [(x_min, y_min, x_max, y_max), ...].
-        
-    Returns:
-        Image with bounding boxes drawn.
-    """
-    image_with_boxes = image.copy()
-    if len(image_with_boxes.shape) == 2:  # Convert grayscale to BGR for color visualization
-        image_with_boxes = cv2.cvtColor(image_with_boxes, cv2.COLOR_GRAY2BGR)
-
-    for box in bounding_boxes:
-        x_min, y_min, x_max, y_max = map(int, box)
-        cv2.rectangle(image_with_boxes, (x_min, y_min), (x_max, y_max), (0, 255, 0), 2)
-    
-    return image_with_boxes
+    coords = np.array([[x_min, y_min, 1] for x_min, y_min in coordinates])
+    transformed_coords = np.dot(coords, matrix.T)
+    transformed_coords = transformed_coords[:, :2] / transformed_coords[:, 2:3]
+    return transformed_coords
