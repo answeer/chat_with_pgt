@@ -1,39 +1,98 @@
-def main(template_path, filled_slip_folder, excel_path, output_folder):
-    # Load template
+def transform_bounding_boxes(bounding_boxes, matrix):
+    """
+    Transforms a list of bounding boxes using the given transformation matrix.
+    
+    Args:
+        bounding_boxes: List of bounding boxes in [(x_min, y_min, x_max, y_max)] format.
+        matrix: Transformation matrix (2x3 for affine, 3x3 for perspective).
+    
+    Returns:
+        Transformed bounding boxes as a list of [(x_min, y_min, x_max, y_max)].
+    """
+    transformed_boxes = []
+    for box in bounding_boxes:
+        # Extract points
+        points = np.array([
+            [box[0], box[1]],  # (x_min, y_min)
+            [box[2], box[1]],  # (x_max, y_min)
+            [box[0], box[3]],  # (x_min, y_max)
+            [box[2], box[3]]   # (x_max, y_max)
+        ], dtype=np.float32)
+        
+        # Transform points using the matrix
+        if matrix.shape == (2, 3):  # Affine transformation
+            transformed_points = cv2.transform(np.array([points]), matrix)[0]
+        elif matrix.shape == (3, 3):  # Perspective transformation
+            transformed_points = cv2.perspectiveTransform(np.array([points]), matrix)[0]
+        
+        # Get new bounding box by finding min and max coordinates
+        x_min, y_min = np.min(transformed_points, axis=0)
+        x_max, y_max = np.max(transformed_points, axis=0)
+        
+        # Append the new box
+        transformed_boxes.append((x_min, y_min, x_max, y_max))
+    
+    return transformed_boxes
+
+def process_transfer_slips_with_boxes(template_path, filled_slip_folder, excel_path, output_dir):
     template = cv2.imread(template_path, cv2.IMREAD_GRAYSCALE)
-    if template is None:
-        print(f"Error: Cannot load template image from {template_path}")
-        return
+    filled_slip_paths = [os.path.join(filled_slip_folder, f) for f in os.listdir(filled_slip_folder)]
+    os.makedirs(output_dir, exist_ok=True)
 
-    # Load Excel with bounding box information
     df = pd.read_excel(excel_path)
-    os.makedirs(output_folder, exist_ok=True)
 
-    for idx, row in tqdm(df.iterrows(), total=len(df)):
-        name = row["name"]
-        x_min, y_min, x_max, y_max = row["x-min"], row["y-min"], row["x-max"], row["y-max"]
+    for idx, slip_path in enumerate(tqdm(filled_slip_paths, desc="Processing Transfer Slips")):
+        target = cv2.imread(slip_path, cv2.IMREAD_GRAYSCALE)
+        file_name = os.path.basename(slip_path)
 
-        # Match name to file
-        target_path = find_matching_file(name, filled_slip_folder)
-        if target_path is None:
-            continue
+        try:
+            aligned, matrix = align_images(template, target)
+            overlay = overlay_images(template, aligned)
 
-        # Load target image
-        target = cv2.imread(target_path, cv2.IMREAD_GRAYSCALE)
-        if target is None:
-            print(f"[ERROR] Cannot load target image from {target_path}")
-            continue
+            aligned_path = os.path.join(output_dir, f"aligned_{idx + 1}.png")
+            overlay_path = os.path.join(output_dir, f"overlay_{idx + 1}.png")
+            cv2.imwrite(aligned_path, aligned)
+            cv2.imwrite(overlay_path, overlay)
 
-        # Align image
-        aligned_image, matrix = align_image(template, target)
+            matched_name = find_match(file_name, df['name'].values)
+            if matched_name:
+                matched_rows = df[df['name'] == matched_name]
+                bounding_boxes = []
 
-        # Transform bounding box coordinates
-        bounding_boxes = [(x_min, y_min, x_max, y_max)]
-        transformed_boxes = transform_coordinates(bounding_boxes, matrix, aligned_image.shape)
+                for _, row in matched_rows.iterrows():
+                    bounding_boxes.append([
+                        row['x-min'], row['y-min'], row['x-max'], row['y-max']
+                    ])
 
-        # Draw bounding boxes on aligned image
-        image_with_boxes = draw_bounding_boxes(aligned_image, transformed_boxes)
+                # Transform bounding boxes
+                transformed_boxes = transform_bounding_boxes(bounding_boxes, matrix)
 
-        # Save results
-        output_image_path = os.path.join(output_folder, f"aligned_{name}.jpg")
-        cv2.imwrite(output_image_path, image_with_boxes)
+                # Update the DataFrame with transformed coordinates
+                updated_rows = []
+                for i, box in enumerate(transformed_boxes):
+                    updated_rows.append({
+                        'name': matched_name,
+                        'x-min': box[0],
+                        'y-min': box[1],
+                        'x-max': box[2],
+                        'y-max': box[3]
+                    })
+                
+                updated_df = pd.DataFrame(updated_rows)
+                df.update(updated_df)
+
+                # Visualize transformed bounding boxes
+                image_with_boxes = draw_bounding_boxes(aligned, transformed_boxes)
+                boxes_path = os.path.join(output_dir, f"boxes_{idx + 1}.png")
+                cv2.imwrite(boxes_path, image_with_boxes)
+
+                print(f"Updated coordinates and saved bounding boxes for {file_name} (matched to {matched_name})")
+            else:
+                print(f"No match found for {file_name}")
+
+        except ValueError as e:
+            print(f"Skipping {file_name}: {str(e)}")
+
+    updated_excel_path = os.path.join(output_dir, "updated_coordinates.xlsx")
+    df.to_excel(updated_excel_path, index=False)
+    print(f"Updated Excel saved to {updated_excel_path}")
