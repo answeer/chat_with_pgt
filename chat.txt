@@ -19,3 +19,6 @@ def transform_coordinates(bounding_boxes, matrix):
         ))
 
     return transformed_boxes
+
+x_min, y_min, x_max, y_max = map(int, transformed_box)
+cv2.rectangle(image, (x_min, y_min), (x_max, y_max), (0, 255, 0), 2)
