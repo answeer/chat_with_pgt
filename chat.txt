@@ -1,61 +1,21 @@
 def transform_coordinates(bounding_boxes, matrix):
-    """
-    Transforms bounding box coordinates using the given affine transformation matrix.
-
-    Args:
-        bounding_boxes: List of bounding boxes [(x_min, y_min, x_max, y_max), ...].
-        matrix: 2x3 affine transformation matrix.
-
-    Returns:
-        Transformed bounding boxes as a list [(x_min, y_min, x_max, y_max), ...].
-    """
     transformed_boxes = []
     
     for box in bounding_boxes:
-        # Extract corners of the bounding box
         x_min, y_min, x_max, y_max = box
+        
+        # Create corner points in homogeneous coordinates
+        top_left = np.array([x_min, y_min, 1]).reshape(-1, 1)
+        bottom_right = np.array([x_max, y_max, 1]).reshape(-1, 1)
 
-        # Define the corners as homogeneous coordinates
-        top_left = np.array([x_min, y_min, 1])
-        bottom_right = np.array([x_max, y_max, 1])
+        # Apply affine transformation
+        transformed_top_left = np.dot(matrix, top_left).flatten()
+        transformed_bottom_right = np.dot(matrix, bottom_right).flatten()
 
-        # Apply the affine transformation
-        transformed_top_left = np.dot(matrix, top_left)
-        transformed_bottom_right = np.dot(matrix, bottom_right)
-
-        # Append the transformed bounding box
+        # Append the transformed box
         transformed_boxes.append((
             transformed_top_left[0], transformed_top_left[1],
             transformed_bottom_right[0], transformed_bottom_right[1]
         ))
 
     return transformed_boxes
-
-
-# Transform coordinates
-matched_rows = df[df['name'].str.contains(file_name, case=False)]
-bounding_boxes = []
-updated_rows = []
-
-for _, row in matched_rows.iterrows():
-    # Original bounding box
-    box = (row['x_min'], row['y_min'], row['x_max'], row['y_max'])
-
-    # Transform the bounding box
-    transformed_box = transform_coordinates([box], matrix)[0]
-
-    bounding_boxes.append(transformed_box)
-
-    # Update the DataFrame with new coordinates
-    updated_rows.append({
-        'name': row['name'],
-        'x_min': transformed_box[0],
-        'y_min': transformed_box[1],
-        'x_max': transformed_box[2],
-        'y_max': transformed_box[3]
-    })
-
-# Draw bounding boxes on the aligned image
-image_with_boxes = draw_bounding_boxes(aligned, bounding_boxes)
-boxes_path = os.path.join(output_dir, f"boxes_{idx + 1}.png")
-cv2.imwrite(boxes_path, image_with_boxes)
