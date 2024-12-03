@@ -1,60 +1,149 @@
-def transform_coordinates(bounding_boxes, matrix, image_shape):
+import cv2
+import numpy as np
+import os
+import pandas as pd
+from tqdm import tqdm
+
+
+def draw_bounding_boxes(image, bounding_boxes):
+    """
+    Draw bounding boxes on the image.
+    """
+    image_with_boxes = image.copy()
+    if len(image_with_boxes.shape) == 2:  # Convert grayscale to BGR for visualization
+        image_with_boxes = cv2.cvtColor(image_with_boxes, cv2.COLOR_GRAY2BGR)
+
+    for box in bounding_boxes:
+        x_min, y_min, x_max, y_max = map(int, box)
+        cv2.rectangle(image_with_boxes, (x_min, y_min), (x_max, y_max), (0, 255, 0), 2)
+
+    return image_with_boxes
+
+
+def align_images(template, target, keypoints=5000):
+    """
+    Align the target image to the template using affine or homography transformation.
+    """
+    orb = cv2.ORB_create(keypoints)
+    kp1, desc1 = orb.detectAndCompute(template, None)
+    kp2, desc2 = orb.detectAndCompute(target, None)
+
+    bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
+    matches = bf.match(desc1, desc2)
+    matches = sorted(matches, key=lambda x: x.distance)
+
+    src_pts = np.float32([kp1[m.queryIdx].pt for m in matches]).reshape(-1, 1, 2)
+    dst_pts = np.float32([kp2[m.trainIdx].pt for m in matches]).reshape(-1, 1, 2)
+
+    matrix, _ = cv2.estimateAffinePartial2D(dst_pts, src_pts, method=cv2.RANSAC)
+    aligned = cv2.warpAffine(target, matrix, (template.shape[1], template.shape[0]))
+
+    return aligned, matrix
+
+
+def transform_coordinates(bounding_boxes, matrix):
     """
     Transforms bounding box coordinates using the given affine transformation matrix.
 
     Args:
         bounding_boxes: List of bounding boxes [(x_min, y_min, x_max, y_max), ...].
         matrix: 2x3 affine transformation matrix.
-        image_shape: Shape of the aligned image (height, width).
 
     Returns:
         Transformed bounding boxes as a list [(x_min, y_min, x_max, y_max), ...].
     """
     transformed_boxes = []
     for box in bounding_boxes:
-        # Define the box corners
-        points = np.array([
-            [box[0], box[1], 1],  # Top-left
-            [box[2], box[3], 1]   # Bottom-right
-        ])
-        
+        # Convert the box corners to homogeneous coordinates
+        points = np.array([[box[0], box[1], 1],  # Top-left
+                           [box[2], box[3], 1]])  # Bottom-right
+
         # Apply the affine transformation
         transformed_points = np.dot(matrix, points.T).T
 
-        # Extract new bounding box coordinates
+        # Collect the transformed corners
         x_min, y_min = transformed_points[0][:2]
         x_max, y_max = transformed_points[1][:2]
-
-        # Ensure the bounding box is within image boundaries
-        x_min = max(0, min(image_shape[1], x_min))
-        y_min = max(0, min(image_shape[0], y_min))
-        x_max = max(0, min(image_shape[1], x_max))
-        y_max = max(0, min(image_shape[0], y_max))
-
         transformed_boxes.append((x_min, y_min, x_max, y_max))
 
     return transformed_boxes
 
 
-def draw_bounding_boxes(image, bounding_boxes):
-    """
-    Draw bounding boxes on the image.
-    
-    Args:
-        image: Aligned image (numpy array).
-        bounding_boxes: List of bounding boxes in the form [(x_min, y_min, x_max, y_max), ...].
-        
-    Returns:
-        Image with bounding boxes drawn.
-    """
-    image_with_boxes = image.copy()
-    if len(image_with_boxes.shape) == 2:  # Convert grayscale to BGR for visualization
-        image_with_boxes = cv2.cvtColor(image_with_boxes, cv2.COLOR_GRAY2BGR)
+def overlay_images(template, aligned, alpha=0.5):
+    """Overlay the aligned image onto the template."""
+    if len(template.shape) == 2:
+        template = cv2.cvtColor(template, cv2.COLOR_GRAY2BGR)
+    if len(aligned.shape) == 2:
+        aligned = cv2.cvtColor(aligned, cv2.COLOR_GRAY2BGR)
+    overlay = cv2.addWeighted(template, alpha, aligned, 1 - alpha, 0)
+    return overlay
 
-    for i, box in enumerate(bounding_boxes):
-        x_min, y_min, x_max, y_max = map(int, box)
-        cv2.rectangle(image_with_boxes, (x_min, y_min), (x_max, y_max), (0, 255, 0), 2)
-        cv2.putText(image_with_boxes, f"Box {i+1}", (x_min, y_min - 10), 
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
-    
-    return image_with_boxes
+
+def process_transfer_slips(template_path, filled_slip_folder, csv_path, output_dir):
+    """Align all filled slips with the template, save results, and update text coordinates."""
+    template = cv2.imread(template_path, cv2.IMREAD_GRAYSCALE)
+    filled_slip_paths = [os.path.join(filled_slip_folder, f) for f in os.listdir(filled_slip_folder)]
+    os.makedirs(output_dir, exist_ok=True)
+
+    # Load csv file
+    df = pd.read_csv(csv_path)
+
+    for idx, slip_path in enumerate(tqdm(filled_slip_paths, desc="Processing Transfer Slips")):
+        target = cv2.imread(slip_path, cv2.IMREAD_GRAYSCALE)
+        file_name = os.path.basename(slip_path)
+        file_name, _ = os.path.splitext(file_name)
+
+        try:
+            # Align image
+            aligned, matrix = align_images(template, target)
+            overlay = overlay_images(template, aligned)
+
+            # Save images
+            aligned_path = os.path.join(output_dir, f"aligned_{idx + 1}.png")
+            overlay_path = os.path.join(output_dir, f"overlay_{idx + 1}.png")
+            cv2.imwrite(aligned_path, aligned)
+            cv2.imwrite(overlay_path, overlay)
+
+            # Transform coordinates
+            matched_rows = df[df['name'].str.contains(file_name, case=False)]
+            bounding_boxes = []
+            updated_rows = []
+
+            for _, row in matched_rows.iterrows():
+                box = (row['x_min'], row['y_min'], row['x_max'], row['y_max'])
+                transformed_box = transform_coordinates([box], matrix)[0]
+
+                bounding_boxes.append(transformed_box)
+
+                updated_rows.append({
+                    'name': row['name'],
+                    'x_min': transformed_box[0],
+                    'y_min': transformed_box[1],
+                    'x_max': transformed_box[2],
+                    'y_max': transformed_box[3]
+                })
+
+            updated_df = pd.DataFrame(updated_rows)
+            df.update(updated_df)
+
+            # Draw bounding boxes on the aligned image
+            image_with_boxes = draw_bounding_boxes(aligned, bounding_boxes)
+            boxes_path = os.path.join(output_dir, f"boxes_{idx + 1}.png")
+            cv2.imwrite(boxes_path, image_with_boxes)
+
+        except ValueError as e:
+            print(f"Skipping {file_name}: {str(e)}")
+
+    updated_csv_path = os.path.join(output_dir, "updated_coordinates.csv")
+    df.to_csv(updated_csv_path, index=False)
+    print(f"Updated Excel saved to {updated_csv_path}")
+
+
+# Example Usage
+if __name__ == "__main__":
+    template_path = "template/template_image.png"  # Path to the blank transfer slip
+    filled_slip_folder = "filled_slips"  # Folder containing all filled slips
+    csv_path = "coordinates.csv"  # Path to the CSV file containing coordinates
+    output_dir = "results"  # Directory to save results
+
+    process_transfer_slips(template_path, filled_slip_folder, csv_path, output_dir)
