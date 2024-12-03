@@ -1,24 +1,34 @@
-def transform_coordinates(bounding_boxes, matrix):
-    transformed_boxes = []
+import cv2
+
+def draw_bounding_boxes(image, bounding_boxes):
+    """
+    Draw bounding boxes on the image.
     
-    for box in bounding_boxes:
-        x_min, y_min, x_max, y_max = box
+    Args:
+        image: Aligned image (numpy array).
+        bounding_boxes: List of bounding boxes in the form [(x_min, y_min, x_max, y_max), ...].
         
-        # Create corner points in homogeneous coordinates
-        top_left = np.array([x_min, y_min, 1]).reshape(-1, 1)
-        bottom_right = np.array([x_max, y_max, 1]).reshape(-1, 1)
+    Returns:
+        Image with bounding boxes drawn.
+    """
+    # Clone the input image
+    image_with_boxes = image.copy()
 
-        # Apply affine transformation
-        transformed_top_left = np.dot(matrix, top_left).flatten()
-        transformed_bottom_right = np.dot(matrix, bottom_right).flatten()
+    # Convert grayscale to BGR for visualization if necessary
+    if len(image_with_boxes.shape) == 2:
+        image_with_boxes = cv2.cvtColor(image_with_boxes, cv2.COLOR_GRAY2BGR)
 
-        # Append the transformed box
-        transformed_boxes.append((
-            transformed_top_left[0], transformed_top_left[1],
-            transformed_bottom_right[0], transformed_bottom_right[1]
-        ))
+    for box in bounding_boxes:
+        try:
+            # Ensure coordinates are integers
+            x_min, y_min, x_max, y_max = map(int, box)
 
-    return transformed_boxes
+            # Debug: Print each box coordinates
+            print(f"Drawing box: x_min={x_min}, y_min={y_min}, x_max={x_max}, y_max={y_max}")
 
-x_min, y_min, x_max, y_max = map(int, transformed_box)
-cv2.rectangle(image, (x_min, y_min), (x_max, y_max), (0, 255, 0), 2)
+            # Draw rectangle
+            cv2.rectangle(image_with_boxes, (x_min, y_min), (x_max, y_max), (0, 255, 0), 2)
+        except Exception as e:
+            print(f"Error drawing box {box}: {e}")
+
+    return image_with_boxes
