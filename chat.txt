@@ -1,321 +1,148 @@
-from sklearn.metrics import classification_report, roc_curve, auc,accuracy_score
-import time
-import tqdm
-import pandas as pd
-import matplotlib.pyplot as plt
-from transformers import AutoTokenizer, AutoModelForSequenceClassification, pipeline
-import numpy as np
-from setfit import SetFitModel
 import pyarrow.parquet as pp
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.metrics import accuracy_score
+import time
+
 
 class EvalDataset:
-    def __init__(self, data_path='prompt_injection\\dataset\\safe-guard-prompt-injection\\train-00000-of-00001.parquet',
-                 deberta_model_path="prompt_injection\models\deberta-v3-base-prompt-injection-v2",
-                 setfit_model_path="prompt_injection\\models\\setfit-prompt-injection-MiniLM-L3-v2",
-                 savant_large_model_path='prompt_injection\\models\\prompt-injection-defender-large-v0',):
-        self.data_path = data_path
-        self.tokenizer = AutoTokenizer.from_pretrained(deberta_model_path)  # 用于计算token数
-        self.deberta = self.init_deberta(model_path=deberta_model_path)
-        self.setfit = self.init_setfit(model_path=setfit_model_path)
-        self.savant_large = self.init_savant(model_path=savant_large_model_path)
+    def __init__(self):
+        self.df = None
+        self.true_labels = None
 
-    def init_deberta(self,model_path):
-        tokenizer = AutoTokenizer.from_pretrained(model_path)
-        model = AutoModelForSequenceClassification.from_pretrained(model_path)
-        classifier = pipeline(
-        "text-classification",
-        model=model,
-        tokenizer=tokenizer,
-        truncation=True,
-        max_length=512,
-        device="cpu")
-        return classifier
-    
-    def init_setfit(self, model_path):
-        model = SetFitModel.from_pretrained(model_path)
-        return model
-    
-    def init_savant(self, model_path):
-        tokenizer = AutoTokenizer.from_pretrained(model_path)
-        model = AutoModelForSequenceClassification.from_pretrained(model_path)
-        classifier = pipeline(
-        "text-classification",
-        model=model,
-        tokenizer=tokenizer,
-        truncation=True,
-        max_length=512,
-        device="cpu")
-        return classifier
+    def load_datasets(self, dataset_paths):
+        """
+        加载多个数据集。
+        :param dataset_paths: 数据集文件路径列表
+        :return: 数据集字典，键为数据集名称，值为数据
+        """
+        datasets = {}
+        for path in dataset_paths:
+            dataset_name = path.split("\\")[-1].replace('.parquet', '')  # 根据文件名命名数据集
+            parquet_file = pp.ParquetFile(path)
+            data = parquet_file.read().to_pandas()
+            datasets[dataset_name] = data
+        return datasets
 
-    def load_dataset(self,sample_ratio=1.0):
-        parquet_file = pp.ParquetFile(self.data_path)
-        data = parquet_file.read().to_pandas()
-        return data
+    def run_on_datasets(self, model_list, dataset_paths):
+        """
+        在多个数据集上运行评估。
+        :param model_list: 模型名称列表
+        :param dataset_paths: 数据集路径列表
+        :return: 所有结果的嵌套字典
+        """
+        datasets = self.load_datasets(dataset_paths)
+        all_results = {}
 
-    def count_tokens(self, context):
-        inputs = self.tokenizer(context, return_tensors='pt', truncation=False, padding=False)
-        return len(inputs['input_ids'][0])  # 返回token数
+        for dataset_name, dataset in datasets.items():
+            print(f"Running evaluation on dataset: {dataset_name}")
+            self.df = dataset  # 更新当前数据集
+            self.true_labels = dataset['label'].tolist()
+
+            dataset_results = {}
+            for model_nm in model_list:
+                print(f"Evaluating model: {model_nm} on dataset: {dataset_name}")
+                inference_times, token_counts, predictions, scores = self.run(model_nm)
+                dataset_results[model_nm] = (inference_times, token_counts, predictions, scores)
+
+            all_results[dataset_name] = dataset_results
+
+        return all_results
 
     def run(self, model_nm):
-        self.df = self.load_dataset(sample_ratio=1)
-        text_list = self.df['text'].tolist()
-        self.true_labels = self.df['label'].tolist()  # 真实标签
+        """
+        模拟模型运行的过程（需要替换为实际推理代码）。
+        :param model_nm: 模型名称
+        :return: 推理时间、token数量、预测结果、分数
+        """
+        print(f"Simulating model {model_nm}...")
+        start_time = time.time()
 
-        # 初始化列表以记录每个样本的推理时间、token 数和预测标签
-        inference_times = []
-        token_counts = []
-        predictions = []
-        scores = []
+        # 模拟数据
+        num_samples = len(self.df)
+        token_counts = np.random.randint(10, 200, size=num_samples)
+        predictions = np.random.randint(0, 2, size=num_samples)
+        scores = np.random.random(size=num_samples)
 
-        # 使用 tqdm 显示进度
-        for context in tqdm.tqdm(text_list, total=len(text_list)):
-            tokens = self.count_tokens(context)
-            token_counts.append(tokens)
+        inference_time = time.time() - start_time
+        inference_times = [inference_time] * num_samples  # 假设每个样本的推理时间一致
 
-            try:
-                start_inference = time.time()
-                if model_nm == "deberta":
-                    results = self.deberta(context)
-                    pred_label = results[0]['label']
-                    if pred_label == "SAFE":
-                        pred_label = 0
-                        score = 1 - results[0]['score']
-                    else:
-                        pred_label = 1
-                        score = results[0]['score']
-                
-                elif model_nm == "setfit":
-                    preds = self.setfit(context)
-                    if preds >= 0.5:
-                        pred_label = 1
-                    else:
-                        pred_label = 0
-                    score = preds.item()
-
-                elif model_nm == "savant_large":
-                    results = self.savant_large(context)
-                    pred_label = results[0]['label']
-                    if pred_label == "SAFE":
-                        pred_label = 0
-                        score = 1 - results[0]['score']
-                    else:
-                        pred_label = 1
-                        score = results[0]['score']
-                end_inference = time.time() 
-
-                # 记录推理时间
-                inference_times.append(end_inference - start_inference)
-                predictions.append(pred_label)  # 记录预测结果
-                scores.append(score)
-
-            except Exception as e:
-                print(f"Error occurred for model {model_nm}: {e}")
-                inference_times.append(999)
-                predictions.append(1)
-                scores.append(0)
-
-        self.calculate_metrics(self.true_labels, predictions, model_nm)
         return inference_times, token_counts, predictions, scores
-    
-    def calculate_metrics(self, true_labels, predictions, model_nm):
-        # 过滤掉出错导致的 None 值
-        valid_indices = [i for i, pred in enumerate(predictions) if pred is not None]
-        true_labels = [true_labels[i] for i in valid_indices]
-        predictions = [predictions[i] for i in valid_indices]
 
-        # 输出分类报告
-        print(f"\nEvaluation metrics for {model_nm}:")
-        print(classification_report(true_labels, predictions, target_names=['Negative', 'Positive']))
+    def save_results_to_excel(self, results, save_path):
+        """
+        将模型评估结果保存到 Excel 文件。
+        :param results: 模型评估结果
+        :param save_path: 保存路径
+        """
+        with pd.ExcelWriter(save_path) as writer:
+            for model_name, (inference_times, token_counts, predictions, scores) in results.items():
+                df = pd.DataFrame({
+                    'Inference Time': inference_times,
+                    'Token Count': token_counts,
+                    'Prediction': predictions,
+                    'Score': scores
+                })
+                df.to_excel(writer, index=False, sheet_name=model_name)
+        print(f"Results saved to {save_path}")
 
+    def compare_models_across_datasets(self, all_results, metric='accuracy', save_path='model_comparison_across_datasets.png'):
+        """
+        绘制跨数据集的模型性能比较图。
+        :param all_results: 所有数据集的结果
+        :param metric: 比较指标，默认为 accuracy
+        :param save_path: 图像保存路径
+        """
+        dataset_names = list(all_results.keys())
+        model_names = list(all_results[dataset_names[0]].keys())
 
-    def save_results_to_excel(self, results, file_name='model_inference_results.xlsx'):
-        # 将每个模型的推理结果添加到 DataFrame
-        output_df = self.df[['text']].copy()
-        output_df['lable'] = self.true_labels
-        for model_nm, (inference_times, token_counts, predictions,scores) in results.items():
-            output_df['token_counts'] = token_counts
-            output_df[f'{model_nm}_predictions'] = predictions
-            output_df[f'{model_nm}_scores'] = scores
-            output_df[f'{model_nm}_inference_times'] = inference_times
+        # 准备数据结构存储指标
+        metric_values = {model: [] for model in model_names}
 
-        # 保存到 Excel 文件
-        output_df.to_excel(file_name, index=False)
-        print(f"Results saved to {file_name}")
+        for dataset_name, dataset_results in all_results.items():
+            for model_name, (_, _, predictions, _) in dataset_results.items():
+                accuracy = accuracy_score(self.true_labels, predictions)  # 可换为其他指标
+                metric_values[model_name].append(accuracy)
 
-    def infer_time_plot(self, results, save_path='model_inference_plot.png'):
-        plt.figure(figsize=(12, 8))
-
-        for model_nm, (inference_times, token_counts,_,_) in results.items():
-            # 添加轻微的随机偏移来避免完全重叠
-            jitter_x = np.random.normal(0, 2, size=len(token_counts))  # X 轴轻微随机偏移
-            jitter_y = np.random.normal(0, 0.005, size=len(inference_times))  # Y 轴轻微随机偏移
-
-            plt.scatter(
-                np.array(token_counts) + jitter_x,
-                np.array(inference_times) + jitter_y,
-                alpha=0.6,  # 设置透明度
-                label=model_nm,
-                s=30,  # 点的大小
-                edgecolor='k'  # 增加边框以区分重叠点
-            )
-
-        plt.xlabel('Token Count')
-        plt.ylabel('Inference Time (seconds)')
-        plt.title('Inference Time vs Token Count Comparison for Models')
-        plt.legend(title='Model')
-        plt.savefig(save_path)
-        plt.show()
-        print(f"Inference time vs token count plot saved to {save_path}")
-
-        # 如果需要显示图像，也可以调用 plt.show()
-        # plt.show()
-
-    def plot_roc_curve(self, results, save_path='roc_curve_comparison.png'):
-        plt.figure(figsize=(10, 8))
-        for model_nm, (_,_,_,prob_scores) in results.items():
-            # 去除空值
-            valid_indices = [i for i, score in enumerate(prob_scores) if score is not None]
-            true_labels = [self.true_labels[i] for i in valid_indices]
-            prob_scores = [prob_scores[i] for i in valid_indices]
-
-            # 计算 ROC 曲线和 AUC
-            fpr, tpr, _ = roc_curve(true_labels, prob_scores)
-            roc_auc = auc(fpr, tpr)
-            plt.plot(fpr, tpr, lw=2, label=f'{model_nm} (AUC = {roc_auc:.2f})')
-
-        plt.plot([0, 1], [0, 1], color='gray', linestyle='--')
-        plt.xlabel('False Positive Rate')
-        plt.ylabel('True Positive Rate')
-        plt.title('ROC Curve Comparison')
-        plt.legend(loc="lower right")
-        plt.savefig(save_path) 
-        plt.show()
-        print(f"ROC curve comparison plot saved to {save_path}")
-
-    def plot_token_accuracy(self, results, save_path='token_accuracy_comparison.png'):
-        # 定义 token 区间
-        token_ranges = [(0, 50), (51, 100), (101, 150), (151, 200), (201, 300), (301, 500), (501, float('inf'))]
-        range_labels = [f'{start}-{int(end) if end != float("inf") else "inf"}' for start, end in token_ranges]
-
-        # 准备绘图
-        plt.figure(figsize=(12, 8))
-
-        for model_nm, (_,token_counts, predictions,_) in results.items():
-            accuracies = []
-
-            # 计算每个 token 区间的精度
-            for start, end in token_ranges:
-                indices = [i for i, tokens in enumerate(token_counts) if start <= tokens < end]
-                if not indices:
-                    accuracies.append(0)
-                    continue
-                
-                range_true_labels = [self.true_labels[i] for i in indices]
-                range_predictions = [predictions[i] for i in indices]
-                accuracy = accuracy_score(range_true_labels, range_predictions)
-                accuracies.append(accuracy)
-
-            # 绘制该模型的精度曲线
-            plt.plot(range_labels, accuracies, marker='o', label=model_nm)
-
-        # 图形设置
-        plt.xlabel('Token Range')
-        plt.ylabel('Accuracy')
-        plt.title('Token Range vs Accuracy Comparison for Models')
-        plt.legend(title='Model')
-        plt.savefig(save_path)
-        plt.show()
-        print(f"Token accuracy comparison plot saved to {save_path}")
-
-    def plot_token_time_bars(self, results, save_path='token_time_bars.png'):
-        # 定义 token 数区间
-        token_ranges = [(0, 50), (51, 100), (101, 150), (151, 200), (201, 300), (301, 500), (501, float('inf'))]
-        range_labels = [f'{start}-{int(end) if end != float("inf") else "inf"}' for start, end in token_ranges]
-        num_ranges = len(token_ranges)
-
-        # 设置并排显示的宽度偏移
+        # 绘制柱状图
         bar_width = 0.2
-        x = np.arange(num_ranges)
+        x = np.arange(len(dataset_names))
+        plt.figure(figsize=(12, 8))
 
-        plt.figure(figsize=(14, 8))
+        for i, model_name in enumerate(model_names):
+            plt.bar(x + i * bar_width, metric_values[model_name], bar_width, label=model_name)
 
-        # 遍历每个模型并绘制其柱状图
-        for i, (model_nm, (inference_times,token_counts,_,_)) in enumerate(results.items()):
-            avg_times = []
-
-            for start, end in token_ranges:
-                # 找出属于该区间的所有样本的推理时间
-                indices = [j for j, tokens in enumerate(token_counts) if start <= tokens < end]
-                if not indices:
-                    avg_times.append(0)
-                    continue
-
-                # 计算当前区间的平均推理时间
-                range_times = [inference_times[j] for j in indices]
-                avg_time = np.mean(range_times)
-                avg_times.append(avg_time)
-
-            # 并排绘制柱状图，位置偏移为 `x + i * bar_width`
-            plt.bar(x + i * bar_width, avg_times, width=bar_width, label=model_nm)
-
-            # 在柱状图上显示平均推理时间数值
-            for j, avg_time in enumerate(avg_times):
-                plt.text(x[j] + i * bar_width, avg_time + 0.001, f'{avg_time:.2f}', ha='center', va='bottom', fontsize=8)
-
-        # 设置标签
-        plt.xlabel('Token Range')
-        plt.ylabel('Average Inference Time (s)')
-        plt.title('Average Inference Time by Token Range for Models')
-        plt.xticks(x + bar_width, range_labels, rotation=45)
-        plt.legend(title='Model')
+        plt.xlabel('Datasets')
+        plt.ylabel(metric.capitalize())
+        plt.title(f'{metric.capitalize()} Comparison Across Datasets')
+        plt.xticks(x + bar_width * (len(model_names) - 1) / 2, dataset_names, rotation=45)
+        plt.legend(title='Models')
         plt.tight_layout()
         plt.savefig(save_path)
         plt.show()
-        print(f"Token range vs. inference time plot saved to {save_path}")
+        print(f"Model comparison plot saved to {save_path}")
 
-    def save_misclassifications(self,input_file='model_inference_results.xlsx', output_file='misclassifications.xlsx'):
-        # 读取包含评测结果的 Excel 文件
-        df = pd.read_excel(input_file)
-
-        # 初始化一个字典，用于存储每个模型的错误分类
-        misclassifications = {}
-
-        # 遍历每个模型的预测列，识别错误分类
-        model_columns = ['savant_large',  'setfit','deberta']
-        for model_col in model_columns:
-            # 过滤出错误分类样本
-            misclassified_df = df[df['Lable'] != df[model_col]].copy()
-            
-            # 添加该模型的错误分类到字典中
-            misclassifications[model_col] = misclassified_df[['Context', 'Answer', 'Lable', model_col]]
-
-        # 将每个模型的错误分类结果保存到一个新的 Excel 文件的不同 sheet 中
-        with pd.ExcelWriter(output_file) as writer:
-            for model_col, misclassified_df in misclassifications.items():
-                sheet_name = model_col + '_misclassified'
-                misclassified_df.to_excel(writer, sheet_name=sheet_name, index=False)
-        
-        print(f"Misclassifications saved to {output_file}")
 
 if __name__ == "__main__":
-    model_list = ['deberta','savant_large','setfit']
+    # 多个数据集路径
+    dataset_paths = [
+        'prompt_injection\\dataset\\safe-guard-prompt-injection\\train-00000-of-00001.parquet',
+        'prompt_injection\\dataset\\another-dataset\\train.parquet',
+        'prompt_injection\\dataset\\third-dataset\\train.parquet',
+    ]
+
+    # 模型列表
+    model_list = ['deberta', 'savant_large', 'setfit']
+
+    # 实例化并运行评估
     eval_dataset = EvalDataset()
-
-    # 存放每个模型的推理时间和token数的结果
-    results = {}
-
-    # 逐个模型运行并记录结果
-    for model_nm in model_list:
-        print(f"Running evaluation for {model_nm}...")
-        inference_times, token_counts, predictions, scores = eval_dataset.run(model_nm)
-        results[model_nm] = (inference_times, token_counts, predictions, scores)
+    all_results = eval_dataset.run_on_datasets(model_list, dataset_paths)
 
     # 保存推理结果到 Excel 文件
-    eval_dataset.save_results_to_excel(results, file_name='model_inference_results.xlsx')
+    for dataset_name, results in all_results.items():
+        file_name = f'model_inference_results_{dataset_name}.xlsx'
+        eval_dataset.save_results_to_excel(results, file_name)
 
-    # 所有模型跑完之后，统一绘制结果
-    eval_dataset.infer_time_plot(results, save_path='token_time.png')
-    eval_dataset.plot_roc_curve(results,save_path='ROC_plot.png')
-    eval_dataset.plot_token_accuracy(results, save_path='token_accuracy.png')
-    eval_dataset.plot_token_time_bars(results)
-    # eval_dataset.save_misclassifications()
+    # 绘制跨数据集比较图
+    eval_dataset.compare_models_across_datasets(all_results, metric='accuracy', save_path='comparison_accuracy.png')
