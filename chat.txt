@@ -1,148 +1,60 @@
-import pyarrow.parquet as pp
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-from sklearn.metrics import accuracy_score
-import time
+import os
+import torch
+from PIL import Image
+from options.test_options import TestOptions
+from models.models import create_model
+from torchvision import transforms
 
+# 1. 初始化测试选项
+opt = TestOptions().parse()
+opt.nThreads = 1  # 强制单线程
+opt.batchSize = 1  # 单样本处理
+opt.serial_batches = True  # 不打乱顺序
+opt.stack = True
+opt.use_dropout = False
+opt.use_dropout1 = False
 
-class EvalDataset:
-    def __init__(self):
-        self.df = None
-        self.true_labels = None
+# 2. 定义图片预处理函数
+def preprocess_image(image_path, image_size=64):
+    transform = transforms.Compose([
+        transforms.Grayscale(),  # 转灰度图像
+        transforms.Resize((image_size, image_size)),
+        transforms.ToTensor(),
+        transforms.Normalize((0.5,), (0.5,))  # 归一化到 [-1, 1]
+    ])
+    image = Image.open(image_path)
+    return transform(image).unsqueeze(0)  # 添加 batch 维度
 
-    def load_datasets(self, dataset_paths):
-        """
-        加载多个数据集。
-        :param dataset_paths: 数据集文件路径列表
-        :return: 数据集字典，键为数据集名称，值为数据
-        """
-        datasets = {}
-        for path in dataset_paths:
-            dataset_name = path.split("\\")[-1].replace('.parquet', '')  # 根据文件名命名数据集
-            parquet_file = pp.ParquetFile(path)
-            data = parquet_file.read().to_pandas()
-            datasets[dataset_name] = data
-        return datasets
+# 3. 定义文本预处理函数
+def preprocess_text(text, char_to_index, max_length=32):
+    indices = [char_to_index.get(c, 0) for c in text]  # 未知字符设为 0
+    if len(indices) > max_length:
+        indices = indices[:max_length]
+    else:
+        indices.extend([0] * (max_length - len(indices)))
+    return torch.tensor(indices).unsqueeze(0)  # 添加 batch 维度
 
-    def run_on_datasets(self, model_list, dataset_paths):
-        """
-        在多个数据集上运行评估。
-        :param model_list: 模型名称列表
-        :param dataset_paths: 数据集路径列表
-        :return: 所有结果的嵌套字典
-        """
-        datasets = self.load_datasets(dataset_paths)
-        all_results = {}
+# 4. 加载模型
+model = create_model(opt)
+model.setup(opt)  # 初始化模型
 
-        for dataset_name, dataset in datasets.items():
-            print(f"Running evaluation on dataset: {dataset_name}")
-            self.df = dataset  # 更新当前数据集
-            self.true_labels = dataset['label'].tolist()
+# 5. 输入路径和文本
+style_image_path = "path/to/your/style_image.jpg"  # 替换为你的字体风格图片路径
+output_text = "Sample Text"  # 替换为你需要生成的文本
+output_image_path = "path/to/output_image.jpg"  # 输出图像保存路径
 
-            dataset_results = {}
-            for model_nm in model_list:
-                print(f"Evaluating model: {model_nm} on dataset: {dataset_name}")
-                inference_times, token_counts, predictions, scores = self.run(model_nm)
-                dataset_results[model_nm] = (inference_times, token_counts, predictions, scores)
+# 6. 加载字体风格图片和文本
+style_image = preprocess_image(style_image_path)
+char_to_index = {chr(i): i for i in range(128)}  # 简单字符索引表
+text_indices = preprocess_text(output_text, char_to_index)
 
-            all_results[dataset_name] = dataset_results
+# 7. 生成图像
+model.set_input({'style_image': style_image, 'text_indices': text_indices})
+model.test()
+generated_image = model.get_current_visuals()['fake_image']
 
-        return all_results
+# 8. 保存结果
+save_image = transforms.ToPILImage()(generated_image.squeeze(0).cpu())
+save_image.save(output_image_path)
 
-    def run(self, model_nm):
-        """
-        模拟模型运行的过程（需要替换为实际推理代码）。
-        :param model_nm: 模型名称
-        :return: 推理时间、token数量、预测结果、分数
-        """
-        print(f"Simulating model {model_nm}...")
-        start_time = time.time()
-
-        # 模拟数据
-        num_samples = len(self.df)
-        token_counts = np.random.randint(10, 200, size=num_samples)
-        predictions = np.random.randint(0, 2, size=num_samples)
-        scores = np.random.random(size=num_samples)
-
-        inference_time = time.time() - start_time
-        inference_times = [inference_time] * num_samples  # 假设每个样本的推理时间一致
-
-        return inference_times, token_counts, predictions, scores
-
-    def save_results_to_excel(self, results, save_path):
-        """
-        将模型评估结果保存到 Excel 文件。
-        :param results: 模型评估结果
-        :param save_path: 保存路径
-        """
-        with pd.ExcelWriter(save_path) as writer:
-            for model_name, (inference_times, token_counts, predictions, scores) in results.items():
-                df = pd.DataFrame({
-                    'Inference Time': inference_times,
-                    'Token Count': token_counts,
-                    'Prediction': predictions,
-                    'Score': scores
-                })
-                df.to_excel(writer, index=False, sheet_name=model_name)
-        print(f"Results saved to {save_path}")
-
-    def compare_models_across_datasets(self, all_results, metric='accuracy', save_path='model_comparison_across_datasets.png'):
-        """
-        绘制跨数据集的模型性能比较图。
-        :param all_results: 所有数据集的结果
-        :param metric: 比较指标，默认为 accuracy
-        :param save_path: 图像保存路径
-        """
-        dataset_names = list(all_results.keys())
-        model_names = list(all_results[dataset_names[0]].keys())
-
-        # 准备数据结构存储指标
-        metric_values = {model: [] for model in model_names}
-
-        for dataset_name, dataset_results in all_results.items():
-            for model_name, (_, _, predictions, _) in dataset_results.items():
-                accuracy = accuracy_score(self.true_labels, predictions)  # 可换为其他指标
-                metric_values[model_name].append(accuracy)
-
-        # 绘制柱状图
-        bar_width = 0.2
-        x = np.arange(len(dataset_names))
-        plt.figure(figsize=(12, 8))
-
-        for i, model_name in enumerate(model_names):
-            plt.bar(x + i * bar_width, metric_values[model_name], bar_width, label=model_name)
-
-        plt.xlabel('Datasets')
-        plt.ylabel(metric.capitalize())
-        plt.title(f'{metric.capitalize()} Comparison Across Datasets')
-        plt.xticks(x + bar_width * (len(model_names) - 1) / 2, dataset_names, rotation=45)
-        plt.legend(title='Models')
-        plt.tight_layout()
-        plt.savefig(save_path)
-        plt.show()
-        print(f"Model comparison plot saved to {save_path}")
-
-
-if __name__ == "__main__":
-    # 多个数据集路径
-    dataset_paths = [
-        'prompt_injection\\dataset\\safe-guard-prompt-injection\\train-00000-of-00001.parquet',
-        'prompt_injection\\dataset\\another-dataset\\train.parquet',
-        'prompt_injection\\dataset\\third-dataset\\train.parquet',
-    ]
-
-    # 模型列表
-    model_list = ['deberta', 'savant_large', 'setfit']
-
-    # 实例化并运行评估
-    eval_dataset = EvalDataset()
-    all_results = eval_dataset.run_on_datasets(model_list, dataset_paths)
-
-    # 保存推理结果到 Excel 文件
-    for dataset_name, results in all_results.items():
-        file_name = f'model_inference_results_{dataset_name}.xlsx'
-        eval_dataset.save_results_to_excel(results, file_name)
-
-    # 绘制跨数据集比较图
-    eval_dataset.compare_models_across_datasets(all_results, metric='accuracy', save_path='comparison_accuracy.png')
+print(f"Generated image saved at {output_image_path}")
