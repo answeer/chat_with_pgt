@@ -1,27 +1,15 @@
-Evaluation metrics for protectai:
-             
+	1.	ProtectAI:
+	•	Strength: Excellent at predicting the Negative class, with a recall of 1.00, meaning no false negatives for this class.
+	•	Weakness: The recall for the Positive class is relatively lower at 0.84, though its precision is perfect (1.00). This indicates some false negatives for this class.
+	2.	SavantAI:
+	•	Strength: Balanced performance across both classes, with high and consistent precision, recall, and F1-scores for both Negative and Positive classes.
+	•	Weakness: Slightly lower precision and recall compared to ProtectAI for the Positive class, but still very strong overall.
+	3.	Setfit:
+	•	Strength: Moderately better performance in identifying the Negative class with a recall of 0.76.
+	•	Weakness: Poor performance on the Positive class, with a precision of 0.34 and a recall of 0.26, indicating significant misclassification for this class.
 
+Best Model Selection:
 
-     	precision	recall	f1-score	support samples
-Negative	0.93	1.00	0.96	1410
-Positive	1.00	0.84	0.91	650
-
-
-
-
-Evaluation metrics for SavantAI:
-
-
-     	precision	recall	f1-score	support samples
-Negative	0.96	0.96	0.96	1410
-Positive	0.91	0.91	0.91	650
-
-
-
-
-Evaluation metrics for Setfit:
-
-
-     	precision	recall	f1-score	support samples
-Negative	0.69	0.76	0.73	1410
-Positive	0.34	0.26	0.29	650
+	•	For applications requiring balanced and high performance for both classes, SavantAI is the most reliable.
+	•	If perfect precision for the Positive class or no false negatives in the Negative class is critical, then ProtectAI is preferred.
+	•	Setfit may need improvement or hyperparameter tuning before use, as its performance lags significantly behind the other two models.
