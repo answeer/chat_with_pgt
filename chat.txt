@@ -1,10 +1,27 @@
-Prompt injection detection is vital in systems utilizing natural language processing (NLP), especially in conversational AI and large language models (LLMs). Here are its key use cases and applications:
-	1.	Security in Conversational AI: Detects malicious instructions embedded in user inputs designed to exploit LLM vulnerabilities, such as commands to bypass safeguards. Applications include customer service chatbots and virtual assistants in sensitive workflows.
-	2.	Content Moderation: Identifies inappropriate, harmful, or manipulative prompts that could generate offensive content or misinformation. Useful in social media moderation tools and educational platforms.
-	3.	Compliance and Regulation: Ensures LLMs adhere to ethical guidelines and legal standards by blocking prompts that lead to restricted or discriminatory content. Examples include healthcare advisory tools and financial assistance bots.
-	4.	Robustness Testing: Evaluates LLM resilience against adversarial attacks by simulating manipulative inputs. Applications include AI model development, benchmarking, and cybersecurity.
-	5.	Business Use Case Protection: Safeguards proprietary operations by preventing the extraction of internal algorithms or processes. Examples include AI-powered customer engagement platforms and enterprise analytics tools.
-	6.	Preventing Data Leakage: Protects sensitive or private data from being shared inadvertently, blocking queries that might reconstruct proprietary information. Applicable in LLM API platforms and systems integrating private datasets.
-	7.	User Behavior Analysis: Monitors risky or anomalous user behavior to mitigate misuse and potential attacks, such as unauthorized access attempts. Useful in educational tools and multi-user AI-powered platforms.
+Evaluation metrics for protectai:
+             
 
-By detecting and mitigating prompt injections, LLM-powered systems can ensure security, robustness, and compliance while maintaining ethical standards and trustworthiness.
+
+     	precision	recall	f1-score	support samples
+Negative	0.93	1.00	0.96	1410
+Positive	1.00	0.84	0.91	650
+
+
+
+
+Evaluation metrics for SavantAI:
+
+
+     	precision	recall	f1-score	support samples
+Negative	0.96	0.96	0.96	1410
+Positive	0.91	0.91	0.91	650
+
+
+
+
+Evaluation metrics for Setfit:
+
+
+     	precision	recall	f1-score	support samples
+Negative	0.69	0.76	0.73	1410
+Positive	0.34	0.26	0.29	650
