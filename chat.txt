@@ -1,15 +1,49 @@
-	1.	ProtectAI:
-	•	Strength: Excellent at predicting the Negative class, with a recall of 1.00, meaning no false negatives for this class.
-	•	Weakness: The recall for the Positive class is relatively lower at 0.84, though its precision is perfect (1.00). This indicates some false negatives for this class.
-	2.	SavantAI:
-	•	Strength: Balanced performance across both classes, with high and consistent precision, recall, and F1-scores for both Negative and Positive classes.
-	•	Weakness: Slightly lower precision and recall compared to ProtectAI for the Positive class, but still very strong overall.
-	3.	Setfit:
-	•	Strength: Moderately better performance in identifying the Negative class with a recall of 0.76.
-	•	Weakness: Poor performance on the Positive class, with a precision of 0.34 and a recall of 0.26, indicating significant misclassification for this class.
+ProtectAI
 
-Best Model Selection:
+Advantages:
 
-	•	For applications requiring balanced and high performance for both classes, SavantAI is the most reliable.
-	•	If perfect precision for the Positive class or no false negatives in the Negative class is critical, then ProtectAI is preferred.
-	•	Setfit may need improvement or hyperparameter tuning before use, as its performance lags significantly behind the other two models.
+	1.	Perfect Precision for Positive Class:
+	•	No false positives in predicting the Positive class.
+	2.	Flawless Recall for Negative Class:
+	•	Captures all true negatives with 100% recall.
+	3.	High F1-Score:
+	•	Consistently performs well across both classes, particularly the Negative class (F1-score: 0.96).
+
+Disadvantages:
+
+	1.	Lower Recall for Positive Class:
+	•	A recall of 0.84 for the Positive class indicates that some true positives are misclassified as negatives.
+	2.	Imbalanced Performance:
+	•	There’s a notable disparity between the recall of the Negative class (1.00) and the Positive class (0.84), which may lead to skewed results in datasets with imbalanced class distributions.
+
+SavantAI
+
+Advantages:
+
+	1.	Balanced Performance:
+	•	Both classes have nearly identical precision, recall, and F1-scores, making it suitable for applications requiring consistency across all classes.
+	2.	High F1-Score for Positive Class:
+	•	With an F1-score of 0.91, it performs well in identifying the Positive class, striking a balance between precision and recall.
+
+Disadvantages:
+
+	1.	Lower Precision Compared to ProtectAI for Positive Class:
+	•	Precision for the Positive class is 0.91, slightly lower than ProtectAI’s perfect 1.00.
+	2.	Potential Overfitting to Balance:
+	•	Its uniform performance could suggest it’s optimized for balanced datasets, possibly limiting its adaptability to imbalanced scenarios.
+
+Setfit
+
+Advantages:
+
+	1.	Moderate Recall for Negative Class:
+	•	With a recall of 0.76, it detects most negative samples reasonably well, although it’s far from the performance of the other two models.
+
+Disadvantages:
+
+	1.	Poor Positive Class Performance:
+	•	Precision and recall for the Positive class are 0.34 and 0.26, respectively, leading to a low F1-score (0.29). This indicates significant misclassification of positive samples.
+	2.	Inconsistent Across Classes:
+	•	Disparity in performance between the Negative and Positive classes suggests a lack of robustness.
+	3.	Overall Weak Metrics:
+	•	With the lowest scores across all metrics, it’s unsuitable for applications requiring high accuracy or balanced predictions.
