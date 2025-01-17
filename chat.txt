@@ -6,9 +6,10 @@ from llm_sanitation.utils.callback import Callback
 from llm_sanitation.utils.checks import Checks
 from llm_sanitation.utils.error_codes import ERROR_CODE_DICT
 from llm_sanitation.logging.logging_setup import LogUtil, LogType, LogLevel
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 class Action:
-    def __init__(self, default_scanner_path, **kwargs,):
+    def __init__(self, default_scanner_path, **kwargs):
         LogUtil.log(LogType.TRANSACTION, LogLevel.INFO, "Running Initialized")
         self.response = Callback(**kwargs)
         self.check = Checks(self.response)
@@ -27,7 +28,7 @@ class Action:
             LogUtil.log(LogType.ERROR, LogLevel.ERROR, f"Error loading default scanners: {e}")
             return {}
 
-    def determine_task_group(self,data):
+    def determine_task_group(self, data):
         """Determines the task group based on the input data type."""
         if isinstance(data, str):
             # Check if the data is a filepath
@@ -51,7 +52,6 @@ class Action:
         """Merge default scanners with additional execution plan."""
         default_plan = self.default_scanners.get(task_group, {})
         return {**default_plan, **execution_plan}  # Default scanners take precedence
-
 
     def run_scanner(self, data, scanner_nm, param, **kwargs):
         """Dynamically imports and runs the specified scanner with provided parameters."""
@@ -109,20 +109,22 @@ class Action:
                 LogUtil.log(LogType.ERROR, LogLevel.ERROR, "Running ended with error", jid=job_id, error=error_message)
                 return None, error_code, error_message
             
-            # Run each scanner in the execution plan
-            for scanner_nm, param in execution_plan.items():
-                result = self.run_scanner(data, scanner_nm, param, **kwargs)
-                data = (
-                    data if result["sanitized_data"] is None else result["sanitized_data"]
-                )
+            # Initialize ThreadPoolExecutor to execute scanners concurrently
+            with ThreadPoolExecutor() as executor:
+                futures = []
+                for scanner_nm, param in execution_plan.items():
+                    futures.append(executor.submit(self.run_scanner, data, scanner_nm, param, **self.kwargs))
                 
-                if self.response.status == "failed":
-                    error_code = self.response.error_code
-                    error_message = self.response.error_message
-                    LogUtil.log(LogType.ERROR, LogLevel.ERROR, "Running ended with error", jid=job_id, error=error_message)
-                    return None, error_code, error_message
-                
-            return self.combined_result,error_code,error_message
+                # Wait for all threads to complete and collect results
+                for future in as_completed(futures):
+                    result = future.result()
+                    if result is None and self.response.status == "failed":
+                        error_code = self.response.error_code
+                        error_message = self.response.error_message
+                        LogUtil.log(LogType.ERROR, LogLevel.ERROR, "Running ended with error", jid=job_id, error=error_message)
+                        return None, error_code, error_message
+
+            return self.combined_result, error_code, error_message
 
         except Exception as e:
             LogUtil.log(LogType.ERROR, LogLevel.ERROR, "Running ended with error", jid=job_id, error=str(e))
