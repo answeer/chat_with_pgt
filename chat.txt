@@ -2,6 +2,7 @@ import os
 import traceback
 import mimetypes
 import json
+import time  # For measuring time
 from llm_sanitation.utils.callback import Callback
 from llm_sanitation.utils.checks import Checks
 from llm_sanitation.utils.error_codes import ERROR_CODE_DICT
@@ -9,7 +10,12 @@ from llm_sanitation.logging.logging_setup import LogUtil, LogType, LogLevel
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 class Action:
-    def __init__(self, default_scanner_path, **kwargs):
+    def __init__(self, default_scanner_path, async_mode=False, **kwargs):
+        """
+        :param default_scanner_path: Path to the default scanners configuration
+        :param async_mode: Boolean flag to enable asynchronous execution (default is False)
+        :param kwargs: Other keyword arguments
+        """
         LogUtil.log(LogType.TRANSACTION, LogLevel.INFO, "Running Initialized")
         self.response = Callback(**kwargs)
         self.check = Checks(self.response)
@@ -17,6 +23,7 @@ class Action:
         self.combined_result = []
         self.nstp_result = []
         self.default_scanners = self.load_default_scanners(default_scanner_path)  # Load JSON config
+        self.async_mode = async_mode  # Store the async flag
 
     @staticmethod
     def load_default_scanners(config_path):
@@ -56,12 +63,15 @@ class Action:
     def run_scanner(self, data, scanner_nm, param, **kwargs):
         """Dynamically imports and runs the specified scanner with provided parameters."""
         try:
-            scanners = __import__("llm_sanitation.scanners", fromlist=[scanner_nm])
-            scanner = getattr(scanners, scanner_nm)
-            scanner_obj = scanner(**param)
-            result = scanner_obj.validate(data, **self.kwargs)
-            self.combined_result.append(result)
-            self.nstp_result.append(result.get("NSTP"))
+            # Execute the scanner 100 times to simulate a longer execution time
+            for _ in range(100):  # Simulate a long-running scanner by executing it 100 times
+                # Simulate actual scanner operation
+                scanners = __import__("llm_sanitation.scanners", fromlist=[scanner_nm])
+                scanner = getattr(scanners, scanner_nm)
+                scanner_obj = scanner(**param)
+                result = scanner_obj.validate(data, **self.kwargs)
+                self.combined_result.append(result)
+                self.nstp_result.append(result.get("NSTP"))
             return result
         except (ImportError, AttributeError) as e:
             error_code = "FRDIOS9000"
@@ -81,6 +91,8 @@ class Action:
     def run_action(self, execution_plan, data, save_path):
         """Executes the scanning process based on the provided execution plan and scanner type."""
         try:
+            start_time = time.time()  # Record the start time for performance testing
+            
             error_code = ""
             error_message = ""
             job_id = self.kwargs['job_id']
@@ -108,22 +120,34 @@ class Action:
                 error_message = self.response.error_message
                 LogUtil.log(LogType.ERROR, LogLevel.ERROR, "Running ended with error", jid=job_id, error=error_message)
                 return None, error_code, error_message
-            
-            # Initialize ThreadPoolExecutor to execute scanners concurrently
-            with ThreadPoolExecutor() as executor:
-                futures = []
+
+            if self.async_mode:  # If async mode is enabled, use ThreadPoolExecutor
+                with ThreadPoolExecutor() as executor:
+                    futures = []
+                    for scanner_nm, param in execution_plan.items():
+                        futures.append(executor.submit(self.run_scanner, data, scanner_nm, param, **self.kwargs))
+                    
+                    # Wait for all threads to complete and collect results
+                    for future in as_completed(futures):
+                        result = future.result()
+                        if result is None and self.response.status == "failed":
+                            error_code = self.response.error_code
+                            error_message = self.response.error_message
+                            LogUtil.log(LogType.ERROR, LogLevel.ERROR, "Running ended with error", jid=job_id, error=error_message)
+                            return None, error_code, error_message
+            else:  # If async mode is not enabled, run sequentially
                 for scanner_nm, param in execution_plan.items():
-                    futures.append(executor.submit(self.run_scanner, data, scanner_nm, param, **self.kwargs))
-                
-                # Wait for all threads to complete and collect results
-                for future in as_completed(futures):
-                    result = future.result()
-                    if result is None and self.response.status == "failed":
+                    result = self.run_scanner(data, scanner_nm, param, **self.kwargs)
+                    if self.response.status == "failed":
                         error_code = self.response.error_code
                         error_message = self.response.error_message
                         LogUtil.log(LogType.ERROR, LogLevel.ERROR, "Running ended with error", jid=job_id, error=error_message)
                         return None, error_code, error_message
 
+            end_time = time.time()  # Record the end time for performance testing
+            execution_time = end_time - start_time
+            LogUtil.log(LogType.TRANSACTION, LogLevel.INFO, f"Execution completed in {execution_time:.2f} seconds.")
+            
             return self.combined_result, error_code, error_message
 
         except Exception as e:
@@ -167,7 +191,11 @@ if __name__ == "__main__":
         "policy_id": payload["service_params"]["job_object"].get("policy_id", "NA"),
     }
     default_scanner_path = "llm_sanitation\configs\default_scanners.json"
-    action_obj = Action(default_scanner_path, **kwargs)
+    
+    # Pass async_mode flag based on your need
+    async_mode = True  # Set to True for asynchronous, False for sequential
+    action_obj = Action(default_scanner_path, async_mode=async_mode, **kwargs)
+    
     result, error_code, error_message = action_obj.run_action(
         payload["service_params"]["job_object"]["execution_plan"],
         payload["service_params"]["job_object"]["data"],
