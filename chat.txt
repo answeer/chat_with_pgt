@@ -1,49 +1,174 @@
-ProtectAI
+import os
+import traceback
+import mimetypes
+import json
+from llm_sanitation.utils.callback import Callback
+from llm_sanitation.utils.checks import Checks
+from llm_sanitation.utils.error_codes import ERROR_CODE_DICT
+from llm_sanitation.logging.logging_setup import LogUtil, LogType, LogLevel
 
-Advantages:
+class Action:
+    def __init__(self, default_scanner_path, **kwargs,):
+        LogUtil.log(LogType.TRANSACTION, LogLevel.INFO, "Running Initialized")
+        self.response = Callback(**kwargs)
+        self.check = Checks(self.response)
+        self.kwargs = kwargs
+        self.combined_result = []
+        self.nstp_result = []
+        self.default_scanners = self.load_default_scanners(default_scanner_path)  # Load JSON config
 
-	1.	Perfect Precision for Positive Class:
-	•	No false positives in predicting the Positive class.
-	2.	Flawless Recall for Negative Class:
-	•	Captures all true negatives with 100% recall.
-	3.	High F1-Score:
-	•	Consistently performs well across both classes, particularly the Negative class (F1-score: 0.96).
+    @staticmethod
+    def load_default_scanners(config_path):
+        """Loads default scanner configurations from a JSON file."""
+        try:
+            with open(config_path, "r") as file:
+                return json.load(file)
+        except Exception as e:
+            LogUtil.log(LogType.ERROR, LogLevel.ERROR, f"Error loading default scanners: {e}")
+            return {}
 
-Disadvantages:
+    def determine_task_group(self,data):
+        """Determines the task group based on the input data type."""
+        if isinstance(data, str):
+            # Check if the data is a filepath
+            if os.path.isfile(data):
+                # Determine the MIME type
+                mime_type, _ = mimetypes.guess_type(data)
+                if mime_type and mime_type.startswith('image'):
+                    return 'image_bounding'  # Image files
+                else:
+                    return 'file_bounding'  # All other file types
+            else:
+                # Plain string, not a filepath
+                return 'text_bounding'
+        elif isinstance(data, (int, float)):
+            # If data is numeric
+            return 'numeric_bounding'
+        else:
+            raise ValueError("Unsupported data type for task group determination.")
+        
+    def merge_execution_plan(self, task_group, execution_plan):
+        """Merge default scanners with additional execution plan."""
+        default_plan = self.default_scanners.get(task_group, {})
+        return {**default_plan, **execution_plan}  # Default scanners take precedence
 
-	1.	Lower Recall for Positive Class:
-	•	A recall of 0.84 for the Positive class indicates that some true positives are misclassified as negatives.
-	2.	Imbalanced Performance:
-	•	There’s a notable disparity between the recall of the Negative class (1.00) and the Positive class (0.84), which may lead to skewed results in datasets with imbalanced class distributions.
 
-SavantAI
+    def run_scanner(self, data, scanner_nm, param, **kwargs):
+        """Dynamically imports and runs the specified scanner with provided parameters."""
+        try:
+            scanners = __import__("llm_sanitation.scanners", fromlist=[scanner_nm])
+            scanner = getattr(scanners, scanner_nm)
+            scanner_obj = scanner(**param)
+            result = scanner_obj.validate(data, **self.kwargs)
+            self.combined_result.append(result)
+            self.nstp_result.append(result.get("NSTP"))
+            return result
+        except (ImportError, AttributeError) as e:
+            error_code = "FRDIOS9000"
+            error_message = ERROR_CODE_DICT[error_code].format(str(e))
+            self.response.form_response(error_code, error_message)
+            LogUtil.log(LogType.ERROR, LogLevel.ERROR, "Running ended with error", jid=self.kwargs['job_id'], error=error_message)
+            return None
 
-Advantages:
+    def get_result(self):
+        """Returns all combined results from the scanners."""
+        return self.combined_result
 
-	1.	Balanced Performance:
-	•	Both classes have nearly identical precision, recall, and F1-scores, making it suitable for applications requiring consistency across all classes.
-	2.	High F1-Score for Positive Class:
-	•	With an F1-score of 0.91, it performs well in identifying the Positive class, striking a balance between precision and recall.
+    def get_nstp_result(self):
+        """Returns NSTP results from each scanner."""
+        return self.nstp_result
 
-Disadvantages:
+    def run_action(self, execution_plan, data, save_path):
+        """Executes the scanning process based on the provided execution plan and scanner type."""
+        try:
+            error_code = ""
+            error_message = ""
+            job_id = self.kwargs['job_id']
+            task_group = self.determine_task_group(data)
+            self.kwargs['task_group'] = task_group
+            execution_plan = self.merge_execution_plan(task_group, execution_plan)
 
-	1.	Lower Precision Compared to ProtectAI for Positive Class:
-	•	Precision for the Positive class is 0.91, slightly lower than ProtectAI’s perfect 1.00.
-	2.	Potential Overfitting to Balance:
-	•	Its uniform performance could suggest it’s optimized for balanced datasets, possibly limiting its adaptability to imbalanced scenarios.
+            # Run pre-check based on task group
+            if task_group == "file_bounding":
+                self.check.file_exists(data)
+            elif task_group == "image_bounding":
+                self.check.check_image(data)
+            elif task_group == "text_bounding":
+                self.check.check_text(data)
+            elif task_group == "numeric_bounding":
+                self.check.check_payload(data)
+            else:
+                error_code = "FRDIOS0006"
+                error_message = ERROR_CODE_DICT[error_code].format(str(task_group))
+                LogUtil.log(LogType.ERROR, LogLevel.ERROR, "Running ended with error", jid=job_id, error=error_message)
+                return None, error_code, error_message
+            
+            if self.response.status == "failed":
+                error_code = self.response.error_code
+                error_message = self.response.error_message
+                LogUtil.log(LogType.ERROR, LogLevel.ERROR, "Running ended with error", jid=job_id, error=error_message)
+                return None, error_code, error_message
+            
+            # Run each scanner in the execution plan
+            for scanner_nm, param in execution_plan.items():
+                result = self.run_scanner(data, scanner_nm, param, **kwargs)
+                data = (
+                    data if result["sanitized_data"] is None else result["sanitized_data"]
+                )
+                
+                if self.response.status == "failed":
+                    error_code = self.response.error_code
+                    error_message = self.response.error_message
+                    LogUtil.log(LogType.ERROR, LogLevel.ERROR, "Running ended with error", jid=job_id, error=error_message)
+                    return None, error_code, error_message
+                
+            return self.combined_result,error_code,error_message
 
-Setfit
+        except Exception as e:
+            LogUtil.log(LogType.ERROR, LogLevel.ERROR, "Running ended with error", jid=job_id, error=str(e))
+            LogUtil.log(LogType.ERROR, LogLevel.ERROR, traceback.format_exc())
+            error_code = "FRDIOS9000"
+            error_message = ERROR_CODE_DICT[error_code].format(str(e))
+            return None, error_code, error_message
+        
+        finally:
+            if save_path:
+                response_json_path = os.path.join(save_path, task_group + "_response.json")
+                self.response.save_results(combined_result=self.combined_result)
+                self.response.return_response(response_json_path, error_code, error_message)
 
-Advantages:
+if __name__ == "__main__":
+    payload = {
+            "job_params": {
+                "jobid": "JID-54ca58ba-c495-11ed-b20c-0a586e830578",
+                "task_id": "TID-54ca58ba-c495-11ed-b20c-0a586e830578",
+                "app_name": "synthesizer",
+                "use_case": "aadhar_redact",
+                "save_path": r"C:\Users\1657820\Desktop\51433-swoosh-io-bounding",
+            },
+            "service_params": {
+                "callback_url": "http://service-swoosh-orchestrator.swoosh-dev.svc.cluster.local:8889/api/v1/callback",
+                "job_object": {
+                    "io": "i",
+                    "policy_id": "policy_00001",
+                    "data": "what are you doing",
+                    "execution_plan": {}
+                }
+            }
+        }
 
-	1.	Moderate Recall for Negative Class:
-	•	With a recall of 0.76, it detects most negative samples reasonably well, although it’s far from the performance of the other two models.
-
-Disadvantages:
-
-	1.	Poor Positive Class Performance:
-	•	Precision and recall for the Positive class are 0.34 and 0.26, respectively, leading to a low F1-score (0.29). This indicates significant misclassification of positive samples.
-	2.	Inconsistent Across Classes:
-	•	Disparity in performance between the Negative and Positive classes suggests a lack of robustness.
-	3.	Overall Weak Metrics:
-	•	With the lowest scores across all metrics, it’s unsuitable for applications requiring high accuracy or balanced predictions.
+    kwargs = {
+        "job_id": payload["job_params"].get("jobid", "NA"),
+        "task_id": payload["job_params"].get("task_id", "NA"),
+        "use_case": payload["job_params"].get("use_case", "NA"),
+        "io": payload["service_params"]["job_object"].get("io", "NA"),
+        "policy_id": payload["service_params"]["job_object"].get("policy_id", "NA"),
+    }
+    default_scanner_path = "llm_sanitation\configs\default_scanners.json"
+    action_obj = Action(default_scanner_path, **kwargs)
+    result, error_code, error_message = action_obj.run_action(
+        payload["service_params"]["job_object"]["execution_plan"],
+        payload["service_params"]["job_object"]["data"],
+        payload["job_params"]["save_path"]
+    )
+    print("Action completed", result)
