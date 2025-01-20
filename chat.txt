@@ -8,9 +8,6 @@ from llm_sanitation.utils.checks import Checks
 from llm_sanitation.utils.error_codes import ERROR_CODE_DICT
 from llm_sanitation.logging.logging_setup import LogUtil, LogType, LogLevel
 from concurrent.futures import ThreadPoolExecutor, as_completed
-import threading
-import psutil
-import matplotlib.pyplot as plt
 
 class Action:
     def __init__(self, default_scanner_path, async_mode=False, **kwargs):
@@ -165,35 +162,6 @@ class Action:
                 self.response.save_results(combined_result=self.combined_result)
                 self.response.return_response(response_json_path, error_code, error_message)
 
-def record_cpu_usage(duration=100, window_size=50, interval=1, file_name="cpu_usage.png"):
-    """
-    记录当前进程的CPU使用率，并保存为图表。
-    :param duration: 记录总时长（秒）
-    :param window_size: 图表可视的数据点个数
-    :param interval: 采样的时间间隔（秒）
-    :param file_name: 保存图表的文件名
-    """
-    x_data, y_data = [], []
-    process = psutil.Process(os.getpid())
-
-    for frame in range(duration):
-        cpu_usage = process.cpu_percent(interval=interval)
-        x_data.append(frame * interval)
-        y_data.append(cpu_usage)
-
-        if len(x_data) > window_size:
-            x_data.pop(0)
-            y_data.pop(0)
-
-    # 绘制静态图表
-    plt.figure()
-    plt.plot(x_data, y_data)
-    plt.title("Main Program CPU Usage Over Time")
-    plt.xlabel("Time (s)")
-    plt.ylabel("CPU Usage (%)")
-    plt.savefig(file_name)
-    plt.close()
-
 if __name__ == "__main__":
     payload = {
             "job_params": {
@@ -223,10 +191,8 @@ if __name__ == "__main__":
     }
     default_scanner_path = "llm_sanitation\configs\default_scanners.json"
     
-    cpu_thread = threading.Thread(target=record_cpu_usage, args=(100, 50, 1, "cpu_usage_during_task.png"))
-    cpu_thread.start()
     # Pass async_mode flag based on your need
-    async_mode = True  # Set to True for asynchronous, False for sequential
+    async_mode = False  # Set to True for asynchronous, False for sequential
     action_obj = Action(default_scanner_path, async_mode=async_mode, **kwargs)
     
     result, error_code, error_message = action_obj.run_action(
@@ -234,5 +200,4 @@ if __name__ == "__main__":
         payload["service_params"]["job_object"]["data"],
         payload["job_params"]["save_path"]
     )
-    cpu_thread.join()
     print("Action completed", result)
