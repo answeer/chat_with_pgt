@@ -1,204 +1,54 @@
+import threading
+import psutil
+import matplotlib.pyplot as plt
+import time
 import os
-import traceback
-import mimetypes
-import json
-import time  # For measuring time
-from llm_sanitation.utils.callback import Callback
-from llm_sanitation.utils.checks import Checks
-from llm_sanitation.utils.error_codes import ERROR_CODE_DICT
-from llm_sanitation.logging.logging_setup import LogUtil, LogType, LogLevel
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
-class Action:
-    def __init__(self, default_scanner_path, async_mode=False, **kwargs):
-        """
-        :param default_scanner_path: Path to the default scanners configuration
-        :param async_mode: Boolean flag to enable asynchronous execution (default is False)
-        :param kwargs: Other keyword arguments
-        """
-        LogUtil.log(LogType.TRANSACTION, LogLevel.INFO, "Running Initialized")
-        self.response = Callback(**kwargs)
-        self.check = Checks(self.response)
-        self.kwargs = kwargs
-        self.combined_result = []
-        self.nstp_result = []
-        self.default_scanners = self.load_default_scanners(default_scanner_path)  # Load JSON config
-        self.async_mode = async_mode  # Store the async flag
+def record_cpu_usage(duration=100, window_size=50, interval=1, file_name="cpu_usage.png"):
+    """
+    记录当前进程的CPU使用率，并保存为图表。
+    :param duration: 记录总时长（秒）
+    :param window_size: 图表可视的数据点个数
+    :param interval: 采样的时间间隔（秒）
+    :param file_name: 保存图表的文件名
+    """
+    x_data, y_data = [], []
+    process = psutil.Process(os.getpid())
 
-    @staticmethod
-    def load_default_scanners(config_path):
-        """Loads default scanner configurations from a JSON file."""
-        try:
-            with open(config_path, "r") as file:
-                return json.load(file)
-        except Exception as e:
-            LogUtil.log(LogType.ERROR, LogLevel.ERROR, f"Error loading default scanners: {e}")
-            return {}
+    for frame in range(duration):
+        cpu_usage = process.cpu_percent(interval=interval)
+        x_data.append(frame * interval)
+        y_data.append(cpu_usage)
 
-    def determine_task_group(self, data):
-        """Determines the task group based on the input data type."""
-        if isinstance(data, str):
-            # Check if the data is a filepath
-            if os.path.isfile(data):
-                # Determine the MIME type
-                mime_type, _ = mimetypes.guess_type(data)
-                if mime_type and mime_type.startswith('image'):
-                    return 'image_bounding'  # Image files
-                else:
-                    return 'file_bounding'  # All other file types
-            else:
-                # Plain string, not a filepath
-                return 'text_bounding'
-        elif isinstance(data, (int, float)):
-            # If data is numeric
-            return 'numeric_bounding'
-        else:
-            raise ValueError("Unsupported data type for task group determination.")
-        
-    def merge_execution_plan(self, task_group, execution_plan):
-        """Merge default scanners with additional execution plan."""
-        default_plan = self.default_scanners.get(task_group, {})
-        return {**default_plan, **execution_plan}  # Default scanners take precedence
+        if len(x_data) > window_size:
+            x_data.pop(0)
+            y_data.pop(0)
 
-    def run_scanner(self, data, scanner_nm, param, **kwargs):
-        """Dynamically imports and runs the specified scanner with provided parameters."""
-        try:
-            # Execute the scanner 100 times to simulate a longer execution time
-            for _ in range(100):  # Simulate a long-running scanner by executing it 100 times
-                # Simulate actual scanner operation
-                scanners = __import__("llm_sanitation.scanners", fromlist=[scanner_nm])
-                scanner = getattr(scanners, scanner_nm)
-                scanner_obj = scanner(**param)
-                result = scanner_obj.validate(data, **self.kwargs)
-                self.combined_result.append(result)
-                self.nstp_result.append(result.get("NSTP"))
-            return result
-        except (ImportError, AttributeError) as e:
-            error_code = "FRDIOS9000"
-            error_message = ERROR_CODE_DICT[error_code].format(str(e))
-            self.response.form_response(error_code, error_message)
-            LogUtil.log(LogType.ERROR, LogLevel.ERROR, "Running ended with error", jid=self.kwargs['job_id'], error=error_message)
-            return None
+    # 绘制静态图表
+    plt.figure()
+    plt.plot(x_data, y_data)
+    plt.title("Main Program CPU Usage Over Time")
+    plt.xlabel("Time (s)")
+    plt.ylabel("CPU Usage (%)")
+    plt.savefig(file_name)
+    plt.close()
 
-    def get_result(self):
-        """Returns all combined results from the scanners."""
-        return self.combined_result
-
-    def get_nstp_result(self):
-        """Returns NSTP results from each scanner."""
-        return self.nstp_result
-
-    def run_action(self, execution_plan, data, save_path):
-        """Executes the scanning process based on the provided execution plan and scanner type."""
-        try:
-            start_time = time.time()  # Record the start time for performance testing
-            
-            error_code = ""
-            error_message = ""
-            job_id = self.kwargs['job_id']
-            task_group = self.determine_task_group(data)
-            self.kwargs['task_group'] = task_group
-            execution_plan = self.merge_execution_plan(task_group, execution_plan)
-
-            # Run pre-check based on task group
-            if task_group == "file_bounding":
-                self.check.file_exists(data)
-            elif task_group == "image_bounding":
-                self.check.check_image(data)
-            elif task_group == "text_bounding":
-                self.check.check_text(data)
-            elif task_group == "numeric_bounding":
-                self.check.check_payload(data)
-            else:
-                error_code = "FRDIOS0006"
-                error_message = ERROR_CODE_DICT[error_code].format(str(task_group))
-                LogUtil.log(LogType.ERROR, LogLevel.ERROR, "Running ended with error", jid=job_id, error=error_message)
-                return None, error_code, error_message
-            
-            if self.response.status == "failed":
-                error_code = self.response.error_code
-                error_message = self.response.error_message
-                LogUtil.log(LogType.ERROR, LogLevel.ERROR, "Running ended with error", jid=job_id, error=error_message)
-                return None, error_code, error_message
-
-            if self.async_mode:  # If async mode is enabled, use ThreadPoolExecutor
-                with ThreadPoolExecutor() as executor:
-                    futures = []
-                    for scanner_nm, param in execution_plan.items():
-                        futures.append(executor.submit(self.run_scanner, data, scanner_nm, param, **self.kwargs))
-                    
-                    # Wait for all threads to complete and collect results
-                    for future in as_completed(futures):
-                        result = future.result()
-                        if result is None and self.response.status == "failed":
-                            error_code = self.response.error_code
-                            error_message = self.response.error_message
-                            LogUtil.log(LogType.ERROR, LogLevel.ERROR, "Running ended with error", jid=job_id, error=error_message)
-                            return None, error_code, error_message
-            else:  # If async mode is not enabled, run sequentially
-                for scanner_nm, param in execution_plan.items():
-                    result = self.run_scanner(data, scanner_nm, param, **self.kwargs)
-                    if self.response.status == "failed":
-                        error_code = self.response.error_code
-                        error_message = self.response.error_message
-                        LogUtil.log(LogType.ERROR, LogLevel.ERROR, "Running ended with error", jid=job_id, error=error_message)
-                        return None, error_code, error_message
-
-            end_time = time.time()  # Record the end time for performance testing
-            execution_time = end_time - start_time
-            LogUtil.log(LogType.TRANSACTION, LogLevel.INFO, f"Execution completed in {execution_time:.2f} seconds.")
-            
-            return self.combined_result, error_code, error_message
-
-        except Exception as e:
-            LogUtil.log(LogType.ERROR, LogLevel.ERROR, "Running ended with error", jid=job_id, error=str(e))
-            LogUtil.log(LogType.ERROR, LogLevel.ERROR, traceback.format_exc())
-            error_code = "FRDIOS9000"
-            error_message = ERROR_CODE_DICT[error_code].format(str(e))
-            return None, error_code, error_message
-        
-        finally:
-            if save_path:
-                response_json_path = os.path.join(save_path, task_group + "_response.json")
-                self.response.save_results(combined_result=self.combined_result)
-                self.response.return_response(response_json_path, error_code, error_message)
+def main_program():
+    print("开始执行主程序...")
+    # 这里是主程序的代码块
+    # 例如，执行一些繁重任务
+    for i in range(10):
+        print(f"任务 {i + 1} 执行中...")
+        # 模拟任务持续时间
+        time.sleep(5)
 
 if __name__ == "__main__":
-    payload = {
-            "job_params": {
-                "jobid": "JID-54ca58ba-c495-11ed-b20c-0a586e830578",
-                "task_id": "TID-54ca58ba-c495-11ed-b20c-0a586e830578",
-                "app_name": "synthesizer",
-                "use_case": "aadhar_redact",
-                "save_path": r"C:\Users\1657820\Desktop\51433-swoosh-io-bounding",
-            },
-            "service_params": {
-                "callback_url": "http://service-swoosh-orchestrator.swoosh-dev.svc.cluster.local:8889/api/v1/callback",
-                "job_object": {
-                    "io": "i",
-                    "policy_id": "policy_00001",
-                    "data": "what are you doing",
-                    "execution_plan": {}
-                }
-            }
-        }
+    # 创建一个线程用于记录CPU使用率
+    cpu_thread = threading.Thread(target=record_cpu_usage, args=(100, 50, 1, "cpu_usage_during_task.png"))
+    cpu_thread.start()
 
-    kwargs = {
-        "job_id": payload["job_params"].get("jobid", "NA"),
-        "task_id": payload["job_params"].get("task_id", "NA"),
-        "use_case": payload["job_params"].get("use_case", "NA"),
-        "io": payload["service_params"]["job_object"].get("io", "NA"),
-        "policy_id": payload["service_params"]["job_object"].get("policy_id", "NA"),
-    }
-    default_scanner_path = "llm_sanitation\configs\default_scanners.json"
-    
-    # Pass async_mode flag based on your need
-    async_mode = True  # Set to True for asynchronous, False for sequential
-    action_obj = Action(default_scanner_path, async_mode=async_mode, **kwargs)
-    
-    result, error_code, error_message = action_obj.run_action(
-        payload["service_params"]["job_object"]["execution_plan"],
-        payload["service_params"]["job_object"]["data"],
-        payload["job_params"]["save_path"]
-    )
-    print("Action completed", result)
+    # 执行主程序
+    main_program()
+
+    # 确保 CPU 使用记录在主程序完成后结束
+    cpu_thread.join()
