@@ -1,31 +1,16 @@
-from multiprocessing import Pool
-
-def run_scanner_task(data, scanner_nm, param, kwargs):
-    # 这里可以放你执行扫描器的实际代码，相当于原来的 self.run_scanner
-    return self.run_scanner(data, scanner_nm, param, **kwargs)
-
-if self.async_mode:  # 如果启用了异步模式，使用 multiprocessing
-    with Pool(processes=8) as pool:
-        results = []
-        for _ in range(50):    
-            for scanner_nm, param in execution_plan.items():
-                # 将任务添加到进程池
-                results.append(pool.apply_async(run_scanner_task, (data, scanner_nm, param, self.kwargs)))
-        
-        # 等待所有进程完成，并收集结果
-        for result in results:
-            result_value = result.get()
-            if result_value is None and self.response.status == "failed":
-                error_code = self.response.error_code
-                error_message = self.response.error_message
-                LogUtil.log(LogType.ERROR, LogLevel.ERROR, "Running ended with error", jid=job_id, error=error_message)
-                return None, error_code, error_message
-else:  # 如果未启用异步模式，顺序执行
-    for _ in range(50):
-        for scanner_nm, param in execution_plan.items():
-            result = self.run_scanner(data, scanner_nm, param, **kwargs)
-    if self.response.status == "failed":
-        error_code = self.response.error_code
-        error_message = self.response.error_message
-        LogUtil.log(LogType.ERROR, LogLevel.ERROR, "Running ended with error", jid=job_id, error=error_message)
-        return None, error_code, error_message
+def run_scanner(self, data, scanner_nm, param, **kwargs):
+        """Dynamically imports and runs the specified scanner with provided parameters."""
+        try:
+            scanners = __import__("llm_sanitation.scanners", fromlist=[scanner_nm])
+            scanner = getattr(scanners, scanner_nm)
+            scanner_obj = scanner(**param)
+            result = scanner_obj.validate(data, **self.kwargs)
+            self.combined_result.append(result)
+            self.nstp_result.append(result.get("NSTP"))
+            return result
+        except (ImportError, AttributeError) as e:
+            error_code = "FRDIOS9000"
+            error_message = ERROR_CODE_DICT[error_code].format(str(e))
+            self.response.form_response(error_code, error_message)
+            LogUtil.log(LogType.ERROR, LogLevel.ERROR, "Running ended with error", jid=self.kwargs['job_id'], error=error_message)
+            return None
