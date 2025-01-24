@@ -27,7 +27,6 @@ class Action:
         self.nstp_result = []
         self.default_scanners = self.load_default_scanners(default_scanner_path)  # Load JSON config
         self.async_mode = async_mode  # Store the async flag
-
     @staticmethod
     def load_default_scanners(config_path):
         """Loads default scanner configurations from a JSON file."""
@@ -91,9 +90,9 @@ class Action:
 
     def run_action(self, execution_plan, data, save_path):
         """Executes the scanning process based on the provided execution plan and scanner type."""
-        try:
-            start_time = time.time()  # Record the start time for performance testing
-            
+        cpu_usage_data = []
+        start_time = time.time()
+        try:            
             error_code = ""
             error_message = ""
             job_id = self.kwargs['job_id']
@@ -124,22 +123,26 @@ class Action:
             
             if self.async_mode:  # If async mode is enabled, use ThreadPoolExecutor
                 with ThreadPoolExecutor(max_workers=100) as executor:
-                    futures = []
-                    for _ in range(100):
+                     for _ in range(100):
+                        futures = []
                         for scanner_nm, param in execution_plan.items():
                             futures.append(executor.submit(self.run_scanner, data, scanner_nm, param, **self.kwargs))
-                    # Wait for all threads to complete and collect results
-                    for future in as_completed(futures):
-                        result = future.result()
+
+                        # Wait for all threads to complete and collect results
+                        for future in as_completed(futures):
+                            result = future.result()
+                            cpu_usage_data.append((time.time() - start_time, psutil.cpu_percent(interval=0.1)))
                     if result is None and self.response.status == "failed":
                         error_code = self.response.error_code
                         error_message = self.response.error_message
                         LogUtil.log(LogType.ERROR, LogLevel.ERROR, "Running ended with error", jid=job_id, error=error_message)
                         return None, error_code, error_message
             else:  # If async mode is not enabled, run sequentially
-                for _ in range(100):
+                 for _ in range(100):
                     for scanner_nm, param in execution_plan.items():
                         result = self.run_scanner(data, scanner_nm, param, **kwargs)
+                        cpu_usage_data.append((time.time() - start_time, psutil.cpu_percent(interval=0.1)))
+                
                 if self.response.status == "failed":
                     error_code = self.response.error_code
                     error_message = self.response.error_message
@@ -150,20 +153,41 @@ class Action:
             execution_time = end_time - start_time
             LogUtil.log(LogType.TRANSACTION, LogLevel.INFO, f"Execution completed in {execution_time:.2f} seconds.")
                 
-            return self.combined_result,error_code,error_message
+            return self.combined_result,error_code,error_message, cpu_usage_data
 
         except Exception as e:
             LogUtil.log(LogType.ERROR, LogLevel.ERROR, "Running ended with error", jid=job_id, error=str(e))
             LogUtil.log(LogType.ERROR, LogLevel.ERROR, traceback.format_exc())
             error_code = "FRDIOS9000"
             error_message = ERROR_CODE_DICT[error_code].format(str(e))
-            return None, error_code, error_message
+            return None, error_code, error_message, cpu_usage_data
         
         finally:
             if save_path:
                 response_json_path = os.path.join(save_path, task_group + "_response.json")
                 self.response.save_results(combined_result=self.combined_result)
                 self.response.return_response(response_json_path, error_code, error_message)
+
+def plot_cpu_usage(sequential_data, parallel_data):
+    """Plot CPU usage data for sequential and parallel executions."""
+    plt.figure(figsize=(12, 6))
+
+    # Plot sequential data
+    if sequential_data:
+        times, cpu_usages = zip(*sequential_data)
+        plt.plot(times, cpu_usages, label='Sequential', marker='o', linestyle='-')
+
+    # Plot parallel data
+    if parallel_data:
+        times, cpu_usages = zip(*parallel_data)
+        plt.plot(times, cpu_usages, label='Parallel (Async)', marker='x', linestyle='--')
+
+    plt.xlabel("Time (seconds)")
+    plt.ylabel("CPU Usage (%)")
+    plt.title("CPU Usage Comparison: Sequential vs Parallel")
+    plt.legend()
+    plt.grid(True)
+    plt.show()
 
 if __name__ == "__main__":
     payload = {
@@ -193,12 +217,24 @@ if __name__ == "__main__":
         "policy_id": payload["service_params"]["job_object"].get("policy_id", "NA"),
     }
     default_scanner_path = "llm_sanitation\configs\default_scanners.json"
+
     print("Sequential Execution:")
-    action_seq = Action(default_scanner_path, async_mode=True, **kwargs)
-    result, error_code, error_message = action_seq.run_action(
+    action_seq = Action(default_scanner_path, async_mode=False, **kwargs)
+    result_seq, error_code_seq, error_message_seq, cpu_data_seq = action_seq.run_action(
             payload["service_params"]["job_object"]["execution_plan"],
             payload["service_params"]["job_object"]["data"],
             payload["job_params"]["save_path"]
         )
-    print("Action completed")
-    print(result)
+    print("Sequential Action completed")
+
+    print("Parallel Execution:")
+    action_par = Action(default_scanner_path, async_mode=True, **kwargs)
+    result_par, error_code_par, error_message_par, cpu_data_par  = action_par.run_action(
+            payload["service_params"]["job_object"]["execution_plan"],
+            payload["service_params"]["job_object"]["data"],
+            payload["job_params"]["save_path"]
+        )
+    print("Parallel Action completed")
+
+
+    plot_cpu_usage(cpu_data_seq, cpu_data_par)
