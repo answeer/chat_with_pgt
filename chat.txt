@@ -1,23 +1,29 @@
-import matplotlib.pyplot as plt
-import numpy as np
+def execute_with_monitoring(action_obj, execution_plan, data, save_path, mode):
+    # 用于在一个列表中存储 CPU 使用率数据
+    cpu_usage_data = []
 
-def plot_cpu_utilization(cpu_usage, actual_exec_time, interval=0.1):
-    # Smooth the CPU usage data
-    smoothed_cpu_usage = np.convolve(cpu_usage, np.ones(5)/5, mode='valid')
+    def monitor_cpu():
+        nonlocal cpu_usage_data
+        cpu_usage_data = monitor_cpu_usage(interval=0.1, duration=10)
 
-    # Generate x-values based on the smoothed cpu usage length and the actual execution time
-    number_of_samples = len(smoothed_cpu_usage)
-    
-    # Calculate the time range: The x-axis will represent real execution time
-    total_duration = min(actual_exec_time, len(cpu_usage) * interval)  # Ensure we do not exceed actual exec time
-    x_values = np.linspace(0, total_duration, number_of_samples)
-    
-    plt.figure(figsize=(10, 6))
-    plt.plot(x_values, smoothed_cpu_usage, label="CPU Utilization", color='blue', linewidth=2)
-    
-    plt.title("CPU Utilization Over Time")
-    plt.xlabel("Time (s)", fontsize=12)  # Updated to reflect actual time
-    plt.ylabel("CPU Usage (%)", fontsize=12)
-    plt.grid()
-    plt.legend()
-    plt.show()
+    # 启动监控线程
+    monitor_thread = Thread(target=monitor_cpu)
+    monitor_thread.start()
+
+    # 开始时间记录
+    start_time = time.time()
+
+    # 执行扫描操作
+    action_obj.run_action(execution_plan, data, save_path)
+
+    # 结束时间记录
+    end_time = time.time()
+
+    # 等待监控线程完成
+    monitor_thread.join()
+
+    # 打印执行时间
+    print(f"Execution time for {mode}: {end_time - start_time:.2f} seconds")
+
+    # 使用监控到的数据进行绘图
+    plot_cpu_utilization(cpu_usage_data, mode)
