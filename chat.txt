@@ -1,49 +1,165 @@
-import psutil
+import os
 import time
+import json
+import psutil
 import matplotlib.pyplot as plt
 import numpy as np
+from threading import Thread
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from llm_sanitation.utils.callback import Callback
+from llm_sanitation.utils.checks import Checks
+from llm_sanitation.utils.error_codes import ERROR_CODE_DICT
+from llm_sanitation.logging.logging_setup import LogUtil, LogType, LogLevel
 
-def plot_cpu_usage(duration=60, interval=0.5):
-    # Initialize data lists
-    timestamps = []
+
+class Action:
+    def __init__(self, default_scanner_path, async_mode=False, **kwargs):
+        self.response = Callback(**kwargs)
+        self.check = Checks(self.response)
+        self.kwargs = kwargs
+        self.combined_result = []
+        self.nstp_result = []
+        self.default_scanners = self.load_default_scanners(default_scanner_path)
+        self.async_mode = async_mode
+
+    @staticmethod
+    def load_default_scanners(config_path):
+        try:
+            with open(config_path, "r") as file:
+                return json.load(file)
+        except Exception as e:
+            LogUtil.log(LogType.ERROR, LogLevel.ERROR, f"Error loading default scanners: {e}")
+            return {}
+
+    def determine_task_group(self, data):
+        if isinstance(data, str) and os.path.isfile(data):
+            return "file_bounding"
+        elif isinstance(data, str):
+            return "text_bounding"
+        elif isinstance(data, (int, float)):
+            return "numeric_bounding"
+        else:
+            raise ValueError("Unsupported data type for task group determination.")
+
+    def merge_execution_plan(self, task_group, execution_plan):
+        default_plan = self.default_scanners.get(task_group, {})
+        return {**default_plan, **execution_plan}
+
+    def run_scanner(self, data, scanner_nm, param, **kwargs):
+        try:
+            scanners = __import__("llm_sanitation.scanners", fromlist=[scanner_nm])
+            scanner = getattr(scanners, scanner_nm)
+            scanner_obj = scanner(**param)
+            result = scanner_obj.validate(data, **self.kwargs)
+            self.combined_result.append(result)
+            self.nstp_result.append(result.get("NSTP"))
+            return result
+        except Exception as e:
+            error_code = "FRDIOS9000"
+            self.response.form_response(error_code, str(e))
+            return None
+
+    def run_action(self, execution_plan, data, save_path):
+        try:
+            start_time = time.time()
+            task_group = self.determine_task_group(data)
+            execution_plan = self.merge_execution_plan(task_group, execution_plan)
+
+            if self.async_mode:
+                with ThreadPoolExecutor() as executor:
+                    futures = [
+                        executor.submit(self.run_scanner, data, scanner_nm, param, **self.kwargs)
+                        for scanner_nm, param in execution_plan.items()
+                    ]
+                    for future in as_completed(futures):
+                        future.result()
+            else:
+                for scanner_nm, param in execution_plan.items():
+                    self.run_scanner(data, scanner_nm, param, **self.kwargs)
+
+            end_time = time.time()
+            print(f"Execution time: {end_time - start_time:.2f} seconds")
+            return self.combined_result
+        except Exception as e:
+            print(f"Error during execution: {e}")
+            return None
+
+
+# 优化后的CPU监控和绘制部分
+def monitor_cpu_usage(interval=0.1, duration=10):
     cpu_usage = []
-
     start_time = time.time()
-
     while time.time() - start_time < duration:
-        # Get the current CPU utilization as a percentage
-        cpu_percent = psutil.cpu_percent(interval=interval)
+        cpu_usage.append(psutil.cpu_percent(interval=interval))
+    return cpu_usage
 
-        # Record the time and CPU usage
-        timestamps.append(time.time() - start_time)
-        cpu_usage.append(cpu_percent)
 
-    # Smooth the data using a moving average (optional)
-    window_size = 5  # Set window size for the moving average
-    smoothed_cpu_usage = np.convolve(cpu_usage, np.ones(window_size)/window_size, mode='valid')
+def plot_cpu_utilization(cpu_usage, mode):
+    # 平滑数据，使用卷积实现移动平均
+    smoothed_cpu_usage = np.convolve(cpu_usage, np.ones(5)/5, mode='valid')
 
-    # Create the plot
     plt.figure(figsize=(10, 6))
-    plt.plot(timestamps[:len(smoothed_cpu_usage)], smoothed_cpu_usage, label='Smoothed CPU Usage', color='blue', linewidth=2)
-    plt.fill_between(timestamps[:len(smoothed_cpu_usage)], smoothed_cpu_usage, color='blue', alpha=0.2)
+    plt.plot(smoothed_cpu_usage, label=f"CPU Utilization ({mode})", color='blue', linewidth=2)
 
-    # Highlight specific points for clarity (optional)
-    for i in range(0, len(smoothed_cpu_usage), 10):  # Add annotations every 10 points
-        plt.annotate(f'{smoothed_cpu_usage[i]:.1f}%', (timestamps[i], smoothed_cpu_usage[i]),
+    # 填充区域
+    plt.fill_between(range(len(smoothed_cpu_usage)), smoothed_cpu_usage, color='blue', alpha=0.2)
+
+    # 标注数据点
+    for i in range(0, len(smoothed_cpu_usage), 10):  # 每隔10个点标注一次
+        plt.annotate(f'{smoothed_cpu_usage[i]:.1f}%', (i, smoothed_cpu_usage[i]),
                      textcoords="offset points", xytext=(0,5), ha='center', fontsize=8, color='black')
 
-    # Add gridlines for easier reading
-    plt.grid(True, which='both', linestyle='--', linewidth=0.5, alpha=0.7)
-
-    # Add labels and title
-    plt.xlabel('Time (seconds)', fontsize=12)
-    plt.ylabel('CPU Usage (%)', fontsize=12)
-    plt.title('CPU Utilization Over Time', fontsize=14)
+    # 设置图表样式
+    plt.title(f"CPU Utilization - {mode} Execution", fontsize=14)
+    plt.xlabel("Time (in 0.1s intervals)", fontsize=12)
+    plt.ylabel("CPU Usage (%)", fontsize=12)
     plt.legend()
-
-    # Show the plot
+    plt.grid(True, linestyle='--', linewidth=0.5, alpha=0.7)
+    
+    # 显示图表
     plt.tight_layout()
     plt.show()
 
-# Example usage: Plot CPU usage over a 60-second period, with a 0.5 second interval between samples
-plot_cpu_usage(duration=60, interval=0.5)
+
+def execute_with_monitoring(action_obj, execution_plan, data, save_path, mode):
+    monitor_thread = Thread(target=monitor_cpu_usage, args=(0.1, 10))
+    monitor_thread.start()
+
+    start_time = time.time()
+    action_obj.run_action(execution_plan, data, save_path)
+    end_time = time.time()
+
+    monitor_thread.join()
+    print(f"Execution time for {mode}: {end_time - start_time:.2f} seconds")
+    plot_cpu_utilization(monitor_cpu_usage(0.1, 10), mode)
+
+
+if __name__ == "__main__":
+    payload = {
+        "job_params": {
+            "jobid": "JID-54ca58ba-c495-11ed-b20c-0a586e830578",
+            "task_id": "TID-54ca58ba-c495-11ed-b20c-0a586e830578",
+            "save_path": "/tmp"
+        },
+        "service_params": {
+            "job_object": {
+                "data": "test input data",
+                "execution_plan": {"SampleScanner": {"param1": "value1"}}
+            }
+        }
+    }
+
+    kwargs = {"job_id": payload["job_params"]["jobid"]}
+    default_scanner_path = "default_scanners.json"
+
+    print("Sequential Execution:")
+    action_seq = Action(default_scanner_path, async_mode=False, **kwargs)
+    execute_with_monitoring(action_seq, payload["service_params"]["job_object"]["execution_plan"],
+                            payload["service_params"]["job_object"]["data"],
+                            payload["job_params"]["save_path"], "Sequential")
+
+    print("Parallel Execution:")
+    action_par = Action(default_scanner_path, async_mode=True, **kwargs)
+    execute_with_monitoring(action_par, payload["service_params"]["job_object"]["execution_plan"],
+                            payload["service_params"]["job_object"]["data"],
+                            payload["job_params"]["save_path"], "Parallel")
