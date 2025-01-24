@@ -4,6 +4,7 @@ import mimetypes
 import time
 import json
 import psutil
+import numpy as np
 import matplotlib.pyplot as plt
 from threading import Thread
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -27,6 +28,7 @@ class Action:
         self.nstp_result = []
         self.default_scanners = self.load_default_scanners(default_scanner_path)  # Load JSON config
         self.async_mode = async_mode  # Store the async flag
+
     @staticmethod
     def load_default_scanners(config_path):
         """Loads default scanner configurations from a JSON file."""
@@ -88,11 +90,14 @@ class Action:
         """Returns NSTP results from each scanner."""
         return self.nstp_result
 
+    def run_scanner_task(self,data,scanner_nm,param,kwargs):
+        return self.run_scanner(data,scanner_nm,param,**kwargs)
+
     def run_action(self, execution_plan, data, save_path):
         """Executes the scanning process based on the provided execution plan and scanner type."""
-        cpu_usage_data = []
-        start_time = time.time()
-        try:            
+        try:
+            start_time = time.time()  # Record the start time for performance testing
+            
             error_code = ""
             error_message = ""
             job_id = self.kwargs['job_id']
@@ -121,28 +126,25 @@ class Action:
                 LogUtil.log(LogType.ERROR, LogLevel.ERROR, "Running ended with error", jid=job_id, error=error_message)
                 return None, error_code, error_message
             
-            if self.async_mode:  # If async mode is enabled, use ThreadPoolExecutor
-                with ThreadPoolExecutor(max_workers=100) as executor:
-                     for _ in range(100):
-                        futures = []
+            if self.async_mode:  # 如果启用了异步模式，使用 multiprocessing
+                with ThreadPoolExecutor(max_workers=8) as executor:
+                    futures = []
+                    for _ in range(20):
                         for scanner_nm, param in execution_plan.items():
                             futures.append(executor.submit(self.run_scanner, data, scanner_nm, param, **self.kwargs))
-
-                        # Wait for all threads to complete and collect results
-                        for future in as_completed(futures):
-                            result = future.result()
-                            cpu_usage_data.append((time.time() - start_time, psutil.cpu_percent(interval=0.1)))
+                    # Wait for all threads to complete and collect results
+                    for future in as_completed(futures):
+                        result = future.result()
                     if result is None and self.response.status == "failed":
                         error_code = self.response.error_code
                         error_message = self.response.error_message
                         LogUtil.log(LogType.ERROR, LogLevel.ERROR, "Running ended with error", jid=job_id, error=error_message)
                         return None, error_code, error_message
             else:  # If async mode is not enabled, run sequentially
-                 for _ in range(100):
+                for _ in range(20): 
                     for scanner_nm, param in execution_plan.items():
+                    # for _ in range(8):
                         result = self.run_scanner(data, scanner_nm, param, **kwargs)
-                        cpu_usage_data.append((time.time() - start_time, psutil.cpu_percent(interval=0.1)))
-                
                 if self.response.status == "failed":
                     error_code = self.response.error_code
                     error_message = self.response.error_message
@@ -153,14 +155,14 @@ class Action:
             execution_time = end_time - start_time
             LogUtil.log(LogType.TRANSACTION, LogLevel.INFO, f"Execution completed in {execution_time:.2f} seconds.")
                 
-            return self.combined_result,error_code,error_message, cpu_usage_data
+            return self.combined_result,error_code,error_message
 
         except Exception as e:
             LogUtil.log(LogType.ERROR, LogLevel.ERROR, "Running ended with error", jid=job_id, error=str(e))
             LogUtil.log(LogType.ERROR, LogLevel.ERROR, traceback.format_exc())
             error_code = "FRDIOS9000"
             error_message = ERROR_CODE_DICT[error_code].format(str(e))
-            return None, error_code, error_message, cpu_usage_data
+            return None, error_code, error_message
         
         finally:
             if save_path:
@@ -168,26 +170,53 @@ class Action:
                 self.response.save_results(combined_result=self.combined_result)
                 self.response.return_response(response_json_path, error_code, error_message)
 
-def plot_cpu_usage(sequential_data, parallel_data):
-    """Plot CPU usage data for sequential and parallel executions."""
-    plt.figure(figsize=(12, 6))
+def monitor_cpu_usage(interval=1, duration=10):
+    cpu_usage = []
+    start_time = time.time()
+    while time.time() - start_time < duration:
+        cpu_usage.append(psutil.cpu_percent(interval=interval))
+    return cpu_usage
 
-    # Plot sequential data
-    if sequential_data:
-        times, cpu_usages = zip(*sequential_data)
-        plt.plot(times, cpu_usages, label='Sequential', marker='o', linestyle='-')
 
-    # Plot parallel data
-    if parallel_data:
-        times, cpu_usages = zip(*parallel_data)
-        plt.plot(times, cpu_usages, label='Parallel (Async)', marker='x', linestyle='--')
+def plot_cpu_utilization(cpu_usage, mode):
+    # 平滑数据，使用卷积实现移动平均
+    smoothed_cpu_usage = np.convolve(cpu_usage, np.ones(5)/5, mode='valid')
 
-    plt.xlabel("Time (seconds)")
-    plt.ylabel("CPU Usage (%)")
-    plt.title("CPU Usage Comparison: Sequential vs Parallel")
+    plt.figure(figsize=(10, 6))
+    plt.plot(smoothed_cpu_usage, label=f"CPU Utilization ({mode})", color='blue', linewidth=2)
+
+    # 填充区域
+    plt.fill_between(range(len(smoothed_cpu_usage)), smoothed_cpu_usage, color='blue', alpha=0.2)
+
+    # 标注数据点
+    for i in range(0, len(smoothed_cpu_usage), 10):  # 每隔10个点标注一次
+        plt.annotate(f'{smoothed_cpu_usage[i]:.1f}%', (i, smoothed_cpu_usage[i]),
+                     textcoords="offset points", xytext=(0,5), ha='center', fontsize=8, color='black')
+
+    # 设置图表样式
+    plt.title(f"CPU Utilization - {mode} Execution", fontsize=14)
+    plt.xlabel("Time (in 0.5s intervals)", fontsize=12)
+    plt.ylabel("CPU Usage (%)", fontsize=12)
     plt.legend()
-    plt.grid(True)
-    plt.show()
+    plt.grid(True, linestyle='--', linewidth=0.5, alpha=0.7)
+    
+    # 显示图表
+    plt.tight_layout()
+    # plt.show()
+    plt.savefig('cpu_usage_for_{}.png'.format(mode))
+
+
+def execute_with_monitoring(action_obj, execution_plan, data, save_path, mode):
+    monitor_thread = Thread(target=monitor_cpu_usage, args=(0.1,10))
+    monitor_thread.start()
+
+    start_time = time.time()
+    action_obj.run_action(execution_plan, data, save_path)
+    end_time = time.time()
+
+    monitor_thread.join()
+    print(f"Execution time for {mode}: {end_time - start_time:.2f} seconds")
+    plot_cpu_utilization(monitor_cpu_usage(0.1,10), mode)
 
 if __name__ == "__main__":
     payload = {
@@ -203,7 +232,11 @@ if __name__ == "__main__":
                 "job_object": {
                     "io": "i",
                     "policy_id": "policy_00001",
-                    "data": "what are you doing",
+                    "data": """
+        The tumultuous tempest of existential angst, swirling like a relentless vortex within the depths of my weary soul, engulfs me in an
+        overwhelming deluge of despair and desolation, as if the very fabric of reality conspires to suffocate my hopes and dreams beneath
+        its crushing weight.
+        """,
                     "execution_plan": {}
                 }
             }
@@ -217,24 +250,14 @@ if __name__ == "__main__":
         "policy_id": payload["service_params"]["job_object"].get("policy_id", "NA"),
     }
     default_scanner_path = "llm_sanitation\configs\default_scanners.json"
-
     print("Sequential Execution:")
     action_seq = Action(default_scanner_path, async_mode=False, **kwargs)
-    result_seq, error_code_seq, error_message_seq, cpu_data_seq = action_seq.run_action(
-            payload["service_params"]["job_object"]["execution_plan"],
-            payload["service_params"]["job_object"]["data"],
-            payload["job_params"]["save_path"]
-        )
-    print("Sequential Action completed")
-
+    execute_with_monitoring(action_seq, payload["service_params"]["job_object"]["execution_plan"],
+                            payload["service_params"]["job_object"]["data"],
+                            payload["job_params"]["save_path"], "Sequential")
+    
     print("Parallel Execution:")
     action_par = Action(default_scanner_path, async_mode=True, **kwargs)
-    result_par, error_code_par, error_message_par, cpu_data_par  = action_par.run_action(
-            payload["service_params"]["job_object"]["execution_plan"],
-            payload["service_params"]["job_object"]["data"],
-            payload["job_params"]["save_path"]
-        )
-    print("Parallel Action completed")
-
-
-    plot_cpu_usage(cpu_data_seq, cpu_data_par)
+    execute_with_monitoring(action_par, payload["service_params"]["job_object"]["execution_plan"],
+                            payload["service_params"]["job_object"]["data"],
+                            payload["job_params"]["save_path"], "Parallel")
