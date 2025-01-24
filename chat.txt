@@ -1,9 +1,11 @@
 import os
+import traceback
+import mimetypes
 import time
 import json
 import psutil
-import matplotlib.pyplot as plt
 import numpy as np
+import matplotlib.pyplot as plt
 from threading import Thread
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from llm_sanitation.utils.callback import Callback
@@ -11,19 +13,25 @@ from llm_sanitation.utils.checks import Checks
 from llm_sanitation.utils.error_codes import ERROR_CODE_DICT
 from llm_sanitation.logging.logging_setup import LogUtil, LogType, LogLevel
 
-
 class Action:
     def __init__(self, default_scanner_path, async_mode=False, **kwargs):
+        """
+        :param default_scanner_path: Path to the default scanners configuration
+        :param async_mode: Boolean flag to enable asynchronous execution (default is False)
+        :param kwargs: Other keyword arguments
+        """
+        LogUtil.log(LogType.TRANSACTION, LogLevel.INFO, "Running Initialized")
         self.response = Callback(**kwargs)
         self.check = Checks(self.response)
         self.kwargs = kwargs
         self.combined_result = []
         self.nstp_result = []
-        self.default_scanners = self.load_default_scanners(default_scanner_path)
-        self.async_mode = async_mode
+        self.default_scanners = self.load_default_scanners(default_scanner_path)  # Load JSON config
+        self.async_mode = async_mode  # Store the async flag
 
     @staticmethod
     def load_default_scanners(config_path):
+        """Loads default scanner configurations from a JSON file."""
         try:
             with open(config_path, "r") as file:
                 return json.load(file)
@@ -31,21 +39,34 @@ class Action:
             LogUtil.log(LogType.ERROR, LogLevel.ERROR, f"Error loading default scanners: {e}")
             return {}
 
-    def determine_task_group(self, data):
-        if isinstance(data, str) and os.path.isfile(data):
-            return "file_bounding"
-        elif isinstance(data, str):
-            return "text_bounding"
+    def determine_task_group(self,data):
+        """Determines the task group based on the input data type."""
+        if isinstance(data, str):
+            # Check if the data is a filepath
+            if os.path.isfile(data):
+                # Determine the MIME type
+                mime_type, _ = mimetypes.guess_type(data)
+                if mime_type and mime_type.startswith('image'):
+                    return 'image_bounding'  # Image files
+                else:
+                    return 'file_bounding'  # All other file types
+            else:
+                # Plain string, not a filepath
+                return 'text_bounding'
         elif isinstance(data, (int, float)):
-            return "numeric_bounding"
+            # If data is numeric
+            return 'numeric_bounding'
         else:
             raise ValueError("Unsupported data type for task group determination.")
-
+        
     def merge_execution_plan(self, task_group, execution_plan):
+        """Merge default scanners with additional execution plan."""
         default_plan = self.default_scanners.get(task_group, {})
-        return {**default_plan, **execution_plan}
+        return {**default_plan, **execution_plan}  # Default scanners take precedence
+
 
     def run_scanner(self, data, scanner_nm, param, **kwargs):
+        """Dynamically imports and runs the specified scanner with provided parameters."""
         try:
             scanners = __import__("llm_sanitation.scanners", fromlist=[scanner_nm])
             scanner = getattr(scanners, scanner_nm)
@@ -54,38 +75,99 @@ class Action:
             self.combined_result.append(result)
             self.nstp_result.append(result.get("NSTP"))
             return result
-        except Exception as e:
+        except (ImportError, AttributeError) as e:
             error_code = "FRDIOS9000"
-            self.response.form_response(error_code, str(e))
+            error_message = ERROR_CODE_DICT[error_code].format(str(e))
+            self.response.form_response(error_code, error_message)
+            LogUtil.log(LogType.ERROR, LogLevel.ERROR, "Running ended with error", jid=self.kwargs['job_id'], error=error_message)
             return None
+
+    def get_result(self):
+        """Returns all combined results from the scanners."""
+        return self.combined_result
+
+    def get_nstp_result(self):
+        """Returns NSTP results from each scanner."""
+        return self.nstp_result
 
     def run_action(self, execution_plan, data, save_path):
+        """Executes the scanning process based on the provided execution plan and scanner type."""
         try:
-            start_time = time.time()
+            start_time = time.time()  # Record the start time for performance testing
+            
+            error_code = ""
+            error_message = ""
+            job_id = self.kwargs['job_id']
             task_group = self.determine_task_group(data)
+            self.kwargs['task_group'] = task_group
             execution_plan = self.merge_execution_plan(task_group, execution_plan)
 
-            if self.async_mode:
-                with ThreadPoolExecutor() as executor:
-                    futures = [
-                        executor.submit(self.run_scanner, data, scanner_nm, param, **self.kwargs)
-                        for scanner_nm, param in execution_plan.items()
-                    ]
-                    for future in as_completed(futures):
-                        future.result()
+            # Run pre-check based on task group
+            if task_group == "file_bounding":
+                self.check.file_exists(data)
+            elif task_group == "image_bounding":
+                self.check.check_image(data)
+            elif task_group == "text_bounding":
+                self.check.check_text(data)
+            elif task_group == "numeric_bounding":
+                self.check.check_payload(data)
             else:
-                for scanner_nm, param in execution_plan.items():
-                    self.run_scanner(data, scanner_nm, param, **self.kwargs)
+                error_code = "FRDIOS0006"
+                error_message = ERROR_CODE_DICT[error_code].format(str(task_group))
+                LogUtil.log(LogType.ERROR, LogLevel.ERROR, "Running ended with error", jid=job_id, error=error_message)
+                return None, error_code, error_message
+            
+            if self.response.status == "failed":
+                error_code = self.response.error_code
+                error_message = self.response.error_message
+                LogUtil.log(LogType.ERROR, LogLevel.ERROR, "Running ended with error", jid=job_id, error=error_message)
+                return None, error_code, error_message
+            
+            if self.async_mode:  # If async mode is enabled, use ThreadPoolExecutor
+                with ThreadPoolExecutor(max_workers=8) as executor:
+                    futures = []
+                    for _ in range(50):    
+                        for scanner_nm, param in execution_plan.items():
+                        
+                            futures.append(executor.submit(self.run_scanner, data, scanner_nm, param, **self.kwargs))
+                    # Wait for all threads to complete and collect results
+                    for future in as_completed(futures):
+                        result = future.result()
+                    if result is None and self.response.status == "failed":
+                        error_code = self.response.error_code
+                        error_message = self.response.error_message
+                        LogUtil.log(LogType.ERROR, LogLevel.ERROR, "Running ended with error", jid=job_id, error=error_message)
+                        return None, error_code, error_message
+            else:  # If async mode is not enabled, run sequentially
+                for _ in range(50):
+                    for scanner_nm, param in execution_plan.items():
+                    
+                        result = self.run_scanner(data, scanner_nm, param, **kwargs)
+                if self.response.status == "failed":
+                    error_code = self.response.error_code
+                    error_message = self.response.error_message
+                    LogUtil.log(LogType.ERROR, LogLevel.ERROR, "Running ended with error", jid=job_id, error=error_message)
+                    return None, error_code, error_message
+                
+            end_time = time.time()  # Record the end time for performance testing
+            execution_time = end_time - start_time
+            LogUtil.log(LogType.TRANSACTION, LogLevel.INFO, f"Execution completed in {execution_time:.2f} seconds.")
+                
+            return self.combined_result,error_code,error_message
 
-            end_time = time.time()
-            print(f"Execution time: {end_time - start_time:.2f} seconds")
-            return self.combined_result
         except Exception as e:
-            print(f"Error during execution: {e}")
-            return None
+            LogUtil.log(LogType.ERROR, LogLevel.ERROR, "Running ended with error", jid=job_id, error=str(e))
+            LogUtil.log(LogType.ERROR, LogLevel.ERROR, traceback.format_exc())
+            error_code = "FRDIOS9000"
+            error_message = ERROR_CODE_DICT[error_code].format(str(e))
+            return None, error_code, error_message
+        
+        finally:
+            if save_path:
+                response_json_path = os.path.join(save_path, task_group + "_response.json")
+                self.response.save_results(combined_result=self.combined_result)
+                self.response.return_response(response_json_path, error_code, error_message)
 
-
-# 优化后的CPU监控和绘制部分
 def monitor_cpu_usage(interval=0.1, duration=10):
     cpu_usage = []
     start_time = time.time()
@@ -122,7 +204,7 @@ def plot_cpu_utilization(cpu_usage, mode):
 
 
 def execute_with_monitoring(action_obj, execution_plan, data, save_path, mode):
-    monitor_thread = Thread(target=monitor_cpu_usage, args=(0.1, 10))
+    monitor_thread = Thread(target=monitor_cpu_usage, args=(0.5, 10))
     monitor_thread.start()
 
     start_time = time.time()
@@ -131,33 +213,42 @@ def execute_with_monitoring(action_obj, execution_plan, data, save_path, mode):
 
     monitor_thread.join()
     print(f"Execution time for {mode}: {end_time - start_time:.2f} seconds")
-    plot_cpu_utilization(monitor_cpu_usage(0.1, 10), mode)
-
+    plot_cpu_utilization(monitor_cpu_usage(0.5, 10), mode)
 
 if __name__ == "__main__":
     payload = {
-        "job_params": {
-            "jobid": "JID-54ca58ba-c495-11ed-b20c-0a586e830578",
-            "task_id": "TID-54ca58ba-c495-11ed-b20c-0a586e830578",
-            "save_path": "/tmp"
-        },
-        "service_params": {
-            "job_object": {
-                "data": "test input data",
-                "execution_plan": {"SampleScanner": {"param1": "value1"}}
+            "job_params": {
+                "jobid": "JID-54ca58ba-c495-11ed-b20c-0a586e830578",
+                "task_id": "TID-54ca58ba-c495-11ed-b20c-0a586e830578",
+                "app_name": "synthesizer",
+                "use_case": "aadhar_redact",
+                "save_path": r"C:\Users\1657820\Desktop\51433-swoosh-io-bounding",
+            },
+            "service_params": {
+                "callback_url": "http://service-swoosh-orchestrator.swoosh-dev.svc.cluster.local:8889/api/v1/callback",
+                "job_object": {
+                    "io": "i",
+                    "policy_id": "policy_00001",
+                    "data": "what are you doing",
+                    "execution_plan": {}
+                }
             }
         }
+
+    kwargs = {
+        "job_id": payload["job_params"].get("jobid", "NA"),
+        "task_id": payload["job_params"].get("task_id", "NA"),
+        "use_case": payload["job_params"].get("use_case", "NA"),
+        "io": payload["service_params"]["job_object"].get("io", "NA"),
+        "policy_id": payload["service_params"]["job_object"].get("policy_id", "NA"),
     }
-
-    kwargs = {"job_id": payload["job_params"]["jobid"]}
-    default_scanner_path = "default_scanners.json"
-
+    default_scanner_path = "llm_sanitation\configs\default_scanners.json"
     print("Sequential Execution:")
     action_seq = Action(default_scanner_path, async_mode=False, **kwargs)
     execute_with_monitoring(action_seq, payload["service_params"]["job_object"]["execution_plan"],
                             payload["service_params"]["job_object"]["data"],
                             payload["job_params"]["save_path"], "Sequential")
-
+    
     print("Parallel Execution:")
     action_par = Action(default_scanner_path, async_mode=True, **kwargs)
     execute_with_monitoring(action_par, payload["service_params"]["job_object"]["execution_plan"],
