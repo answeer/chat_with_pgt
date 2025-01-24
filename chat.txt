@@ -1,29 +1,69 @@
-def execute_with_monitoring(action_obj, execution_plan, data, save_path, mode):
-    # 用于在一个列表中存储 CPU 使用率数据
-    cpu_usage_data = []
+Introduction
 
-    def monitor_cpu():
-        nonlocal cpu_usage_data
-        cpu_usage_data = monitor_cpu_usage(interval=0.1, duration=10)
+In modern computing, parallel execution has become a cornerstone for improving performance, particularly for tasks like scanning and data processing that can be divided into independent subtasks. For example, when running a batch of scanners that perform similar operations, it’s often beneficial to execute these operations concurrently, utilizing multiple processor cores. This document compares the parallel execution of scanners with sequential execution and provides insights into the advantages of using parallel execution, particularly in CPU-intensive tasks like scanning.
+1. Sequential Execution of Scanners
 
-    # 启动监控线程
-    monitor_thread = Thread(target=monitor_cpu)
-    monitor_thread.start()
+How it works:
 
-    # 开始时间记录
-    start_time = time.time()
+In sequential execution, tasks are performed one after the other, in a single thread. For example, if we have 10 scanners to run, each scanner will be executed in sequence, meaning the first scanner will complete before the second starts, and so on.
+Pros of Sequential Execution:
 
-    # 执行扫描操作
-    action_obj.run_action(execution_plan, data, save_path)
+Simplicity: The logic is straightforward. Tasks are executed in a single sequence, with no need for complex concurrency or synchronization mechanisms.
+Easy to debug: Since only one task is running at any given time, it’s easier to trace issues and identify bugs.
+Lower resource overhead: No additional resources are consumed by managing parallelism, which can sometimes add complexity.
+Cons of Sequential Execution:
 
-    # 结束时间记录
-    end_time = time.time()
+Inefficient use of resources: Sequential execution doesn't take full advantage of multi-core processors, which results in slower processing times for large volumes of work.
+Longer processing time: Each task has to wait for the previous one to finish, leading to potentially long execution times when there are multiple tasks.
+Example:
 
-    # 等待监控线程完成
-    monitor_thread.join()
+If a scanner takes 10 seconds to execute, running 10 scanners sequentially would take 100 seconds.
+2. Parallel Execution of Scanners
 
-    # 打印执行时间
-    print(f"Execution time for {mode}: {end_time - start_time:.2f} seconds")
+How it works:
 
-    # 使用监控到的数据进行绘图
-    plot_cpu_utilization(cpu_usage_data, mode)
+In parallel execution, multiple scanners are executed simultaneously using multiple threads or processes. This allows each task to run on a different CPU core, drastically reducing the overall execution time, especially on multi-core systems. For instance, if we have 10 scanners and a system with 4 CPU cores, 4 scanners can run at the same time, with the remaining 6 scanned sequentially, ultimately reducing the total time.
+Pros of Parallel Execution:
+
+Faster execution: By utilizing multiple CPU cores, tasks can be completed much faster compared to sequential execution. This is particularly noticeable for CPU-bound tasks like scanning.
+Scalability: As the number of CPU cores in a machine increases, parallel execution scales well, meaning the more cores available, the more speedup you can gain.
+Efficient resource usage: Parallel execution ensures that all available CPU cores are utilized, leading to better resource utilization and overall system performance.
+Cons of Parallel Execution:
+
+Complexity: Writing parallel code introduces complexities such as managing synchronization, thread safety, and avoiding issues like race conditions or deadlocks.
+Overhead: Managing parallel tasks involves additional computational overhead. This can include the cost of creating threads, distributing tasks, and merging results.
+Debugging difficulties: Bugs in parallel programs can be harder to track and reproduce, as the execution order of threads may vary each time.
+Example:
+
+If we take 10 scanners, each requiring 10 seconds, and have a 4-core CPU, 4 scanners can run simultaneously in the first 10 seconds. After those complete, the next 4 scanners run, followed by the final 2. The total time might be around 30 seconds instead of 100 seconds.
+3. Comparison of Sequential vs. Parallel Execution
+
+Feature	Sequential Execution	Parallel Execution
+Execution Time	Takes longer, linear time complexity	Significantly faster, close to O(n/p) where p is the number of cores
+CPU Utilization	Single-core utilization only	Multi-core utilization, faster processing
+Code Complexity	Simple to implement	More complex, requires managing concurrency and synchronization
+Debugging	Easier to debug, no concurrency issues	Harder to debug, concurrency issues may arise
+Scalability	Does not scale with more cores	Scales well with more cores, improving performance
+Overhead	Minimal, no extra resource consumption	Slight overhead due to thread/process management
+Suitability	Suitable for smaller tasks or limited resources	Best for large, CPU-intensive tasks with sufficient resources
+4. Why Use Parallel Execution?
+
+4.1 Increased Performance
+
+Parallel execution dramatically improves performance, especially when the task at hand is CPU-bound. For scanning operations that are computationally expensive and can be divided into independent subtasks, running them in parallel ensures they are executed faster by leveraging multiple CPU cores. This is particularly beneficial for large-scale data processing tasks, where the overall task time can be reduced from several minutes to a fraction of that when executed in parallel.
+4.2 Better Resource Utilization
+
+Most modern computers come with multiple CPU cores, and in a sequential execution model, many of these cores remain idle while the single-threaded process runs. By using parallel execution, you ensure that all available cores are being used, leading to better overall system performance and resource utilization.
+4.3 Scalability
+
+As you scale up the number of CPU cores (e.g., on more powerful machines or distributed systems), the performance gains from parallel execution become even more pronounced. This scalability makes parallel execution ideal for high-performance computing scenarios where workloads need to be distributed efficiently.
+5. Best Practices for Parallel Execution of Scanners
+
+Thread Pooling: When running scanners in parallel, use a thread pool to limit the number of concurrently running threads to avoid overwhelming the system.
+Task Division: Divide the scanning task into smaller, independent units that can be processed simultaneously. This can include processing different subsets of data or different scanning configurations.
+Handle Synchronization: Ensure proper synchronization to avoid conflicts or data corruption when multiple threads are accessing shared resources.
+Monitor CPU Usage: Parallel execution can increase CPU usage, so it's important to monitor system performance and adjust the number of threads or processes accordingly to avoid resource exhaustion.
+Conclusion
+
+While sequential execution offers simplicity and ease of debugging, parallel execution provides significant performance improvements, especially when dealing with tasks like scanning that are computationally intensive and can be divided into independent subtasks. The ability to use all available CPU cores in parallel execution leads to faster processing, better resource utilization, and scalability. However, the increased complexity and potential overhead associated with parallel execution must be carefully managed to ensure efficient performance.
+For CPU-bound tasks like running scanners, leveraging parallel execution can drastically reduce execution time, making it a powerful approach for performance-critical applications.
