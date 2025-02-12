@@ -1,69 +1,193 @@
-Introduction
+from llm_sanitation.scanners.scanner_base import Scanner
+from presidio_analyzer.nlp_engine import NlpEngineProvider
+from presidio_analyzer.analyzer_engine import AnalyzerEngine
+from presidio_anonymizer import AnonymizerEngine
+from presidio_analyzer.context_aware_enhancers import LemmaContextAwareEnhancer
+from presidio_analyzer import (
+    AnalyzerEngine,
+    Pattern,
+    PatternRecognizer,
+    RecognizerRegistry,
+)
+import spacy
+import copy
+from llm_sanitation.utils.common import read_config
+from llm_sanitation.logging.logging_setup import LogUtil, LogType, LogLevel
 
-In modern computing, parallel execution has become a cornerstone for improving performance, particularly for tasks like scanning and data processing that can be divided into independent subtasks. For example, when running a batch of scanners that perform similar operations, it’s often beneficial to execute these operations concurrently, utilizing multiple processor cores. This document compares the parallel execution of scanners with sequential execution and provides insights into the advantages of using parallel execution, particularly in CPU-intensive tasks like scanning.
-1. Sequential Execution of Scanners
+class PiiDetector(Scanner):
+    """
+    A class to detect and optionally sanitize Personally Identifiable Information (PII) in text data.
 
-How it works:
+    This class extends the `Scanner` base class to identify PII using the Presidio library, which
+    leverages NLP models and custom regex patterns. It can also sanitize the detected PII from the
+    input text.
 
-In sequential execution, tasks are performed one after the other, in a single thread. For example, if we have 10 scanners to run, each scanner will be executed in sequence, meaning the first scanner will complete before the second starts, and so on.
-Pros of Sequential Execution:
+    Attributes:
+        sanitize (bool): Indicates whether to sanitize (redact) PII from the text.
+        default_entities (list): A list of default PII entities to be detected, as defined in the configuration.
+        default_regex_patterns (list): A list of custom regex patterns for detecting PII, loaded from a configuration file.
+        analyzer (AnalyzerEngine): The Presidio analyzer engine configured with custom and predefined recognizers.
+    """
 
-Simplicity: The logic is straightforward. Tasks are executed in a single sequence, with no need for complex concurrency or synchronization mechanisms.
-Easy to debug: Since only one task is running at any given time, it’s easier to trace issues and identify bugs.
-Lower resource overhead: No additional resources are consumed by managing parallelism, which can sometimes add complexity.
-Cons of Sequential Execution:
+    def __init__(self, **kwargs):
+        """
+        Initializes the PiiDetector instance.
 
-Inefficient use of resources: Sequential execution doesn't take full advantage of multi-core processors, which results in slower processing times for large volumes of work.
-Longer processing time: Each task has to wait for the previous one to finish, leading to potentially long execution times when there are multiple tasks.
-Example:
+        Args:
+            **kwargs: Additional keyword arguments, including 'sanitize' to determine if PII should be redacted.
+        """
+        sanitize = kwargs["sanitize"]
+        super().__init__("pii_detector", 0.5, sanitize=sanitize)
+        self.read_config()
+        self.get_analyzer()
 
-If a scanner takes 10 seconds to execute, running 10 scanners sequentially would take 100 seconds.
-2. Parallel Execution of Scanners
+    def read_config(self):
+        """
+        Reads the configuration file to load the default entity types and regex patterns for PII detection.
 
-How it works:
+        This method loads the entity types and custom regex patterns that are defined in the configuration file
+        'pii_detector.yml'.
+        """
+        config = read_config("pii_detector.yml")
+        self.default_entities = config['default_entity_types']
+        self.default_regex_patterns = config['default_regex_patterns']
 
-In parallel execution, multiple scanners are executed simultaneously using multiple threads or processes. This allows each task to run on a different CPU core, drastically reducing the overall execution time, especially on multi-core systems. For instance, if we have 10 scanners and a system with 4 CPU cores, 4 scanners can run at the same time, with the remaining 6 scanned sequentially, ultimately reducing the total time.
-Pros of Parallel Execution:
+    def get_regex_patterns(self, regex_patterns):
+        """
+        Prepares regex patterns for PII detection based on the provided configuration.
 
-Faster execution: By utilizing multiple CPU cores, tasks can be completed much faster compared to sequential execution. This is particularly noticeable for CPU-bound tasks like scanning.
-Scalability: As the number of CPU cores in a machine increases, parallel execution scales well, meaning the more cores available, the more speedup you can gain.
-Efficient resource usage: Parallel execution ensures that all available CPU cores are utilized, leading to better resource utilization and overall system performance.
-Cons of Parallel Execution:
+        Args:
+            regex_patterns (list): A list of regex patterns from the configuration file.
 
-Complexity: Writing parallel code introduces complexities such as managing synchronization, thread safety, and avoiding issues like race conditions or deadlocks.
-Overhead: Managing parallel tasks involves additional computational overhead. This can include the cost of creating threads, distributing tasks, and merging results.
-Debugging difficulties: Bugs in parallel programs can be harder to track and reproduce, as the execution order of threads may vary each time.
-Example:
+        Returns:
+            list: A list of dictionaries, each containing details of a regex pattern including its name, expressions,
+                  context, score, and supported languages.
+        """
+        result = []
+        for group in regex_patterns:
+            result.append(
+                {
+                    "name": group["name"].upper(),
+                    "expressions": group.get("expressions", []),
+                    "context": group.get("context", []),
+                    "score": group.get("score", 0.5),
+                    "languages": group.get("languages", ["en"]),
+                    "reuse": group.get("reuse", False),
+                }
+            )
+        return result
 
-If we take 10 scanners, each requiring 10 seconds, and have a 4-core CPU, 4 scanners can run simultaneously in the first 10 seconds. After those complete, the next 4 scanners run, followed by the final 2. The total time might be around 30 seconds instead of 100 seconds.
-3. Comparison of Sequential vs. Parallel Execution
+    def add_recognizers(self, registry, regex_groups):
+        """
+        Adds custom recognizers to the registry using predefined and custom regex patterns.
 
-Feature	Sequential Execution	Parallel Execution
-Execution Time	Takes longer, linear time complexity	Significantly faster, close to O(n/p) where p is the number of cores
-CPU Utilization	Single-core utilization only	Multi-core utilization, faster processing
-Code Complexity	Simple to implement	More complex, requires managing concurrency and synchronization
-Debugging	Easier to debug, no concurrency issues	Harder to debug, concurrency issues may arise
-Scalability	Does not scale with more cores	Scales well with more cores, improving performance
-Overhead	Minimal, no extra resource consumption	Slight overhead due to thread/process management
-Suitability	Suitable for smaller tasks or limited resources	Best for large, CPU-intensive tasks with sufficient resources
-4. Why Use Parallel Execution?
+        Args:
+            registry (RecognizerRegistry): The registry to which recognizers are added.
+            regex_groups (list): A list of regex patterns to be added as recognizers.
 
-4.1 Increased Performance
+        Returns:
+            RecognizerRegistry: The updated RecognizerRegistry object.
+        """
+        for pattern_data in regex_groups:
+            label = pattern_data["name"]
+            reuse = pattern_data.get("reuse", False)
 
-Parallel execution dramatically improves performance, especially when the task at hand is CPU-bound. For scanning operations that are computationally expensive and can be divided into independent subtasks, running them in parallel ensures they are executed faster by leveraging multiple CPU cores. This is particularly beneficial for large-scale data processing tasks, where the overall task time can be reduced from several minutes to a fraction of that when executed in parallel.
-4.2 Better Resource Utilization
+            patterns = map(
+                lambda exp: Pattern(name=label, regex=exp, score=pattern_data["score"]),
+                pattern_data.get("expressions", []) or [],
+            )
 
-Most modern computers come with multiple CPU cores, and in a sequential execution model, many of these cores remain idle while the single-threaded process runs. By using parallel execution, you ensure that all available cores are being used, leading to better overall system performance and resource utilization.
-4.3 Scalability
+            registry.add_recognizer(
+                PatternRecognizer(
+                    supported_entity=label,
+                    patterns=patterns,
+                    context=pattern_data["context"],
+                )
+            )
 
-As you scale up the number of CPU cores (e.g., on more powerful machines or distributed systems), the performance gains from parallel execution become even more pronounced. This scalability makes parallel execution ideal for high-performance computing scenarios where workloads need to be distributed efficiently.
-5. Best Practices for Parallel Execution of Scanners
+        return registry
 
-Thread Pooling: When running scanners in parallel, use a thread pool to limit the number of concurrently running threads to avoid overwhelming the system.
-Task Division: Divide the scanning task into smaller, independent units that can be processed simultaneously. This can include processing different subsets of data or different scanning configurations.
-Handle Synchronization: Ensure proper synchronization to avoid conflicts or data corruption when multiple threads are accessing shared resources.
-Monitor CPU Usage: Parallel execution can increase CPU usage, so it's important to monitor system performance and adjust the number of threads or processes accordingly to avoid resource exhaustion.
-Conclusion
+    def get_analyzer(self):
+        """
+        Initializes the Presidio analyzer engine, loads predefined and custom recognizers, and sets up the NLP engine.
 
-While sequential execution offers simplicity and ease of debugging, parallel execution provides significant performance improvements, especially when dealing with tasks like scanning that are computationally intensive and can be divided into independent subtasks. The ability to use all available CPU cores in parallel execution leads to faster processing, better resource utilization, and scalability. However, the increased complexity and potential overhead associated with parallel execution must be carefully managed to ensure efficient performance.
-For CPU-bound tasks like running scanners, leveraging parallel execution can drastically reduce execution time, making it a powerful approach for performance-critical applications.
+        This method configures the analyzer engine with predefined recognizers, loads custom regex patterns,
+        and removes the default Spacy recognizer to avoid redundancy.
+        """
+        try:
+            # Use small spacy model for faster inference.
+            if not spacy.util.is_package("en_core_web_sm"):
+                spacy.cli.download("en_core_web_sm")
+
+            nlp_configuration = {
+                "nlp_engine_name": "spacy",
+                "models": [{"lang_code": "en", "model_name": "en_core_web_sm"}],
+            }
+            nlp_engine = NlpEngineProvider(nlp_configuration=nlp_configuration).create_engine()
+            regex_groups = self.get_regex_patterns(self.default_regex_patterns)
+            registry = RecognizerRegistry()
+            registry.load_predefined_recognizers(nlp_engine=nlp_engine)
+            registry = self.add_recognizers(registry, regex_groups)
+            registry.remove_recognizer("SpacyRecognizer")
+            self.analyzer = AnalyzerEngine(
+                registry=registry,
+                nlp_engine=nlp_engine,
+                context_aware_enhancer=LemmaContextAwareEnhancer(
+                    context_similarity_factor=0.35,
+                    min_score_with_context_similarity=0.4,
+                ),
+            )
+        except Exception as e:
+            LogUtil.log(LogType.ERROR, LogLevel.ERROR, e)
+
+    def predict(self, data):
+        """
+        Detects PII in the provided text and optionally sanitizes it.
+
+        Args:
+            data (str): The text data to be checked for PII.
+
+        Returns:
+            tuple: A tuple containing:
+                - A message indicating whether PII was detected or not.
+                - A risk score indicating the likelihood of PII presence (1 for high risk, 0 for low risk).
+                - The sanitized text if PII was detected and sanitization is enabled.
+        """
+        sanitized_prompt = data
+        try:
+            analyzer_results = self.analyzer.analyze(
+                text=data.replace("'", " "),
+                language="en",
+                entities=self.default_entities,
+                score_threshold=self.score_thresh,
+            )
+            risk_score = round(
+                (
+                    max(analyzer_result.score for analyzer_result in analyzer_results)
+                    if analyzer_results
+                    else 0.0
+                ),
+                2,
+            )
+            pii_anonymizer = AnonymizerEngine()
+            anonymized_text = pii_anonymizer.anonymize(
+                text=data, analyzer_results=analyzer_results
+            ).text
+            if len(analyzer_results) is not None:
+                predict = "PII detected."
+            else:
+                predict = "NO PII detected."
+            if self._kwargs['sanitize']:
+                sanitized_prompt = anonymized_text
+            else:
+                sanitized_prompt = data
+        except Exception as e:
+            LogUtil.log(LogType.ERROR, LogLevel.ERROR, e)
+            predict = "Error occurred: {}".format(e)
+            risk_score = 1
+        return predict, risk_score, sanitized_prompt
+
+    def format_response(self):
+        self.response["prediction"]["pii_detector"] = self.pred[0]
+        self.response["score"] = 1 - self.pred[1]
+        self.response['sanitized_data'] = self.pred[2]
