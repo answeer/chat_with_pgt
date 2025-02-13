@@ -15,11 +15,12 @@ from llm_sanitation.logging.logging_setup import LogUtil, LogType, LogLevel
 
 class PiiDetector(Scanner):
     """
-    A class to detect and optionally sanitize Personally Identifiable Information (PII) in text data.
+    Detects PII in text and optionally returns raw PII data or sanitizes it.
     """
 
     def __init__(self, **kwargs):
         sanitize = kwargs.get("sanitize", False)
+        self.return_pii_data = kwargs.get("return_pii_data", False)
         super().__init__("pii_detector", 0.5, sanitize=sanitize)
         self.default_entities = []
         self.default_regex_patterns = []
@@ -91,17 +92,18 @@ class PiiDetector(Scanner):
             )
         except Exception as e:
             LogUtil.log(LogType.ERROR, LogLevel.ERROR, f"Failed to initialize analyzer: {e}")
-            raise  # Re-raise to handle initialization failure
+            raise
 
     def predict(self, data):
-        """Detects and sanitizes PII in the input text."""
+        """Detects PII and returns either sanitized text or raw PII data."""
         sanitized_prompt = data
         risk_score = 0.0
         predict_msg = "NO PII detected."
-        
+        pii_data = []
+
         if not self.analyzer:
             return "Analyzer not initialized", 1.0, data
-        
+
         try:
             analyzer_results = self.analyzer.analyze(
                 text=data,
@@ -109,29 +111,46 @@ class PiiDetector(Scanner):
                 entities=self.default_entities,
                 score_threshold=self.score_thresh,
             )
-            
+
             if analyzer_results:
                 predict_msg = "PII detected."
                 risk_score = max(result.score for result in analyzer_results)
                 risk_score = round(risk_score, 2)
-                
-                if self._kwargs.get('sanitize', False):
+
+                # Collect PII data if flag is enabled
+                if self.return_pii_data:
+                    pii_data = [
+                        {
+                            "entity": result.entity_type,
+                            "value": data[result.start:result.end],
+                            "confidence": result.score
+                        }
+                        for result in analyzer_results
+                    ]
+                # Sanitize only if explicitly requested and not returning PII data
+                elif self._kwargs.get('sanitize', False):
                     anonymizer = AnonymizerEngine()
                     sanitized_prompt = anonymizer.anonymize(
                         text=data, analyzer_results=analyzer_results
                     ).text
-            else:
-                sanitized_prompt = data  # No change if no PII
-        
+
         except Exception as e:
             LogUtil.log(LogType.ERROR, LogLevel.ERROR, f"PII detection error: {e}")
             predict_msg = f"Error: {str(e)}"
             risk_score = 1.0
-        
-        return predict_msg, risk_score, sanitized_prompt
+
+        # Prioritize returning PII data over sanitized text
+        if self.return_pii_data:
+            return predict_msg, risk_score, pii_data
+        else:
+            return predict_msg, risk_score, sanitized_prompt
 
     def format_response(self):
-        """Formats the detection results into the response structure."""
+        """Formats results into the response structure."""
         self.response["prediction"]["pii_detector"] = self.pred[0]
         self.response["score"] = 1 - self.pred[1]  # Invert risk to cleanliness score
-        self.response['sanitized_data'] = self.pred[2]
+        
+        if self.return_pii_data:
+            self.response["pii_data"] = self.pred[2]
+        else:
+            self.response["sanitized_data"] = self.pred[2]
