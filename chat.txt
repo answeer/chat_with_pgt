@@ -1,75 +1,67 @@
-Why This Approach Was Chosen
+import fasttext
+from sklearn.base import BaseEstimator, TransformerMixin
+from sklearn.model_selection import GridSearchCV, train_test_split
+from sklearn.metrics import accuracy_score
+import numpy as np
 
-1. Hybrid Detection Methodology
+# 自定义的FastText模型封装为scikit-learn的estimator
+class FastTextEstimator(BaseEstimator, TransformerMixin):
+    def __init__(self, lr=0.1, epoch=25, wordNgrams=2):
+        self.lr = lr
+        self.epoch = epoch
+        self.wordNgrams = wordNgrams
+        self.model = None
 
-Combination of NLP + Regex
-Presidio (the core framework) uses:
-spaCy's NLP models for context-aware entity recognition (e.g., detecting "John" as a name only when it appears in a personal context).
-Custom regex patterns for structured data (e.g., credit card numbers, SSNs).
-Why? Pure regex fails for ambiguous cases (e.g., "May" as a month vs. a name), while pure NLP struggles with structured patterns. A hybrid approach balances precision and recall.
-Context-Aware Validation
-The LemmaContextAwareEnhancer validates matches using surrounding context.
-Example:
-"My SSN is 123-45-6789" → "SSN" in the context boosts the confidence of the number being a valid SSN.
-Why? Reduces false positives by 30-40% compared to basic regex/NLP pipelines.
-2. Customizability
+    def fit(self, X, y):
+        # FastText的输入需要是字符串列表，其中每个字符串是一个样本
+        # 这里假设X已经是这样的格式
+        self.model = fasttext.train_supervised(input=X, lr=self.lr, epoch=self.epoch, wordNgrams=self.wordNgrams)
+        return self
 
-Dynamic Configuration
-Regex patterns and entity types are loaded from pii_detector.yml, allowing updates without code changes.
-Why? Adapt to new PII formats (e.g., country-specific ID numbers) without redeploying the service.
-Threshold Control
-Adjustable score_threshold (0–1) balances strictness:
-Higher (0.8): Fewer false positives, risk of missing valid PII.
-Lower (0.4): More comprehensive detection, risk of false alarms.
-Why? Different use cases require different risk tolerances (e.g., healthcare vs. casual chatbots).
-3. Operational Efficiency
+    def predict(self, X):
+        # 预测逻辑
+        predictions = [self.model.predict(x).split('__')[-1] for x in X]
+        return np.array(predictions)
 
-Lightweight NLP Model
-Uses en_core_web_sm (small spaCy model) instead of heavy transformers.
-Why? Achieves 90% of large-model accuracy with 10x faster inference, critical for real-time systems.
-Selective Sanitization
-Sanitization (AnonymizerEngine) is optional and only runs if explicitly enabled.
-Why? Reduces latency when only detection (not redaction) is needed.
-4. Metrics-Driven Optimization
+    def score(self, X, y):
+        # 评分函数，使用准确率作为评分标准
+        predictions = self.predict(X)
+        return accuracy_score(y, predictions)
 
-Tracked Metrics
-Entity distribution (e.g., 70% emails, 20% phone numbers)
-Confidence scores (identify low-confidence patterns needing improvement)
-Latency (optimize performance bottlenecks)
-Why? Metrics enable continuous model refinement and operational monitoring.
-5. Production-Grade Error Handling
+# 加载数据（这里需要你根据自己的数据集来实现）
+def load_data():
+    # ... 加载数据逻辑 ...
+    # 返回数据和标签
+    return X, y
 
-Graceful degradation on errors (e.g., failed analyzer initialization returns raw text with error flags).
-Isolation of NLP/model loading to prevent system-wide crashes.
-Why? Critical for high-availability systems where partial functionality is better than total failure.
-Technical Tradeoffs Considered
+# 主函数
+def main():
+    X, y = load_data()
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
-Approach	Pros	Cons	Why Chosen?
-Pure Regex	Fast, simple	Fails on unstructured/contextual PII	Rejected: High false positives
-Pure NLP	Context-aware	Poor at structured patterns (e.g., credit cards)	Rejected: Misses key PII types
-Pretrained LLMs	High accuracy	Slow, expensive, overkill	Rejected: Cost/performance tradeoff
-Presidio (Hybrid)	Balances speed/accuracy	Moderate setup complexity	Chosen: Best fit for most use cases
-Key Advantages Over Alternatives
+    # 定义参数网格
+    param_grid = {
+        'lr': [0.01, 0.1, 1],
+        'epoch': [10, 25, 50],
+        'wordNgrams': [1, 2, 3]
+    }
 
-Accuracy
-Achieves 92% F1-score on PII benchmarks (vs. 78% for regex-only).
-Example: Correctly ignores "2024" as a year but flags "2024-01-01" as a date in personal contexts.
-Flexibility
-Add new patterns via YAML (e.g., detect custom employee IDs like ACME-1234).
-Prioritize entities (e.g., treat credit cards as higher risk than dates).
-Transparency
-Returns exact PII spans (positions) and confidence scores.
-Metrics explain why something was flagged (e.g., "PHONE_NUMBER: 555-1234, confidence=0.87").
-Scalability
-Processes 10K characters/second on CPU (vs. 1K/sec for transformer-based models).
-Stateless design allows horizontal scaling.
-When to Use This Approach
+    # 创建FastTextEstimator实例
+    fasttext_estimator = FastTextEstimator()
 
-Ideal for:
-Chatbots, form processing, or log redaction.
-Moderate-to-high compliance requirements (e.g., GDPR, HIPAA).
-Systems needing real-time detection with <100ms latency.
-Not ideal for:
-Extremely low-latency requirements (<10ms).
-Highly unstructured text (e.g., creative writing with heavy PII paraphrasing).
-This methodology was chosen for its balance of accuracy, speed, and maintainability, making it suitable for most enterprise applications while avoiding the complexity/cost of LLM-based solutions.
+    # 使用GridSearchCV进行网格搜索
+    grid_search = GridSearchCV(estimator=fasttext_estimator, param_grid=param_grid, scoring='accuracy', cv=3, n_jobs=-1)
+    grid_search.fit(X_train, y_train)
+
+    # 输出最佳参数和最佳得分
+    print("Best parameters found: ", grid_search.best_params_)
+    print("Best accuracy found: ", grid_search.best_score_)
+
+    # 使用最佳模型进行预测并评估
+    best_model = grid_search.best_estimator_
+    y_pred = best_model.predict(X_test)
+    accuracy = accuracy_score(y_test, y_pred)
+    print("Test accuracy with best model: ", accuracy)
+
+if __name__ == "__main__":
+    main()
