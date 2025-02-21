@@ -1,67 +1,1679 @@
-import fasttext
-from sklearn.base import BaseEstimator, TransformerMixin
-from sklearn.model_selection import GridSearchCV, train_test_split
-from sklearn.metrics import accuracy_score
-import numpy as np
+import ujson as json
+from datetime import datetime
+# import fasttext
+from dataclasses import dataclass, asdict, field
+import base64
+from eureka import prepare_item_data,load_ml_model
+from timeit import default_timer as timer
+import logging
+import traceback
+import oracledb
+import configparser
+from sqlalchemy.exc import ResourceClosedError
+from sqlalchemy.sql import text
+import psycopg2
+import time
+import os
 
-# 自定义的FastText模型封装为scikit-learn的estimator
-class FastTextEstimator(BaseEstimator, TransformerMixin):
-    def __init__(self, lr=0.1, epoch=25, wordNgrams=2):
-        self.lr = lr
-        self.epoch = epoch
-        self.wordNgrams = wordNgrams
-        self.model = None
+# Read configuration from config.ini
+config = configparser.ConfigParser()
+config.read('config.ini')
 
-    def fit(self, X, y):
-        # FastText的输入需要是字符串列表，其中每个字符串是一个样本
-        # 这里假设X已经是这样的格式
-        self.model = fasttext.train_supervised(input=X, lr=self.lr, epoch=self.epoch, wordNgrams=self.wordNgrams)
-        return self
+# username = config['oracle']['username']
+# password = config['oracle']['password']
+# dsn = config['oracle']['dsn']
+# db_schema = config['oracle']['db_schema']
+# redis_prefix = config['redis']['redis_prefix']
 
-    def predict(self, X):
-        # 预测逻辑
-        predictions = [self.model.predict(x).split('__')[-1] for x in X]
-        return np.array(predictions)
+username = "devadmin"
+password = "qbK_y1PS%nLhRJRS1%Q%xyVDE"
+dsn = "dph01swo"
+db_schema = 'db_schema'
+redis_prefix = 'redis_prefix'
 
-    def score(self, X, y):
-        # 评分函数，使用准确率作为评分标准
-        predictions = self.predict(X)
-        return accuracy_score(y, predictions)
 
-# 加载数据（这里需要你根据自己的数据集来实现）
-def load_data():
-    # ... 加载数据逻辑 ...
-    # 返回数据和标签
-    return X, y
+date = datetime.now().strftime("%Y-%m-%d_%H")
+# Create and configure logger
+logging.basicConfig(level=logging.INFO,filename=f"train_mig_{date}.log",
+                    format='%(asctime)s %(message)s',
+                    filemode='a')
 
-# 主函数
-def main():
-    X, y = load_data()
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+                
 
-    # 定义参数网格
-    param_grid = {
-        'lr': [0.01, 0.1, 1],
-        'epoch': [10, 25, 50],
-        'wordNgrams': [1, 2, 3]
+# Creating an object
+log = logging.getLogger(__name__)
+
+# field name translation between squirro -> oracle
+field_mapping = {
+    "productgroup": "product",
+    "productsubgroup": "subproduct",
+    "productname": "productservice",
+    "querytype": "querytype",
+}
+
+@dataclass
+class MLModel:
+    name: str
+    field: str
+    source_project: str
+    training_stats: field(default_factory=dict)
+    accepted_values: field(default_factory=list)
+    ignored_values: field(default_factory=list)
+    skipped_values: field(default_factory=list)
+    aliases: field(default_factory=dict)
+    custom_classifier_steps: field(default_factory=list)
+    multi_value_ranges: field(default_factory=list)
+    published_workflow_ids: field(default_factory=list)
+    include_fields_in_training: field(default_factory=list)
+    profile: str = "default"
+    training_query: str = "dataset:training"
+    validate_query: str = "dataset:test"
+    training_limit: int = -1
+    confidence_limit: int = 70
+    min_word_count: int = 5
+    published_version: int = 0
+    published_workflow_id: str = ""
+    max_version: int = 0
+    validate_values: bool = True
+    counterbalance_values: bool = True
+    punish_low_training_counts: bool = False
+    single_value_lower_limit: int = 0
+    norm_mode: str = "alphanum"
+
+    def create_version(self):
+        self.max_version += 1
+        model_key = get_model_version_key(self.profile, self.name, self.max_version)
+
+        return MLModelVersion(
+            model_key,
+            self.name,
+            self.field,
+            self.max_version,
+            "Offline",
+            self.profile,
+            [],
+            {},
+            {},
+            [],
+            [],
+            [],
+            0,
+            "",
+            0,
+            datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
+        )
+
+@dataclass
+class MLModelVersion:
+    key: str
+    name: str
+    version: int
+    status: str
+    profile: str
+    field: str
+    skipped_values: field(default_factory=list)
+    # training_stats: field(default_factory=dict)
+    # full_data_distribution: field(default_factory=dict)
+    custom_classifier_steps: field(default_factory=list)
+    workflow_ids: field(default_factory=list)
+    fasttext_models: field(default_factory=list)
+    training_time_ms: int = 1
+    workflow_id: str = ""
+    model_size_mb: int = 0
+    created_at: str = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+    log_file: str = ""
+    norm_mode: str = "alphanum"
+    f1_min: float = 0.0
+    f1_max: float = 0.0
+    f1_avg: float = 0.0
+    f1: float = 0.0
+
+
+def main_test():
+    name = "fmo_productname"
+    profile = "default"
+    version = 22
+    resume = "Starting"
+    full_start = timer()
+    # load the model
+    model = load_ml_model(profile, name)
+    # log.info(model)
+    model_version = load_ml_model_version(profile, name, version)
+    # log.info(model_version)
+    activity_prefix = f"Model '{name}' v{model_version.version}"
+
+    # perist these changes
+    # save_ml_model(profile, model)
+    model_version.status = "Training"
+    # save_ml_model_version(profile, model_version)
+
+    if resume:
+        start_string = "Resuming"
+    else:
+        start_string = "Starting"
+
+    try:
+        if resume:
+            log.info("AP: %s", json.dumps(model_version.workflow_ids, indent=2))
+
+        source_project_id = "oracle_db?" # TODO change it later to have better source.. getting it from db always is time taking and stupid
+
+        # first get the lay of land it terms of value distribution
+        full_dist = get_value_distribution(source_project_id, model)
+
+        # remove any unwanted / invalid values
+        dist = validate_values(full_dist, model, model_version)
+        model_version.full_data_distribution = dist
+        log.debug(f"Base value distribution: {json.dumps(dist, indent=2)}")
+        
+        if model_version.version == 1:
+            log.info(
+                "aborting version 1 on purpose with an error, to allow inspection of data distribution."
+            )
+            raise Exception(
+                "aborting v1 on purpose, to allow investigation of data distribution."
+            )
+
+        # # perist these changes
+        # save_ml_model(profile, model)
+        # save_ml_model_version(profile, model_version)
+
+        # track the model size
+        model_size = 0
+
+        log.info("Delete Training data for field %s", model.field)
+        # delete_training_data(squirro_client, env.models_project_id, model.field) #TODO figure out a replacement for this. possibily truncate??
+
+        log.info("Creating New Composite Model Version %i", model_version.version)
+
+        # have a sane default
+        if not model.single_value_lower_limit:
+            model.single_value_lower_limit = 10000
+        model.single_value_lower_limit = 10
+
+        # select the models that qualify as single value models
+        single_value_models = []
+        for c_dict in model_version.full_data_distribution:
+            if c_dict["count"] < 10:
+                log.info(
+                    f'Ignoring {c_dict["value"]}, need at least 25 records to be viable'
+                )
+            elif (
+                model.single_value_lower_limit
+                and c_dict["count"] >= model.single_value_lower_limit
+            ):
+                single_value_models.append(deep_copy(c_dict))
+
+        # next we assemble the multi value models
+        multi_value_models = []
+
+        for lower_limit in model.multi_value_ranges:
+            lower_limit = 5
+            model_ensemble = []
+            for c_dict in model_version.full_data_distribution:
+                count = c_dict["count"]
+                if count < 5:
+                    log.info(
+                        f'Ignoring {c_dict["value"]}, need at least 50 records to be viable'
+                    )
+                elif count < lower_limit:
+                    log.info(
+                        f'Ignoring {c_dict["value"]}, not enough training data for range'
+                    )
+                else:
+                    c_dict["acutal_count"] = int(c_dict["count"])
+                    c_dict["count"] = int(lower_limit)
+                    model_ensemble.append(deep_copy(c_dict))
+
+            if model_ensemble:
+                multi_value_models.append(model_ensemble)
+
+        # log the work done so far
+        log.info("Single class models: %s", json.dumps(single_value_models, indent=2))
+        log.info("Multi class models: %s", json.dumps(multi_value_models, indent=2))
+
+        models_done = 0
+        models_total = len(single_value_models) + len(multi_value_models)
+
+        # train the single value models
+        for entry in single_value_models:
+            models_done += 1
+            activity_prefix = f"Model '{name}' v{model_version.version} [{models_done}/{models_total}]"
+            workflow_name = (
+                f"{model.name}_{model_version.version}_single_{entry['value']}"
+            )
+
+            # only allow alphanumeric char in the model name
+            workflow_name = "".join([c if c.isalnum() else "_" for c in workflow_name])
+
+            if resume:
+                (is_ok, ok_wf_id) = does_ok_workflow_exist(
+                    model_version, workflow_name=workflow_name
+                )
+
+                if is_ok:
+                    log.info(f"{workflow_name} already trained, skipping")
+                    continue
+                elif not is_ok and ok_wf_id:
+                    log.info(
+                        f"{workflow_name} exists with id {ok_wf_id}, but not completed, deleting it"
+                    )
+                    # squirro_client.delete_machinelearning_workflow( #TODO delete already created incomplete models
+                    #     env.models_project_id, ok_wf_id
+                    # )
+                else:
+                    log.info(f"{workflow_name} does not exist yet.")
+            log.info(f'Training single value model for {model.field}:{entry["value"]}')
+
+            value_sub_query = create_field_value_query(entry, model)
+            # log.info("training query %s", model.training_query)
+            # log.info(value_sub_query)
+            # value_query = (
+            #     f"({model.training_query.format(**env.vars)}) AND ({value_sub_query})"
+            # ) #TODO preserved original for later investigation
+
+            value_query = f"""select id, {model.field}, emailbody from sq_mig.sq_mig_cases where productgroup = 'Financial Markets' and {model.field} = '{entry["value"]}'"""
+
+            log.info(value_query)
+
+            stats = index_items_for_value(
+                model,
+                model_version,
+                workflow_name,
+                entry["value"],
+                source_project_id,
+                value_query,
+                entry["count"],
+                activity_prefix,
+            )
+
+            log.info(f"norm --> {stats}")
+            
+
+            stats = index_counter_items_for_value(
+                model,
+                model_version,
+                workflow_name,
+                dist,
+                entry["value"],
+                source_project_id,
+                value_query,
+                stats["ok_count"],
+                activity_prefix,
+            )
+
+            log.info(f"counter --> {stats}")
+
+            # ensure its all nice and even
+            model_stats = level_item_count(
+                squirro_client, env.models_project_id, f'labels:"{workflow_name}"'
+            )
+
+            validate_target_count = int(entry["count"] / 3)
+
+            value_query = (
+                f"({model.validate_query.format(**env.vars)}) AND ({value_sub_query})"
+            )
+
+            stats = index_items_for_value(
+                squirro_client,
+                redis_client,
+                model,
+                model_version,
+                workflow_name,
+                entry["value"],
+                source_project_id,
+                value_query,
+                validate_target_count,
+                activity_prefix,
+                dataset="test",
+            )
+
+            stats = index_counter_items_for_value(
+                squirro_client,
+                redis_client,
+                model,
+                model_version,
+                workflow_name,
+                dist,
+                entry["value"],
+                source_project_id,
+                value_query,
+                validate_target_count,
+                activity_prefix,
+                dataset="test",
+            )
+
+            item_count = 0
+
+            for i_value in model_stats.values():
+                item_count += i_value
+
+    except Exception as e:
+        log.info(
+            "{0} errored during training".format(activity_prefix),
+            # model,
+            # model_version
+        )
+        model_version.status = "Error"
+        # save_ml_model_version(profile, model_version)
+        log.info("error during training")
+        traceback.print_exc()
+    finally:
+        pass
+
+
+# ## Train Model
+# model = fasttext.train_supervised('/opt/sq_mig/models/case_review_action_80_multi_1/fasttext.train', lr=0.2766265334, epoch=13, wordNgrams=5)
+# log.info(model.test('/opt/sq_mig/models/case_review_action_80_multi_1/fasttext.valid'))
+# model.save_model("case_review.bin")
+
+# model.quantize(input='/opt/sq_mig/models/case_review_action_80_multi_1/fasttext.train', retrain=True)
+# model.save_model("case_review.ftz")
+
+
+# ##Predict
+# model = fasttext.load_model("case_review.ftz")
+# labels, scores = model.predict("hello what to do?", k=2)
+# predictions = []
+
+# for index, label in enumerate(labels):
+#     clean_label = label.replace("__label__", "")
+
+#     # recover the label from bas64
+#     clean_label = base64.b64decode(clean_label).decode("utf-8")
+
+#     predictions.append({clean_label: scores[index]})
+
+# log.info(predictions)
+
+# log.info("_____________Prod Pred Below________________")
+
+# model = fasttext.load_model("/opt/sq_mig/models/case_review_action_80_multi_1/fasttext.bin")
+# labels, scores = model.predict("hello what to do?", k=2)
+# predictions = []
+
+# for index, label in enumerate(labels):
+#     clean_label = label.replace("__label__", "")
+
+#     # recover the label from bas64
+#     clean_label = base64.b64decode(clean_label).decode("utf-8")
+
+#     predictions.append({clean_label: scores[index]})
+
+# log.info(predictions)
+
+def save_ml_model_version(profile, model_version, override_environment=None):
+
+    key = get_model_version_key(
+        model_version.profile,
+        model_version.name,
+        model_version.version
+    )
+    is_copy = False
+
+
+    redis_payload = json.dumps(asdict(model_version))
+
+    with open("created_models_metadata.json") as json_file:
+        items = json.load(json_file)
+    items[key] = redis_payload
+    with open("created_models_metadata.json", "a") as f:
+        json.dump(items, f, indent=2)
+
+
+def delete_ml_model_version(profile, model_version, version):
+    with open("created_models_metadata.json") as json_file:
+        items = json.load(json_file)
+    del items[key]
+    with open("created_models_metadata.json", "a") as f:
+        json.dump(items, f, indent=2)
+
+def save_ml_model(profile, model, override_environment=None):
+
+    key = get_model_key(model.profile, model.name)
+    redis_payload = json.dumps(asdict(model))
+
+    log.info(key)
+
+    with open("created_models_metadata.json") as json_file:
+        items = json.load(json_file)
+    items[key] = redis_payload
+    with open("created_models_metadata.json", "a") as f:
+        json.dump(items, f, indent=2)
+
+def get_model_key(profile, name, override_environment=None):
+    return f"{redis_prefix}_{profile}_model_{name}"
+
+
+def delete_ml_model(profile, model):
+    key = get_model_key(model.profile, model.name)
+    with open("created_models_metadata.json") as json_file:
+        items = json.load(json_file)
+    del items[key]
+    with open("created_models_metadata.json", "a") as f:
+        json.dump(items, f, indent=2)
+
+
+def get_model_version_key(profile, name, version, override_environment=None):
+
+    return f"{redis_prefix}_{profile}_modelversion_{name}_v_{version}"
+
+
+def load_ml_model_version(profile, name, version, override_environment=None):
+    
+    key = get_model_version_key(profile, name, version)
+    with open(
+        "created_models_metadata.json", "r"
+    ) as file:
+        data = json.load(file)
+    kwargs = data[key]
+
+    if not kwargs.get("custom_classifier_steps"):
+        kwargs["custom_classifier_steps"] = []
+
+    if not kwargs.get("workflow_ids"):
+        kwargs["workflow_ids"] = []
+
+    if not kwargs.get("fasttext_models"):
+        kwargs["fasttext_models"] = []
+
+    return MLModelVersion(**kwargs)
+
+
+def main(profile, name, version, resume):
+    """
+    The main method. Any exceptions are caught outside of this method and will
+    be handled.
+
+    squirro_client is passed in from the args provided to the script
+    """
+
+    full_start = timer()
+
+    # load the model
+    model = load_ml_model(profile, name)
+    model_version = load_ml_model_version(profile, name, version)
+
+
+    activity_prefix = f"Model '{name}' v{model_version.version}"
+
+    # perist these changes
+    save_ml_model(profile, model)
+    model_version.status = "Training"
+    save_ml_model_version(profile, model_version)
+
+    if resume:
+        start_string = "Resuming"
+    else:
+        start_string = "Starting"
+
+    try:
+        if resume:
+            log.info("AP: %s", json.dumps(model_version.workflow_ids, indent=2))
+
+        source_project_id = "mongodb?" # TODO
+
+        # first get the lay of land it terms of value distribution
+        full_dist = get_value_distribution(source_project_id, model)
+
+        if not source_project_id:
+            log.error("Failed to find source project {model.source_project}")
+            raise Exception(f"Failed to find source project {model.source_project}")
+
+        # remove any unwanted / invalid values
+        dist = validate_values(full_dist, model, model_version)
+        model_version.full_data_distribution = dist
+        log.debug(f"Base value distribution: {json.dumps(dist, indent=2)}")
+
+        if model_version.version == 1:
+            log.info(
+                "aborting version 1 on purpose with an error, to allow inspection of data distribution."
+            )
+            raise Exception(
+                "aborting v1 on purpose, to allow investigation of data distribution."
+            )
+
+        # perist these changes
+        save_ml_model(profile, model)
+        save_ml_model_version(profile, model_version)
+
+        # track the model size
+        model_size = 0
+
+        log.info("Creating New Composite Model Version %i", model_version.version)
+
+        # have a sane default
+        if not model.single_value_lower_limit:
+            model.single_value_lower_limit = 10000
+
+        # select the models that qualify as single value models
+        single_value_models = []
+        for c_dict in model_version.full_data_distribution:
+            if c_dict["count"] < 25:
+                log.info(
+                    f'Ignoring {c_dict["value"]}, need at least 25 records to be viable'
+                )
+            elif (
+                model.single_value_lower_limit
+                and c_dict["count"] >= model.single_value_lower_limit
+            ):
+                single_value_models.append(deep_copy(c_dict))
+
+        # next we assemble the multi value models
+        multi_value_models = []
+
+        for lower_limit in model.multi_value_ranges:
+            model_ensemble = []
+            for c_dict in model_version.full_data_distribution:
+                count = c_dict["count"]
+                if count < 5:
+                    log.info(
+                        f'Ignoring {c_dict["value"]}, need at least 50 records to be viable'
+                    )
+                elif count < lower_limit:
+                    log.info(
+                        f'Ignoring {c_dict["value"]}, not enough training data for range'
+                    )
+                else:
+                    c_dict["acutal_count"] = int(c_dict["count"])
+                    c_dict["count"] = int(lower_limit)
+                    model_ensemble.append(deep_copy(c_dict))
+
+            if model_ensemble:
+                multi_value_models.append(model_ensemble)
+
+        # log the work done so far
+        log.info("Single class models: %s", json.dumps(single_value_models, indent=2))
+        log.info("Multi class models: %s", json.dumps(multi_value_models, indent=2))
+
+        models_done = 0
+        models_total = len(single_value_models) + len(multi_value_models)
+
+        # train the single value models
+        for entry in single_value_models:
+            models_done += 1
+            activity_prefix = f"Model '{name}' v{model_version.version} [{models_done}/{models_total}]"
+            workflow_name = (
+                f"{model.name}_{model_version.version}_single_{entry['value']}"
+            )
+
+            # only allow alphanumeric char in the model name
+            workflow_name = "".join([c if c.isalnum() else "_" for c in workflow_name])
+
+            if resume:
+                (is_ok, ok_wf_id) = does_ok_workflow_exist(
+                    squirro_client, model_version, workflow_name=workflow_name
+                )
+
+                if is_ok:
+                    log.info(f"{workflow_name} already trained, skipping")
+                    continue
+                elif not is_ok and ok_wf_id: #TODO
+                    log.info(
+                        f"{workflow_name} exists with id {ok_wf_id}, but not completed, deleting it"
+                    )
+                    squirro_client.delete_machinelearning_workflow(
+                        env.models_project_id, ok_wf_id
+                    )
+                else:
+                    log.info(f"{workflow_name} does not exist yet.")
+            log.info(f'Training single value model for {model.field}:{entry["value"]}')
+
+            value_sub_query = create_field_value_query(entry, model)
+            value_query = (
+                f"({model.training_query.format(**env.vars)}) AND ({value_sub_query})"
+            )
+
+            log.info(value_query)
+
+            stats = index_items_for_value(
+                squirro_client,
+                redis_client,
+                model,
+                model_version,
+                workflow_name,
+                entry["value"],
+                source_project_id,
+                value_query,
+                entry["count"],
+                activity_prefix,
+            )
+
+            stats = index_counter_items_for_value(
+                squirro_client,
+                redis_client,
+                model,
+                model_version,
+                workflow_name,
+                dist,
+                entry["value"],
+                source_project_id,
+                value_query,
+                stats["ok_count"],
+                activity_prefix,
+            )
+
+            log.info(stats)
+
+            # ensure its all nice and even
+            model_stats = level_item_count(
+                squirro_client, env.models_project_id, f'labels:"{workflow_name}"'
+            )
+
+            validate_target_count = int(entry["count"] / 3)
+
+            value_query = (
+                f"({model.validate_query.format(**env.vars)}) AND ({value_sub_query})"
+            )
+
+            stats = index_items_for_value(
+                squirro_client,
+                redis_client,
+                model,
+                model_version,
+                workflow_name,
+                entry["value"],
+                source_project_id,
+                value_query,
+                validate_target_count,
+                activity_prefix,
+                dataset="test",
+            )
+
+            stats = index_counter_items_for_value(
+                squirro_client,
+                redis_client,
+                model,
+                model_version,
+                workflow_name,
+                dist,
+                entry["value"],
+                source_project_id,
+                value_query,
+                validate_target_count,
+                activity_prefix,
+                dataset="test",
+            )
+
+            item_count = 0
+
+            for i_value in model_stats.values():
+                item_count += i_value
+
+            m_dict = train_workflow(
+                model,
+                model_version,
+                workflow_name,
+                env.models_project_id,
+                squirro_client,
+                redis_client,
+                activity_prefix,
+                item_count,
+            )
+
+            workflow_id = m_dict["workflow_id"]
+
+            m_dict["mode"] = "single_value"
+
+            if not m_dict.get("training_stats"):
+                m_dict["training_stats"] = model_stats
+
+            model_version.workflow_ids.append(m_dict)
+            for value, training_count in model_stats.items():
+                if not model_version.training_stats.get(value):
+                    model_version.training_stats[value] = training_count
+
+            if workflow_id == workflow_name:
+                model_version.fasttext_models.append(workflow_name)
+
+        count = 0
+        for multi_class_model in multi_value_models:
+            models_done += 1
+            activity_prefix = f"Model '{name}' v{model_version.version} [{models_done}/{models_total}]"
+            multi_class_model.reverse()
+            count += 1
+            target_value = multi_class_model[0]["count"]
+            workflow_name = f"{model.name}_{model_version.version}_multi_{count}"
+
+            if args.resume:
+                (is_ok, ok_wf_id) = does_ok_workflow_exist(
+                    squirro_client, model_version, workflow_name=workflow_name
+                )
+
+                if is_ok:
+                    log.info(f"{workflow_name} already trained, skipping")
+                    continue
+                elif not is_ok and ok_wf_id:
+                    log.info(
+                        f"{workflow_name} exists with id {ok_wf_id}, but not completed, deleting it"
+                    )
+                    squirro_client.delete_machinelearning_workflow(
+                        env.models_project_id, ok_wf_id
+                    )
+                else:
+                    log.info(f"{workflow_name} does not exist yet.")
+
+            covered_values = []
+
+            for entry in multi_class_model:
+                value_sub_query = create_field_value_query(entry, model)
+                value_query = f"({model.training_query.format(**env.vars)}) AND ({value_sub_query})"
+                log.info(value_query)
+
+                stats = index_items_for_value(
+                    squirro_client,
+                    redis_client,
+                    model,
+                    model_version,
+                    workflow_name,
+                    entry["value"],
+                    source_project_id,
+                    value_query,
+                    target_value,
+                    activity_prefix,
+                )
+
+                covered_values.append(entry["value"])
+
+                if stats["ok_count"] < target_value:
+                    target_value = stats["ok_count"]
+
+            if model.counterbalance_values:
+                stats = index_counter_items_for_value(
+                    squirro_client,
+                    redis_client,
+                    model,
+                    model_version,
+                    workflow_name,
+                    dist,
+                    covered_values,
+                    source_project_id,
+                    value_query,
+                    stats["ok_count"],
+                    activity_prefix,
+                )
+
+            # ensure its all nice and even
+            model_stats = level_item_count(
+                squirro_client, env.models_project_id, f'labels:"{workflow_name}"'
+            )
+
+            item_count = 0
+
+            for i_value in model_stats.values():
+                item_count += i_value
+
+            # load the validation items
+
+            validate_target_value = int(target_value / 3)
+
+            for entry in multi_class_model:
+                value_sub_query = create_field_value_query(entry, model)
+                value_query = f"({model.validate_query.format(**env.vars)}) AND ({value_sub_query})"
+                log.debug(value_query)
+
+                stats = index_items_for_value(
+                    squirro_client,
+                    redis_client,
+                    model,
+                    model_version,
+                    workflow_name,
+                    entry["value"],
+                    source_project_id,
+                    value_query,
+                    validate_target_value,
+                    activity_prefix,
+                    dataset="test",
+                )
+
+            if model.counterbalance_values:
+                stats = index_counter_items_for_value(
+                    squirro_client,
+                    redis_client,
+                    model,
+                    model_version,
+                    workflow_name,
+                    dist,
+                    covered_values,
+                    source_project_id,
+                    value_query,
+                    validate_target_value,
+                    activity_prefix,
+                    dataset="test",
+                )
+
+            m_dict = train_workflow(
+                model,
+                model_version,
+                workflow_name,
+                env.models_project_id,
+                squirro_client,
+                redis_client,
+                activity_prefix,
+                item_count,
+            )
+
+            workflow_id = m_dict["workflow_id"]
+            m_dict["mode"] = "multi_value"
+
+            if not m_dict.get("training_stats"):
+                m_dict["training_stats"] = model_stats
+
+            model_version.workflow_ids.append(m_dict)
+
+            for value, training_count in model_stats.items():
+                if not model_version.training_stats.get(value):
+                    model_version.training_stats[value] = training_count
+
+            if workflow_id == workflow_name:
+                model_version.fasttext_models.append(workflow_name)
+
+        full_end = timer()
+
+        model_version.training_time_ms = int((full_end - full_start) * 1000)
+        model_version.status = "Offline"
+        model_version.model_size_mb = round(float(model_size / 1024 / 1024), 1)
+
+        # compute the avg,min,max f1 socres
+        f1_scores = []
+        for model_info in model_version.workflow_ids:
+            f1_scores.append(model_info.get("f1_score", 0.0))
+
+        if not f1_scores:
+            model_version.f1_min = 0.0
+            model_version.f1_max = 0.0
+            model_version.f1_avg = 0.0
+        else:
+            model_version.f1_min = round(min(f1_scores), 3)
+            model_version.f1_max = round(max(f1_scores), 3)
+            model_version.f1_avg = round(sum(f1_scores) / len(f1_scores), 3)
+
+        save_ml_model_version(profile, model_version)
+
+        # testing the full model on the test data, collecting the accuracy
+        log.info(
+            f"{activity_prefix} testing the full stacking model...",
+            model,
+            model_version
+        )
+
+        f1 = get_model_f1_score(
+            model,
+            model_version,
+            squirro_client,
+            log_output=False,
+            max_workers=1,
+            limit=5000,
+        )
+
+        model_version.f1 = f1
+        save_ml_model_version(profile, model_version)
+
+        log.info(
+            f"{activity_prefix} completed ",
+            model,
+            model_version
+        )
+    except Exception:
+        log.info(
+            "{0} errored during training".format(activity_prefix),
+            model,
+            model_version
+        )
+        model_version.status = "Error"
+        save_ml_model_version(profile, model_version)
+        log.info("error during training")
+    finally:
+        pass
+
+def get_model_f1_score():
+    #TODO
+    pass
+
+def get_value_distribution(
+    project_id,
+    model,
+    field=None,
+    created_after=None,
+    created_before=None,
+    query=None,
+):
+    """
+    helper function used here and in train.py to get the aggs value distribution of a specific field
+    """
+
+    if field:
+        aggs_field = field
+    else:
+        aggs_field = model.field
+
+    if not query:
+        # query = model.training_query.format(**env.vars) # TODO find a way to use format to expand queries currently stored in env.vars
+        query = model.training_query
+
+    # ret = {"todo":"Get_from_database"} #TODO
+    log.info(f"found field ==> {aggs_field}")
+    dist, total = fetch_val_db(aggs_field)
+    result = []
+
+    for k,v in dist.items():
+        r = {
+            "value": k,
+            "count": v,
+            "percent": round(float(100 / total * v), 3),
+        }
+
+        result.append(r)
+
+    log.info(result)
+
+    return result
+
+def fetch_val_db(field):
+    try:
+        # Establish the connection
+        connection = oracledb.connect(user=username, password=password, dsn=dsn)
+        log.info("Successfully connected to Oracle Database")
+
+        # Create a cursor
+        cursor = connection.cursor()
+        query = f""" select {field}, count({field}) as ct from GEMS87_DATA_SIT.gems_cases_squirro_source where productgroup in ('Financial Markets') and pystatuswork like 'Resolved%' group by {field}
+                    order by ct desc"""
+        # Execute a simple query
+        log.info(query)
+        # cursor.execute(query)
+
+        # Fetch and log.info the results
+        # log.info(cursor.fetchall)
+        # for row in cursor:
+        #     log.info(row)
+        # Close the cursor and connection
+    
+        try:
+                result = cursor.execute(query)
+                unique_values = {}
+                tot = 0
+                if result:
+                    while result:
+                        try:
+                            sql_batch = result.fetchmany(1000)
+                            # log.info(sql_batch)
+                            record_count = 0
+                            for record in sql_batch:
+                                record_count += 1
+                                tot  = tot + int(record[1])
+                                row_dict = {record[0]:record[1]}
+                                unique_values.update(row_dict)
+
+                            if record_count == 0:
+                                break
+
+                        except Exception as e:
+                            traceback.print_exc()
+                            log.info("No more data")
+        finally:
+            cursor.close()
+            connection.close()
+            log.info("Disconnected.")
+            # log.info(unique_values)
+        return unique_values, tot
+
+
+
+    except oracledb.DatabaseError as e:
+        log.info("There was a problem connecting to the database")
+        traceback.print_exc()
+
+def validate_values(dist_dict, model, model_version):
+    """
+    Takes a dict from get_value_distribution andm removes invalid values
+    Handles all the details regarding sql lookups etc
+    """
+    try:
+        # Establish the connection
+        connection = oracledb.connect(user=username, password=password, dsn=dsn)
+        cursor = connection.cursor()
+        log.info("Successfully connected to Oracle Database")
+    except oracledb.DatabaseError as e:
+        log.info("There was a problem connecting to the database")
+        traceback.print_exc()
+
+    # is this a validated field, if so get all known values from oracle
+    accepted_field_values = []
+
+    if model.validate_values:
+        if model.field == "classification":
+            log.info("Retrieving valid field values for classifications")
+            unique_values = set()
+            db_field = "classificationname"
+
+            sql_stmt = "select * FROM {0}.GEMS_CLASSI_SQUIRRO_SOURCE".format(  # nosec
+                db_schema
+            )
+            log.info(
+                "looking up values of db field %s using query %s", db_field, sql_stmt
+            )
+
+            try:
+                result = cursor.execute(sql_stmt)
+                if result:
+                    while result:
+                        try:
+                            sql_batch = result.fetchmany(1000)
+                            record_count = 0
+                            for record in sql_batch:
+                                record_count += 1
+                                row_dict = dict(zip([desc[0] for desc in cursor.description], record))
+                                unique_values.add(row_dict.get(db_field.upper()))
+
+                            if record_count == 0:
+                                break
+
+                        except ResourceClosedError:
+                            log.info("No more data")
+            finally:
+                cursor.close()
+                connection.close()
+                log.info("Disconnected.")
+
+            log.info(
+                "Retrieved %i acceptable values for field %s",
+                len(unique_values),
+                model.field,
+            )
+            accepted_field_values += list(unique_values)
+
+        elif model.field in ["productsubgroup", "productname", "querytype"]:
+            log.info("Retrieving valid field values for the picklist")
+
+            unique_values = set()
+            db_field = field_mapping.get(model.field)
+
+            sql_stmt = "select * FROM {0}.GEMS_PICKLIST_SQUIRRO_SOURCE".format(  # nosec
+                db_schema
+            )
+            log.info(
+                "looking up values of db field %s using query %s", db_field, sql_stmt
+            )
+
+            try:
+                result = cursor.execute(sql_stmt)
+
+                if result:
+                    while result:
+                        try:
+                            sql_batch = result.fetchmany(1000)
+                            # log.info(sql_batch)
+                            record_count = 0
+                            for record in sql_batch:
+                                record_count += 1
+                                # log.info(cursor.description)
+                                row_dict = dict(zip([desc[0] for desc in cursor.description], record))
+                                # log.info(row_dict)
+                                unique_values.add(row_dict.get(db_field.upper()))
+                            if record_count == 0:
+                                break
+
+                        except ResourceClosedError:
+                            log.info("No more data")
+            finally:
+                cursor.close()
+                connection.close()
+                log.info("Disconnected.")
+
+            log.info(
+                "Retrieved %i acceptable values for field %s - %s",
+                len(unique_values),
+                model.field, unique_values
+            )
+            accepted_field_values += list(unique_values)
+
+    # merge aliases
+    if model.aliases:
+        # create a temp dict for easy manipulation
+        t_dict = {}
+        total = 0
+
+        merged_values = []
+        for entry in dist_dict:
+            # log.info("entry: %r", entry)
+            t_dict[entry["value"]] = entry
+            t_dict[entry["value"]]["aliases"] = []
+            total += entry["count"]
+
+        for target_value, source_values in model.aliases.items():
+            log.info(f"processing aliases for {target_value}")
+
+            for source_value in source_values:
+                if t_dict.get(source_value):
+                    log.info(f"Merging {source_value} into {target_value}")
+                    log.info("source: %r target: %r", source_value, target_value)
+                    t_dict[target_value]["aliases"].append(source_value)
+                    t_dict[target_value]["count"] += t_dict[source_value]["count"]
+                    merged_values.append(source_value)
+                else:
+                    log.info(
+                        f"Skipping {source_value} -> {target_value}, no data found."
+                    )
+
+        # recreate the dist_dict format and recalc the percentages
+        dist_dict = []
+        for entry in t_dict.values():
+            if entry["value"] in merged_values:
+                continue
+
+            entry["percent"] = round(float(100 / total * entry["count"]), 2)
+            dist_dict.append(entry)
+
+    log.debug("%s", json.dumps(dist_dict, indent=2))
+
+    # handle the cutoffs and invalid values
+    f_dict = []
+
+    for entry in dist_dict:
+        if entry["value"] in model.ignored_values:
+            model_version.skipped_values.append(entry["value"])
+            log.warn(
+                "ignoring value %s with count %i, known ignored value",
+                entry["value"],
+                entry["count"],
+            )
+            continue
+        elif accepted_field_values and entry["value"] not in accepted_field_values:
+            model_version.skipped_values.append(entry["value"])
+            log.warn(
+                "ignoring value %s with count %i, not in accepted field value list",
+                entry["value"],
+                entry["count"],
+            )
+            continue
+        f_dict.append(entry)
+
+    return f_dict
+
+def create_field_value_query(c_dict_entry, model):
+    """
+    Helper function that runs an entry from the full_data_distribution dict
+    into a sane squirro query secction that handles aliases.
+    """
+
+    field_values = [c_dict_entry["value"]]
+    field_values += c_dict_entry.get("aliases", [])
+    field_query_parts = []
+
+    for field_value in field_values:
+        field_query_parts.append(f'"{model.field}":"{field_value}"')
+
+    query = " OR ".join(field_query_parts)
+
+    log.info(f"field value query: {query}")
+
+    return query
+
+def deep_copy(obj):
+    return json.loads(json.dumps(obj))
+
+
+def does_ok_workflow_exist(
+    model_version, workflow_name=None, workflow_id=None
+):
+    """
+    Takes a workflow_name or workflow_id and check if this model exists in the ml service and is in good state
+    """
+    assert workflow_name or workflow_id, "workflow_id or workflow_name is required"
+    log.info(workflow_name)
+    log.info(workflow_id)
+
+    # get all ids and names from the model version
+    wf_ids = []
+    wf_names = []
+    wf_name_to_id = {}
+
+    for wf in model_version.workflow_ids:
+        wf_ids.append(wf["workflow_id"])
+        wf_names.append(wf["workflow_name"])
+        wf_name_to_id[wf["workflow_name"]] = wf["workflow_id"]
+
+    is_known = False
+
+    if workflow_id and workflow_id in wf_ids:
+        log.info(f"- workflow id {workflow_id} is known in model_version")
+        is_known = True
+
+    elif workflow_name and workflow_name in wf_names:
+        log.info(f"- workflow name {workflow_name} is known in model_version")
+        workflow_id = wf_name_to_id.get(workflow_name)
+        is_known = True
+
+    # if not is_known:
+    #     # look trough all workflows and try to find it by name
+    #     all_workflows = squirro_client.get_machinelearning_workflows(
+    #         env.models_project_id
+    #     )
+
+    #     for ml_wf in all_workflows["machinelearning_workflows"]:
+    #         if ml_wf["name"] == workflow_name:
+    #             workflow_id = ml_wf["id"]
+    #             is_known = True
+
+    # if is_known:
+    #     # lets get its job and see what its status us
+    #     ml_jobs = squirro_client.get_machinelearning_jobs(
+    #         env.models_project_id, workflow_id
+    #     )
+    #     log.info(json.dumps(ml_jobs, indent=2))
+    #     for ml_job in ml_jobs["machinelearning_jobs"]:
+    #         if ml_job["type"] == "training":
+    #             if ml_job["status"] == "complete":
+    #                 return (True, workflow_id)
+
+    # no job found
+    return (False, workflow_id)
+
+
+def index_items_for_value(
+    model,
+    model_version,
+    workflow_name,
+    value,
+    source_project_id,
+    query,
+    target_count,
+    activity_prefix,
+    value_override_string=None,
+    dataset="training",
+):
+    """
+    Helper function that indexes all items for a value
+    """
+
+    model.norm_mode = "unicode"
+    model_version.norm_mode = "unicode"
+    log.info(f"Model normalisation mode is: {model_version.norm_mode}")
+
+    total_count = 0
+
+    skip_reasons = {
+        "no incoming emails": 0,
+        "no case id": 0,
+        "no subject": 0,
+        "no body": 0,
+        "too short": 0,
+        "missing email archive": 0,
+        "empty emailbodyclob": 0,
     }
 
-    # 创建FastTextEstimator实例
-    fasttext_estimator = FastTextEstimator()
+    # enfore training limit
+    if target_count < model.training_limit:
+        actual_target_count = target_count
+    else:
+        log.info(f"Lowering training count to training limit of {model.training_limit}")
+        actual_target_count = model.training_limit
 
-    # 使用GridSearchCV进行网格搜索
-    grid_search = GridSearchCV(estimator=fasttext_estimator, param_grid=param_grid, scoring='accuracy', cv=3, n_jobs=-1)
-    grid_search.fit(X_train, y_train)
+    if value_override_string:
+        log.info(
+            f'{activity_prefix} Indexing {actual_target_count} items for {model.name} {model.field}:"{value}" as {value_override_string}',
+            model,
+            model_version,
+        )
+    else:
+        log.info(
+            f'{activity_prefix} Indexing {actual_target_count} items for {model.name} {model.field}:"{value}"',
+            model,
+            model_version,
+        )
 
-    # 输出最佳参数和最佳得分
-    print("Best parameters found: ", grid_search.best_params_)
-    print("Best accuracy found: ", grid_search.best_score_)
+    # uploader = ItemUploader(
+    #     project_id=project_id,
+    #     source_name=model.name,
+    #     version=model_version.version
+    # )
+    # log.info(f"uploader ==> {uploader}") TODO have created an json file for now to store training data. in future needs to be moved to  a better source
 
-    # 使用最佳模型进行预测并评估
-    best_model = grid_search.best_estimator_
-    y_pred = best_model.predict(X_test)
-    accuracy = accuracy_score(y_test, y_pred)
-    print("Test accuracy with best model: ", accuracy)
+    index_batch = []
+    item_count = 0
+    ok_count = 0
+    labels = [workflow_name]
+    retry_count = 0
+
+    # set the right value for aliases
+
+    if not value_override_string:
+        # if aliases are present, enforce this value
+        if model.aliases.get(value):
+            value_override_string = value
+
+
+    if actual_target_count < 1000:
+        query_count = actual_target_count + 100
+    else:
+        query_count = 1000
+
+    while retry_count < 5:
+        try:
+            log.info(f"retry_count {retry_count}")
+            # for item in query_scan(
+            #     client=squirro_client,
+            #     sort_field="$item_created_at",
+            #     sort_string="sort:date:desc",
+            #     project_id=source_project_id,
+            #     query=query,
+            #     count=query_count,
+            #     scroll=scroll,
+            #     fields=["title", "created_at", "keywords", "body"],
+            #     highlight={"query": False},
+            #     child_count=0,
+            #     preserve_order=True,
+            # ):
+            params = read_pg_config()
+
+            # Connect to the PostgreSQL server
+            conn = psycopg2.connect(**params)
+            
+            # Create a cursor
+            cur = conn.cursor()            
+            # Execute a query
+            cur.execute(query)
+            
+            while True:
+                # Fetch rows in batches
+                rows = cur.fetchmany(query_count)
+                colnames = [desc[0] for desc in cur.description]
+                colnames = ["body" if x=="emailbody" else x for x in colnames]
+                if not rows:
+                    break
+                
+                # Process each row
+                for row in rows:
+                    item_count += 1
+                    item = dict(zip(colnames, row))
+                    log.info(item)
+
+                    clean_data = prepare_item_data(
+                        item["id"],
+                        item.get("title", ""),
+                        item.get("body", ""),
+                        item.get("keywords"),
+                        # model.include_fields_in_training,#TODO commented out and sent black values for now. will not be issue in prod because prod env has originatingemailid
+                        [],
+                        model_version.norm_mode,
+                    )
+
+                    item["body"] = clean_data
+
+                    if "/" in item.get("body", ""):
+                        log.error("bad outcome %s", json.dumps(item, indent=2))
+                        quit(1)
+
+                    kw_value = item.get(model.field)
+
+                    if value_override_string:
+                        label = [value_override_string]
+                    else:
+                        label = [kw_value]
+
+                    if filter_bad_items(item, model, skip_reasons):
+                        log.info("bad item, continue")
+                        # continue
+
+                    new_item = {
+                        "id": f"{item['id']}_{model.name}_{workflow_name}",
+                        "title": "title for FM email}",
+                        "body": item["body"],
+                        "created_at": item.get("created_at", datetime.now().strftime("%Y-%m-%dT%H:%M:%S")),
+                        "keywords": {
+                            "dataset": [dataset],
+                            "labels": labels,
+                            "label": label,
+                            "item_type": ["training_data"],
+                        },
+                    }
+
+                    if item.get("originatingemailid"):
+                        new_item["keywords"]["originatingemailid"] = [
+                            kw["originatingemailid"][0]
+                        ]
+
+                    index_batch.append(new_item)
+                    # log.info(json.dumps(new_item,indent = 2))
+                    ok_count += 1
+                    if len(index_batch) == 1000:
+                        log.debug("Uploading batch of 1000")
+                        create_json_file(source_project_id, model.name, model_version.version, index_batch)
+                        index_batch = []
+
+                        log.info(
+                            f"{activity_prefix} Indexed {ok_count}/{actual_target_count} items for {dataset} -> {model.field}:{value}"
+                        )
+
+                    if ok_count >= actual_target_count:
+                        log.info(f"Reached target count of {actual_target_count}")
+                        break
+
+            # if we reach this point we're done
+            log.info(f"collected {ok_count} ok items")
+            break
+            # Close the cursor and connection
+            cur.close()
+            conn.close()
+        except Exception as e:
+            log.warn(e)
+            if not item_count:
+                log.warning(
+                    "Got a error with scan, backing off for 1 seconds and retry"
+                )
+                time.sleep(1)
+                retry_count += 1
+            else:
+                raise e
+
+    if retry_count and not item_count:
+        raise Exception("Failed to retriee any items, aborting")
+
+    if index_batch:
+        log.info(f"Uploading remaining {len(index_batch)} items")
+        create_json_file(source_project_id, model.name, model_version.version, index_batch,"a")
+        total_count += ok_count
+        index_batch = []
+
+    log.info(f"Completed indexing training data for {model.name} {model.field}:{value}")
+
+    log.info(f"- Items seen: {item_count}")
+    log.info(f"- Items indexed: {ok_count}")
+
+    return {
+        "ok_count": ok_count,
+        "item_count": item_count,
+        "skip_reasons": skip_reasons,
+    }
+
+
+def index_counter_items_for_value(
+    model,
+    model_version,
+    workflow_name,
+    value_distribution_dict,
+    value,
+    source_project_id,
+    query,
+    target_count,
+    activity_prefix,
+    dataset="training",
+):
+    """
+    Helper function that indexes all counter balance items for a value
+    """
+
+    # TODO need to correctly assemble stats
+    overall_stats = {"ok_count": 0, "item_count": 0, "skip_reasons": {}}
+
+    log.info(f"Counter balance {model.field}:{value} with up to {target_count} items")
+
+    if not target_count or target_count < 10:
+        log.info("Not enough data for an effective counter balance")
+        return overall_stats
+
+    if isinstance(value, list):
+        target_values = value
+        label_value = "__not_any"
+    else:
+        target_values = [value]
+        label_value = f"__not_{value}"
+
+    log.info(f"Pre target values ==> {target_values}")
+
+    # first get the target values config to access the aliases
+    for c_dict in value_distribution_dict:
+        if c_dict["value"] in target_values:
+            aliases = c_dict.get("aliases", [])
+            if aliases:
+                target_values += aliases
+
+    # dedup, just in case
+    target_values = list(set(target_values))
+    counter_values = []
+
+    log.info(f"Post target values ==> {target_values}")
+    log.info(value_distribution_dict)
+
+
+    for c_dict in value_distribution_dict:
+        if c_dict["value"] not in target_values and c_dict["count"] > 4:
+            counter_values.append(c_dict["value"])
+            aliases = c_dict.get("aliases")
+            if aliases:
+                counter_values += aliases
+
+    if not counter_values:
+        log.info("No values found that can be use for a counter balance")
+        return overall_stats
+
+    counter_values.reverse()
+
+    log.debug(
+        "using these counter balance values: %s",
+        json.dumps(counter_values, indent=2),
+    )
+
+    if len(counter_values) and target_count:
+        avg_counter_count = int(target_count / len(counter_values))
+
+    log.info(
+        f"Building counter balance with an avg of {avg_counter_count} docs and {len(counter_values)} values"
+    )
+
+    counter_total_count = 0
+    seen_values = 0
+
+    for counter_value in counter_values:
+        if dataset == "training":
+            # value_query = f'({model.training_query.format(**env.vars)}) AND {model.field}:"{counter_value}"'
+            value_query = f"""select id, {model.field}, emailbody from sq_mig.sq_mig_cases where productgroup = 'Financial Markets' and {model.field} = '{counter_value}'"""
+
+        elif dataset == "test":
+            # value_query = f'({model.validate_query.format(**env.vars)}) AND {model.field}:"{counter_value}"'
+            value_query = f"""select id, {model.field}, emailbody from sq_mig.sq_mig_cases where productgroup = 'Financial Markets' and {model.field} = '{counter_value}'"""
+
+        stats = index_items_for_value(
+            model,
+            model_version,
+            workflow_name,
+            counter_value,
+            source_project_id,
+            value_query,
+            avg_counter_count,
+            activity_prefix,
+            value_override_string=label_value,
+            dataset=dataset,
+        )
+
+        counter_total_count += stats["ok_count"]
+
+        overall_stats["ok_count"] += stats["ok_count"]
+        overall_stats["item_count"] += stats["item_count"]
+
+        seen_values += 1
+        remaining_values = len(counter_values) - seen_values
+
+        if remaining_values:
+            avg_counter_count = int(
+                (target_count - counter_total_count) / remaining_values
+            )
+            log.info(f"Adjusting the avg counter count to {avg_counter_count}")
+
+    log.info(
+        f"Indexed {counter_total_count} counter balance items for {model.field}:{value} as {label_value}"
+    )
+
+    return overall_stats
+
+def filter_bad_items(item, model, skip_reasons):
+    if not item.get("title"):
+        skip_reasons["no subject"] += 1
+        return True
+
+    if not item.get("body"):
+        skip_reasons["no body"] += 1
+        return True
+
+    if item.get("body") == "no incoming emails":
+        skip_reasons["no incoming emails"] += 1
+        return True
+
+    if item.get("body") == "no case id":
+        skip_reasons["no case id"] += 1
+        return True
+
+    if "Email archive file is missing" in item.get("body"):
+        skip_reasons["missing email archive"] += 1
+        return True
+
+    if "No item body in archive" in item.get("body"):
+        skip_reasons["empty emailbodyclob"] += 1
+        return True
+
+    # check min word count
+    word_count = len(item["body"].split())
+
+    if word_count < model.min_word_count:
+        skip_reasons["too short"] += 1
+        return True
+
+    return False
+
+def create_json_file(project_id, model_name, model_version, data, mode='w'):
+    # Create the directory if it doesn't exist
+    directory = "model_training_data"
+    if not os.path.exists(directory):
+        os.makedirs(directory)
+    
+    # Create a unique filename using the parameters
+    filename = f"{project_id}_{model_name}_{model_version}.json"
+    filepath = os.path.join(directory, filename)
+    
+    # Write the data to the JSON file
+    with open(filepath, mode) as json_file:
+        json.dump(data, json_file, indent=4)
+    
+    log.info(f"JSON file created at: {filepath}")
+
+def read_pg_config(filename='config.ini', section='postgresql'):
+    # Create a parser
+    parser = configparser.ConfigParser()
+    # Read config file
+    parser.read(filename)
+
+    # Get section, default to postgresql
+    db = {}
+    if parser.has_section(section):
+        params = parser.items(section)
+        for param in params:
+            db[param[0]] = param[1]
+    else:
+        raise Exception(f'Section {section} not found in the {filename} file')
+
+    return db
 
 if __name__ == "__main__":
-    main()
+    main_test()
