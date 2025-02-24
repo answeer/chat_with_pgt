@@ -1,36 +1,185 @@
-The prepare_item_data function is a utility designed to preprocess and normalize input data (text, HTML, etc.) for machine learning tasks (both training and inference). Here's a breakdown of what it does:
-Key Steps:
+import os
+import traceback
+import mimetypes
+import time
+import json
+import psutil
+import numpy as np
+import matplotlib.pyplot as plt
+from llm_sanitation.utils.callback import Callback
+from llm_sanitation.utils.checks import Checks
+from llm_sanitation.utils.error_codes import ERROR_CODE_DICT
+from llm_sanitation.logging.logging_setup import LogUtil, LogType, LogLevel
 
-Data Truncation:
-Checks if the input data exceeds 102,400 bytes (100KB). If so, truncates it to the first 100KB to avoid processing overly large inputs.
-Keyword Handling:
-Extracts values from the keywords dictionary for keys specified in prepend_keywords.
-Appends the first value of each keyword (if it exists) to the cleaned content. These keywords are cleaned in "email" mode (replaces @ and . with underscores).
-Title Cleaning:
-Cleans the title using clean_text with the specified norm_mode (e.g., removing special characters, normalizing whitespace).
-HTML/Data Cleaning:
-Cleans the data (assumed to be HTML) using clean_html, which:
-Removes unwanted HTML tags (e.g., <script>, <style>).
-Applies text normalization based on norm_mode.
-Combining Parts:
-Joins the cleaned keyword values, title, and data into a single normalized string (clean_data).
-Cleaning Modes (norm_mode):
+class Action:
+    def __init__(self, default_scanner_path, async_mode=False, **kwargs):
+        """
+        :param default_scanner_path: Path to the default scanners configuration
+        :param async_mode: Boolean flag to enable asynchronous execution (default is False)
+        :param kwargs: Other keyword arguments
+        """
+        LogUtil.log(LogType.TRANSACTION, LogLevel.INFO, "Running Initialized")
+        self.response = Callback(**kwargs)
+        self.check = Checks(self.response)
+        self.kwargs = kwargs
+        self.combined_result = []
+        self.nstp_result = []
+        self.default_scanners = self.load_default_scanners(default_scanner_path)  # Load JSON config
+        self.async_mode = async_mode  # Store the async flag
 
-The function uses different text normalization strategies:
-"alpha": Keeps only alphabetic characters and spaces, removes URLs/emails, converts to lowercase.
-"alphanum": Keeps alphanumeric characters, removes stopwords, normalizes whitespace.
-"unicode": Handles Unicode characters, replaces special symbols with underscores, splits compound words.
-"email": Replaces @ and . with underscores (used for keyword cleaning).
-Purpose:
+    @staticmethod
+    def load_default_scanners(config_path):
+        """Loads default scanner configurations from a JSON file."""
+        try:
+            with open(config_path, "r") as file:
+                return json.load(file)
+        except Exception as e:
+            LogUtil.log(LogType.ERROR, LogLevel.ERROR, f"Error loading default scanners: {e}")
+            return {}
 
-Standardization: Ensures input data (text/HTML) is in a consistent format for machine learning models.
-Noise Reduction: Removes irrelevant content (HTML tags, special characters, stopwords).
-Size Control: Truncates large inputs to avoid computational overhead.
-Example Use Case:
+    def determine_task_group(self,data):
+        """Determines the task group based on the input data type."""
+        if isinstance(data, str):
+            # Check if the data is a filepath
+            if os.path.isfile(data):
+                # Determine the MIME type
+                mime_type, _ = mimetypes.guess_type(data)
+                if mime_type and mime_type.startswith('image'):
+                    return 'image_bounding'  # Image files
+                else:
+                    return 'file_bounding'  # All other file types
+            else:
+                # Plain string, not a filepath
+                return 'text_bounding'
+        elif isinstance(data, (int, float)):
+            # If data is numeric
+            return 'numeric_bounding'
+        else:
+            raise ValueError("Unsupported data type for task group determination.")
+        
+    def merge_execution_plan(self, task_group, execution_plan):
+        """Merge default scanners with additional execution plan."""
+        default_plan = self.default_scanners.get(task_group, {})
+        return {**default_plan, **execution_plan}  # Default scanners take precedence
 
-If you have a webpage (HTML data) with a title and keywords, this function:
-Truncates the HTML if too large.
-Extracts and cleans keywords.
-Cleans the title and HTML content.
-Combines everything into a normalized string for the model.
-This is useful for tasks like text classification, search relevance, or NLP pipelines.
+
+    def run_scanner(self, data, scanner_nm, param, **kwargs):
+        """Dynamically imports and runs the specified scanner with provided parameters."""
+        try:
+            scanners = __import__("llm_sanitation.scanners", fromlist=[scanner_nm])
+            scanner = getattr(scanners, scanner_nm)
+            scanner_obj = scanner(**param)
+            result = scanner_obj.validate(data, **self.kwargs)
+            self.combined_result.append(result)
+            self.nstp_result.append(result.get("NSTP"))
+            return result
+        except (ImportError, AttributeError) as e:
+            error_code = "FRDIOS9000"
+            error_message = ERROR_CODE_DICT[error_code].format(str(e))
+            self.response.form_response(error_code, error_message)
+            LogUtil.log(LogType.ERROR, LogLevel.ERROR, "Running ended with error", jid=self.kwargs['job_id'], error=error_message)
+            return None
+
+    def get_result(self):
+        """Returns all combined results from the scanners."""
+        return self.combined_result
+
+    def get_nstp_result(self):
+        """Returns NSTP results from each scanner."""
+        return self.nstp_result
+
+    def run_action(self, execution_plan, data, save_path):
+        """Executes the scanning process based on the provided execution plan and scanner type."""
+        try:
+            error_code = ""
+            error_message = ""
+            job_id = self.kwargs['job_id']
+            task_group = self.determine_task_group(data)
+            self.kwargs['task_group'] = task_group
+            execution_plan = self.merge_execution_plan(task_group, execution_plan)
+
+            # Run pre-check based on task group
+            if task_group == "file_bounding":
+                self.check.file_exists(data)
+            elif task_group == "image_bounding":
+                self.check.check_image(data)
+            elif task_group == "text_bounding":
+                self.check.check_text(data)
+            elif task_group == "numeric_bounding":
+                self.check.check_payload(data)
+            else:
+                error_code = "FRDIOS0006"
+                error_message = ERROR_CODE_DICT[error_code].format(str(task_group))
+                LogUtil.log(LogType.ERROR, LogLevel.ERROR, "Running ended with error", jid=job_id, error=error_message)
+                return None, error_code, error_message
+            
+            if self.response.status == "failed":
+                error_code = self.response.error_code
+                error_message = self.response.error_message
+                LogUtil.log(LogType.ERROR, LogLevel.ERROR, "Running ended with error", jid=job_id, error=error_message)
+                return None, error_code, error_message
+            
+            for scanner_nm, param in execution_plan.items():
+                result = self.run_scanner(data, scanner_nm, param, **kwargs)
+                data = (
+                    data if result["sanitized_data"] is None else result["sanitized_data"]
+                )
+                
+                if self.response.status == "failed":
+                    error_code = self.response.error_code
+                    error_message = self.response.error_message
+                    LogUtil.log(LogType.ERROR, LogLevel.ERROR, "Running ended with error", jid=job_id, error=error_message)
+                    return None, error_code, error_message
+                
+            return self.combined_result,error_code,error_message
+
+        except Exception as e:
+            LogUtil.log(LogType.ERROR, LogLevel.ERROR, "Running ended with error", jid=job_id, error=str(e))
+            LogUtil.log(LogType.ERROR, LogLevel.ERROR, traceback.format_exc())
+            error_code = "FRDIOS9000"
+            error_message = ERROR_CODE_DICT[error_code].format(str(e))
+            return None, error_code, error_message
+        
+        finally:
+            if save_path:
+                response_json_path = os.path.join(save_path, task_group + "_response.json")
+                self.response.save_results(combined_result=self.combined_result)
+                self.response.return_response(response_json_path, error_code, error_message)
+
+if __name__ == "__main__":
+    payload = {
+            "job_params": {
+                "jobid": "JID-54ca58ba-c495-11ed-b20c-0a586e830578",
+                "task_id": "TID-54ca58ba-c495-11ed-b20c-0a586e830578",
+                "app_name": "synthesizer",
+                "use_case": "aadhar_redact",
+                "save_path": r"C:\Users\1657820\Desktop\51433-swoosh-io-bounding",
+            },
+            "service_params": {
+                "callback_url": "http://service-swoosh-orchestrator.swoosh-dev.svc.cluster.local:8889/api/v1/callback",
+                "job_object": {
+                    "io": "i",
+                    "policy_id": "policy_00001",
+                    "data": "what are you doing",
+                    "execution_plan": {}
+                }
+            }
+        }
+
+    kwargs = {
+        "job_id": payload["job_params"].get("jobid", "NA"),
+        "task_id": payload["job_params"].get("task_id", "NA"),
+        "use_case": payload["job_params"].get("use_case", "NA"),
+        "io": payload["service_params"]["job_object"].get("io", "NA"),
+        "policy_id": payload["service_params"]["job_object"].get("policy_id", "NA"),
+    }
+    default_scanner_path = "llm_sanitation\configs\default_scanners.json"
+    action_obj = Action(default_scanner_path, **kwargs)
+
+    result, error_code, error_message = action_obj.run_action(
+        payload["service_params"]["job_object"]["execution_plan"],
+        payload["service_params"]["job_object"]["data"],
+        payload["job_params"]["save_path"]
+    )
+    print("Action completed")
+    print(result)
