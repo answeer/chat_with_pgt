@@ -1,185 +1,105 @@
-import os
-import traceback
-import mimetypes
+from neo4j import GraphDatabase, basic_auth
+from neo4j.exceptions import Neo4jError
 import time
-import json
-import psutil
-import numpy as np
-import matplotlib.pyplot as plt
-from llm_sanitation.utils.callback import Callback
-from llm_sanitation.utils.checks import Checks
-from llm_sanitation.utils.error_codes import ERROR_CODE_DICT
-from llm_sanitation.logging.logging_setup import LogUtil, LogType, LogLevel
+from typing import List, Dict
 
-class Action:
-    def __init__(self, default_scanner_path, async_mode=False, **kwargs):
-        """
-        :param default_scanner_path: Path to the default scanners configuration
-        :param async_mode: Boolean flag to enable asynchronous execution (default is False)
-        :param kwargs: Other keyword arguments
-        """
-        LogUtil.log(LogType.TRANSACTION, LogLevel.INFO, "Running Initialized")
-        self.response = Callback(**kwargs)
-        self.check = Checks(self.response)
-        self.kwargs = kwargs
-        self.combined_result = []
-        self.nstp_result = []
-        self.default_scanners = self.load_default_scanners(default_scanner_path)  # Load JSON config
-        self.async_mode = async_mode  # Store the async flag
-
-    @staticmethod
-    def load_default_scanners(config_path):
-        """Loads default scanner configurations from a JSON file."""
-        try:
-            with open(config_path, "r") as file:
-                return json.load(file)
-        except Exception as e:
-            LogUtil.log(LogType.ERROR, LogLevel.ERROR, f"Error loading default scanners: {e}")
-            return {}
-
-    def determine_task_group(self,data):
-        """Determines the task group based on the input data type."""
-        if isinstance(data, str):
-            # Check if the data is a filepath
-            if os.path.isfile(data):
-                # Determine the MIME type
-                mime_type, _ = mimetypes.guess_type(data)
-                if mime_type and mime_type.startswith('image'):
-                    return 'image_bounding'  # Image files
-                else:
-                    return 'file_bounding'  # All other file types
-            else:
-                # Plain string, not a filepath
-                return 'text_bounding'
-        elif isinstance(data, (int, float)):
-            # If data is numeric
-            return 'numeric_bounding'
-        else:
-            raise ValueError("Unsupported data type for task group determination.")
+class Neo4jDataLoader:
+    def __init__(self, uri: str, user: str, password: str, batch_size: int = 1000):
+        self.driver = GraphDatabase.driver(uri, auth=basic_auth(user, password))
+        self.batch_size = batch_size
         
-    def merge_execution_plan(self, task_group, execution_plan):
-        """Merge default scanners with additional execution plan."""
-        default_plan = self.default_scanners.get(task_group, {})
-        return {**default_plan, **execution_plan}  # Default scanners take precedence
+    def __enter__(self):
+        return self
 
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.driver.close()
 
-    def run_scanner(self, data, scanner_nm, param, **kwargs):
-        """Dynamically imports and runs the specified scanner with provided parameters."""
+    def load_data(self, file_path: str):
+        """主数据加载方法"""
+        with open(file_path, 'r') as f:
+            batch = []
+            for line in f:
+                parsed = self._parse_line(line.strip())
+                if parsed and not self._is_self_loop(parsed):
+                    batch.append(parsed)
+                    
+                if len(batch) >= self.batch_size:
+                    self._process_batch(batch)
+                    batch = []
+            
+            if batch:  # 处理剩余数据
+                self._process_batch(batch)
+
+    def _parse_line(self, line: str) -> Dict:
+        """解析数据行（根据实际数据格式修改）"""
         try:
-            scanners = __import__("llm_sanitation.scanners", fromlist=[scanner_nm])
-            scanner = getattr(scanners, scanner_nm)
-            scanner_obj = scanner(**param)
-            result = scanner_obj.validate(data, **self.kwargs)
-            self.combined_result.append(result)
-            self.nstp_result.append(result.get("NSTP"))
-            return result
-        except (ImportError, AttributeError) as e:
-            error_code = "FRDIOS9000"
-            error_message = ERROR_CODE_DICT[error_code].format(str(e))
-            self.response.form_response(error_code, error_message)
-            LogUtil.log(LogType.ERROR, LogLevel.ERROR, "Running ended with error", jid=self.kwargs['job_id'], error=error_message)
+            # 示例数据格式: FromLabel|FromID|FromName|RelType|ToLabel|ToID|ToName
+            parts = line.split('|')
+            return {
+                "from_label": parts[0],
+                "from_id": parts[1],
+                "from_name": parts[2],
+                "rel_type": parts[3],
+                "to_label": parts[4],
+                "to_id": parts[5],
+                "to_name": parts[6]
+            }
+        except Exception as e:
+            print(f"数据解析失败: {line} - {str(e)}")
             return None
 
-    def get_result(self):
-        """Returns all combined results from the scanners."""
-        return self.combined_result
+    def _is_self_loop(self, data: Dict) -> bool:
+        """自环检测逻辑"""
+        return (
+            data["from_id"] == data["to_id"] and 
+            data["from_label"] == data["to_label"]
+        )
 
-    def get_nstp_result(self):
-        """Returns NSTP results from each scanner."""
-        return self.nstp_result
+    def _process_batch(self, batch: List[Dict], max_retries: int = 3):
+        """处理批次数据（带重试机制）"""
+        for attempt in range(max_retries):
+            try:
+                with self.driver.session() as session:
+                    session.execute_write(self._create_relationships, batch)
+                print(f"成功导入批次: {len(batch)} 条关系")
+                return
+            except Neo4jError as e:
+                print(f"批次导入失败（尝试 {attempt+1}/{max_retries}）: {str(e)}")
+                time.sleep(2 ​** attempt)  # 指数退避
+        print(f"无法导入批次，已跳过 {len(batch)} 条数据")
 
-    def run_action(self, execution_plan, data, save_path):
-        """Executes the scanning process based on the provided execution plan and scanner type."""
-        try:
-            error_code = ""
-            error_message = ""
-            job_id = self.kwargs['job_id']
-            task_group = self.determine_task_group(data)
-            self.kwargs['task_group'] = task_group
-            execution_plan = self.merge_execution_plan(task_group, execution_plan)
-
-            # Run pre-check based on task group
-            if task_group == "file_bounding":
-                self.check.file_exists(data)
-            elif task_group == "image_bounding":
-                self.check.check_image(data)
-            elif task_group == "text_bounding":
-                self.check.check_text(data)
-            elif task_group == "numeric_bounding":
-                self.check.check_payload(data)
-            else:
-                error_code = "FRDIOS0006"
-                error_message = ERROR_CODE_DICT[error_code].format(str(task_group))
-                LogUtil.log(LogType.ERROR, LogLevel.ERROR, "Running ended with error", jid=job_id, error=error_message)
-                return None, error_code, error_message
-            
-            if self.response.status == "failed":
-                error_code = self.response.error_code
-                error_message = self.response.error_message
-                LogUtil.log(LogType.ERROR, LogLevel.ERROR, "Running ended with error", jid=job_id, error=error_message)
-                return None, error_code, error_message
-            
-            for scanner_nm, param in execution_plan.items():
-                result = self.run_scanner(data, scanner_nm, param, **kwargs)
-                data = (
-                    data if result["sanitized_data"] is None else result["sanitized_data"]
-                )
-                
-                if self.response.status == "failed":
-                    error_code = self.response.error_code
-                    error_message = self.response.error_message
-                    LogUtil.log(LogType.ERROR, LogLevel.ERROR, "Running ended with error", jid=job_id, error=error_message)
-                    return None, error_code, error_message
-                
-            return self.combined_result,error_code,error_message
-
-        except Exception as e:
-            LogUtil.log(LogType.ERROR, LogLevel.ERROR, "Running ended with error", jid=job_id, error=str(e))
-            LogUtil.log(LogType.ERROR, LogLevel.ERROR, traceback.format_exc())
-            error_code = "FRDIOS9000"
-            error_message = ERROR_CODE_DICT[error_code].format(str(e))
-            return None, error_code, error_message
+    @staticmethod
+    def _create_relationships(tx, batch: List[Dict]):
+        """Cypher 事务函数"""
+        query = """
+        UNWIND $batch AS row
+        MERGE (a:`%s` {id: $from_id}) 
+        ON CREATE SET a.name = $from_name
+        MERGE (b:`%s` {id: $to_id})
+        ON CREATE SET b.name = $to_name
+        MERGE (a)-[r:`%s`]->(b)
+        """
         
-        finally:
-            if save_path:
-                response_json_path = os.path.join(save_path, task_group + "_response.json")
-                self.response.save_results(combined_result=self.combined_result)
-                self.response.return_response(response_json_path, error_code, error_message)
+        for item in batch:
+            formatted_query = query % (
+                item["from_label"],
+                item["to_label"],
+                item["rel_type"]
+            )
+            tx.run(
+                formatted_query,
+                from_id=item["from_id"],
+                from_name=item["from_name"],
+                to_id=item["to_id"],
+                to_name=item["to_name"]
+            )
 
 if __name__ == "__main__":
-    payload = {
-            "job_params": {
-                "jobid": "JID-54ca58ba-c495-11ed-b20c-0a586e830578",
-                "task_id": "TID-54ca58ba-c495-11ed-b20c-0a586e830578",
-                "app_name": "synthesizer",
-                "use_case": "aadhar_redact",
-                "save_path": r"C:\Users\1657820\Desktop\51433-swoosh-io-bounding",
-            },
-            "service_params": {
-                "callback_url": "http://service-swoosh-orchestrator.swoosh-dev.svc.cluster.local:8889/api/v1/callback",
-                "job_object": {
-                    "io": "i",
-                    "policy_id": "policy_00001",
-                    "data": "what are you doing",
-                    "execution_plan": {}
-                }
-            }
-        }
-
-    kwargs = {
-        "job_id": payload["job_params"].get("jobid", "NA"),
-        "task_id": payload["job_params"].get("task_id", "NA"),
-        "use_case": payload["job_params"].get("use_case", "NA"),
-        "io": payload["service_params"]["job_object"].get("io", "NA"),
-        "policy_id": payload["service_params"]["job_object"].get("policy_id", "NA"),
-    }
-    default_scanner_path = "llm_sanitation\configs\default_scanners.json"
-    action_obj = Action(default_scanner_path, **kwargs)
-
-    result, error_code, error_message = action_obj.run_action(
-        payload["service_params"]["job_object"]["execution_plan"],
-        payload["service_params"]["job_object"]["data"],
-        payload["job_params"]["save_path"]
-    )
-    print("Action completed")
-    print(result)
+    # 使用示例
+    with Neo4jDataLoader(
+        uri="bolt://localhost:7687",
+        user="neo4j",
+        password="your_password",
+        batch_size=1000
+    ) as loader:
+        loader.load_data("data.txt")
