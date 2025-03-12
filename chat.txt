@@ -4,7 +4,8 @@ import re
 with open("neo4j\\llm_inferred.txt", "r") as f:
     data = f.read()
 
-pattern = re.compile(r"(\w+):([\w\s'-]+?)--(\w+)-->(\w+):([\w\s&(),'-]+)")
+# 允许节点名称包含 &(), 并明确排除自环的格式
+pattern = re.compile(r"(\w+):([\w\s&(),'-]+?)--(\w+)-->(\w+):([\w\s&(),'-]+)")
 
 def parse_line(line):
     match = pattern.match(line.strip())
@@ -19,30 +20,47 @@ def parse_line(line):
     else:
         return None
 
-# config Neo4j connection
-uri = "bolt://10.198.52.109:7687" 
+# Neo4j 连接配置
+uri = "bolt://10.198.52.109:7687"
 username = "neo4j"
 password = "SwooshAdmin@2024"
 
 driver = GraphDatabase.driver(uri, auth=(username, password))
 
 def create_node_rel(tx, from_label, from_name, rel_type, to_label, to_name):
-    tx.run("""
-        MERGE (a:%s {name: $from_name})
-        MERGE (b:%s {name: $to_name})
-        MERGE (a)-[r:%s]->(b)
-    """ % (from_label, to_label, rel_type),
-    from_name=from_name,
-    to_name=to_name)
+    # 添加 WITH 子句强制排除自环
+    query = """
+        MERGE (a:`%s` {name: $from_name})
+        MERGE (b:`%s` {name: $to_name})
+        WITH a, b WHERE a <> b
+        MERGE (a)-[r:`%s`]->(b)
+    """ % (from_label, to_label, rel_type)
+    tx.run(query, from_name=from_name, to_name=to_name)
 
 with driver.session() as session:
     lines = [line for line in data.split('\n') if line.strip()]
-    batch_size = 100 
+    batch_size = 100
     
     for i in range(0, len(lines), batch_size):
         batch = lines[i:i+batch_size]
         parsed_data = [parse_line(line) for line in batch]
-        valid_data = [item for item in parsed_data if item is not None]
+        
+        # 双重过滤：排除解析失败的行和自环数据
+        valid_data = [
+            item for item in parsed_data 
+            if item is not None 
+            and not (
+                item["from_label"] == item["to_label"] 
+                and item["from_name"] == item["to_name"]
+            )
+        ]
+        
+        # 打印过滤统计
+        print(f"Batch {i//batch_size + 1}:")
+        print(f"  Original: {len(batch)} lines")
+        print(f"  Valid after filtering: {len(valid_data)} lines")
+        print(f"  Self-links removed: {len(parsed_data)-len(valid_data)}")
+        
         # 执行批量操作
         session.execute_write(
             lambda tx: [
@@ -55,13 +73,13 @@ with driver.session() as session:
                 ) for item in valid_data
             ]
         )
-        print(f"process {i + len(batch)}/{len(lines)} lines")
+        print(f"Processed {i + len(batch)}/{len(lines)} lines\n")
 
+# 创建索引（保持原样）
 with driver.session() as session:
     session.run("CREATE INDEX FOR (n:Framework) ON (n.name)")
     session.run("CREATE INDEX FOR (n:Policy) ON (n.name)")
     session.run("CREATE INDEX FOR (n:Standard) ON (n.name)")
-    session.run("CREATE INDEX FOR (n:Standards) ON (n.name)")
 
 driver.close()
-print("completed!")
+print("Graph construction completed with self-link protection!")
