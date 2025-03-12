@@ -1,1 +1,117 @@
-neo4j.exceptions.ClientError: {code: Neo.ClientError.Schema.EquivalentSchemaRuleAlreadyExists} {message: An equivalent index already exists, 'Index( id=3, name='index_9c903fc7', type='RANGE', schema=(:Framework {name}), indexProvider='range-1.0' )'.}
+from neo4j import GraphDatabase
+import re
+
+# 新增数据清洗函数
+def sanitize_name(name):
+    """统一名称格式：去除首尾空格、转小写、合并内部空格"""
+    return re.sub(r'\s+', ' ', name.strip()).lower()
+
+with open("neo4j\\llm_inferred.txt", "r") as f:
+    data = f.read()
+
+# 强化正则表达式（支持中文等扩展字符）
+pattern = re.compile(r"(\w+):([\w\s&(),'\-]+?)--(\w+)-->(\w+):([\w\s&(),'\-]+)")
+
+def parse_line(line):
+    match = pattern.match(line.strip())
+    if not match:
+        return None
+    
+    # 新增数据标准化处理
+    item = {
+        "from_label": match.group(1).strip(),
+        "from_name": sanitize_name(match.group(2)),
+        "rel_type": match.group(3).strip().upper(),  # 关系类型统一大写
+        "to_label": match.group(4).strip(),
+        "to_name": sanitize_name(match.group(5))
+    }
+    
+    # 强化过滤逻辑
+    if (item["from_label"] == item["to_label"] and 
+        item["from_name"] == item["to_name"]):
+        print(f"⚠️ 过滤自环: {item}")
+        return None
+    
+    return item
+
+# 创建唯一约束（防止不同节点同名）
+def create_constraints(tx):
+    # 创建唯一性约束（如果不存在）
+    tx.run("CREATE CONSTRAINT IF NOT EXISTS FOR (n:Framework) REQUIRE n.name IS UNIQUE")
+    tx.run("CREATE CONSTRAINT IF NOT EXISTS FOR (n:Policy) REQUIRE n.name IS UNIQUE")
+    tx.run("CREATE CONSTRAINT IF NOT EXISTS FOR (n:Standard) REQUIRE n.name IS UNIQUE")
+
+driver = GraphDatabase.driver(uri, auth=(username, password))
+
+# 在初始化阶段创建约束
+with driver.session() as session:
+    session.execute_write(create_constraints)
+
+def create_node_rel(tx, item):
+    # 使用参数化查询防止注入
+    query = """
+        MERGE (a:`%s` {name: $from_name})
+        MERGE (b:`%s` {name: $to_name})
+        // 新增全路径检查
+        WITH a, b 
+        WHERE a <> b AND NOT exists((a)-[:%s]->(b))
+        CREATE (a)-[r:`%s`]->(b)
+    """ % (
+        item["from_label"], 
+        item["to_label"],
+        item["rel_type"],  # 防止重复关系
+        item["rel_type"]
+    )
+    
+    try:
+        result = tx.run(query, 
+                       from_name=item["from_name"],
+                       to_name=item["to_name"])
+        summary = result.consume()
+        if summary.counters.relationships_created == 0:
+            print(f"🔁 关系已存在: {item}")
+    except Exception as e:
+        print(f"❌ 创建失败: {item} - {str(e)}")
+
+# 批量处理时添加事务重试机制
+from neo4j import TransactionError
+
+with driver.session() as session:
+    lines = [line for line in data.split('\n') if line.strip()]
+    
+    for i in range(0, len(lines), batch_size):
+        batch = lines[i:i+batch_size]
+        valid_data = []
+        
+        for line in batch:
+            item = parse_line(line)
+            if item:
+                valid_data.append(item)
+        
+        # 带重试的事务执行
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                session.execute_write(
+                    lambda tx: [create_node_rel(tx, item) for item in valid_data]
+                )
+                break
+            except TransactionError as e:
+                if attempt == max_retries - 1:
+                    print(f"❌ 批处理失败: {e}")
+                else:
+                    print(f"🔄 重试第{attempt+1}次...")
+        
+        print(f"✅ 已处理 {min(i+batch_size, len(lines))}/{len(lines)} 行")
+
+# 清理现有自环的应急方案
+cleanup_query = """
+MATCH (a)-[r]->(a)
+DELETE r
+"""
+
+with driver.session() as session:
+    result = session.run(cleanup_query)
+    print(f"已清理 {result.consume().counters.relationships_deleted} 个自环关系")
+
+driver.close()
