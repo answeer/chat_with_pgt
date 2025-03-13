@@ -1,117 +1,110 @@
-from neo4j import GraphDatabase
-import re
+以下是针对知识图谱数据的常用查询示例，涵盖数据验证、关系分析和图谱探索等多个方面：
 
-# 新增数据清洗函数
-def sanitize_name(name):
-    """统一名称格式：去除首尾空格、转小写、合并内部空格"""
-    return re.sub(r'\s+', ' ', name.strip()).lower()
+​1. 基础验证类查询
 
-with open("neo4j\\llm_inferred.txt", "r") as f:
-    data = f.read()
-
-# 强化正则表达式（支持中文等扩展字符）
-pattern = re.compile(r"(\w+):([\w\s&(),'\-]+?)--(\w+)-->(\w+):([\w\s&(),'\-]+)")
-
-def parse_line(line):
-    match = pattern.match(line.strip())
-    if not match:
-        return None
-    
-    # 新增数据标准化处理
-    item = {
-        "from_label": match.group(1).strip(),
-        "from_name": sanitize_name(match.group(2)),
-        "rel_type": match.group(3).strip().upper(),  # 关系类型统一大写
-        "to_label": match.group(4).strip(),
-        "to_name": sanitize_name(match.group(5))
-    }
-    
-    # 强化过滤逻辑
-    if (item["from_label"] == item["to_label"] and 
-        item["from_name"] == item["to_name"]):
-        print(f"⚠️ 过滤自环: {item}")
-        return None
-    
-    return item
-
-# 创建唯一约束（防止不同节点同名）
-def create_constraints(tx):
-    # 创建唯一性约束（如果不存在）
-    tx.run("CREATE CONSTRAINT IF NOT EXISTS FOR (n:Framework) REQUIRE n.name IS UNIQUE")
-    tx.run("CREATE CONSTRAINT IF NOT EXISTS FOR (n:Policy) REQUIRE n.name IS UNIQUE")
-    tx.run("CREATE CONSTRAINT IF NOT EXISTS FOR (n:Standard) REQUIRE n.name IS UNIQUE")
-
-driver = GraphDatabase.driver(uri, auth=(username, password))
-
-# 在初始化阶段创建约束
-with driver.session() as session:
-    session.execute_write(create_constraints)
-
-def create_node_rel(tx, item):
-    # 使用参数化查询防止注入
-    query = """
-        MERGE (a:`%s` {name: $from_name})
-        MERGE (b:`%s` {name: $to_name})
-        // 新增全路径检查
-        WITH a, b 
-        WHERE a <> b AND NOT exists((a)-[:%s]->(b))
-        CREATE (a)-[r:`%s`]->(b)
-    """ % (
-        item["from_label"], 
-        item["to_label"],
-        item["rel_type"],  # 防止重复关系
-        item["rel_type"]
-    )
-    
-    try:
-        result = tx.run(query, 
-                       from_name=item["from_name"],
-                       to_name=item["to_name"])
-        summary = result.consume()
-        if summary.counters.relationships_created == 0:
-            print(f"🔁 关系已存在: {item}")
-    except Exception as e:
-        print(f"❌ 创建失败: {item} - {str(e)}")
-
-# 批量处理时添加事务重试机制
-from neo4j import TransactionError
-
-with driver.session() as session:
-    lines = [line for line in data.split('\n') if line.strip()]
-    
-    for i in range(0, len(lines), batch_size):
-        batch = lines[i:i+batch_size]
-        valid_data = []
-        
-        for line in batch:
-            item = parse_line(line)
-            if item:
-                valid_data.append(item)
-        
-        # 带重试的事务执行
-        max_retries = 3
-        for attempt in range(max_retries):
-            try:
-                session.execute_write(
-                    lambda tx: [create_node_rel(tx, item) for item in valid_data]
-                )
-                break
-            except TransactionError as e:
-                if attempt == max_retries - 1:
-                    print(f"❌ 批处理失败: {e}")
-                else:
-                    print(f"🔄 重试第{attempt+1}次...")
-        
-        print(f"✅ 已处理 {min(i+batch_size, len(lines))}/{len(lines)} 行")
-
-# 清理现有自环的应急方案
-cleanup_query = """
+cypher
+-- 检查残留自环（应急验证）
 MATCH (a)-[r]->(a)
-DELETE r
-"""
+RETURN a.name AS nodeName, type(r) AS relType, count(r) AS occurrences
+LIMIT 100
 
-with driver.session() as session:
-    result = session.run(cleanup_query)
-    print(f"已清理 {result.consume().counters.relationships_deleted} 个自环关系")
+-- 验证节点唯一性约束（按标签统计重复项）
+MATCH (n:Framework)
+WITH n.name AS name, count(*) AS cnt
+WHERE cnt > 1
+RETURN name, cnt
 
-driver.close()
+-- 查找空属性节点
+MATCH (n) 
+WHERE size(keys(n)) = 0
+RETURN labels(n) AS nodeType, count(*)
+​2. 关系分析类查询
+
+cypher
+-- 查找重复关系（相同类型和方向）
+MATCH (a)-[r]->(b)
+WITH a, b, type(r) AS relType, count(*) AS cnt
+WHERE cnt > 1
+RETURN a.name, relType, b.name, cnt
+LIMIT 50
+
+-- 统计各类型关系分布
+CALL db.relationshipTypes() YIELD relationshipType
+MATCH ()-[r]->()
+WHERE type(r) = relationshipType
+RETURN relationshipType, count(r) AS count 
+ORDER BY count DESC
+
+-- 检测单向关系（缺少反向关系）
+MATCH (a)-[r]->(b)
+WHERE NOT exists((b)-[:`${type(r)}`]->(a))
+RETURN a.name, type(r), b.name
+LIMIT 50
+​3. 图谱探索类查询
+
+cypher
+-- 查找中心节点（高连接度）
+MATCH (n)-[r]-()
+RETURN n.name AS node, count(r) AS degree 
+ORDER BY degree DESC 
+LIMIT 20
+
+-- 路径发现（跨类别关联）
+MATCH path=(:Framework)-[*1..3]->(:Policy)
+WHERE none(r IN relationships(path) WHERE startNode(r)=endNode(r))
+RETURN path
+LIMIT 10
+
+-- 社区发现（共同关联节点）
+MATCH (a:Framework)<--(x)-->(b:Policy)
+WHERE a.name <> b.name
+RETURN a.name, b.name, count(x) AS sharedConnections 
+ORDER BY sharedConnections DESC
+LIMIT 20
+​4. 数据质量深度检查
+
+cypher
+-- 检测名称异常字符（正则表达式过滤）
+MATCH (n)
+WHERE n.name =~ '.*[^a-z0-9\\- ].*' 
+RETURN labels(n) AS nodeType, n.name
+LIMIT 50
+
+-- 验证标签一致性（跨标签同名节点）
+MATCH (a), (b)
+WHERE a.name = b.name AND labels(a) <> labels(b)
+RETURN a.name, labels(a), labels(b)
+
+-- 统计孤立节点（无任何关系）
+MATCH (n)
+WHERE NOT (n)--()
+RETURN labels(n) AS nodeType, count(*)
+​5. 性能监控类查询
+
+cypher
+-- 查看索引使用情况
+CALL db.indexes()
+
+-- 统计数据库概要
+CALL db.schema.visualization()
+
+-- 分析存储占用
+CALL db.propertyKeys() 
+YIELD propertyKey
+MATCH (n)
+WHERE n[propertyKey] IS NOT NULL
+RETURN propertyKey, count(n) AS nodesWithProperty, sum(size(n[propertyKey])) AS totalStorage
+​使用技巧
+
+​可视化调试：在Neo4j Browser中点击节点/关系查看属性
+​参数化查询：用 $param 语法创建可复用模板
+cypher
+:param nameFilter => "iso*"
+MATCH (n) WHERE n.name STARTS WITH $nameFilter RETURN n
+​性能优化：对大结果集使用 PROFILE 或 EXPLAIN 分析执行计划
+​典型输出示例
+
+节点类型	异常关系数	最常见关联类型
+Framework	12	IMPLEMENTS (45%)
+Policy	5	REFERENCES (62%)
+根据实际数据模型调整标签和关系类型名称即可使用这些查询模板。
