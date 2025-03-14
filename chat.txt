@@ -1,1 +1,207 @@
-sklearn.exceptions.NotFittedError: idf vector is not fitted
+import streamlit as st
+import json
+
+DATA_TYPE = ["image","File","Text","Json","Numeric"]
+
+CALLBACK_URL =  "http://service-swoosh-orchestrator.swoosh-dev.svc.cluster.local:8889/api/v1/callback"
+
+API_MAPPING = {
+    "bounding": "http://localhost:8000/api/v1/bounding",
+    "sanitation": "http://localhost:8001/api/v1/sanitation",
+    "validator": "http://localhost:8002/api/v1/validator"
+}
+
+SCANNER_CATEGORIES = {
+    "bounding": ["SoftwareCheck", "EncryptionDetector", "PageCount","ImageBlurCheck", 
+                 "ImageDimCheck", "ImageMemoryCheck", "ExecutableScript", "ProfanityCheck",
+                 "HarmfulString", "PiiDetector", "BinTransform","TokenLimit"],
+    "sanitation": ["RemoveUnicode", "Secrets"],
+    "validator": ["JsonValidator"]
+}
+
+SAVE_BASE = r"."
+
+DATA_TYPE_MAPPING = {
+    "File": ["file_bounding"],
+    "Image": ["image_bounding"],
+    "Text": ["text_bounding", "text_data_sanitation"],
+    "Json": ["validators"],
+    "Numeric": ["numeric_bounding"]
+}
+
+with open("scanner_list.json") as f:
+    scanners_config = json.load(f)
+
+def get_scanners_by_type(data_type, scanner_type="both"):
+    sections = DATA_TYPE_MAPPING.get(data_type, [])
+    
+    scanners = {
+        "default": {},
+        "optional": {}
+    }
+    
+    for section in sections:
+        if default := scanners_config["default_scanners"].get(section):
+            scanners["default"].update(default)
+
+        if optional := scanners_config["optional_scanners"].get(section):
+            scanners["optional"].update(optional)
+    
+    if scanner_type == "default":
+        return scanners["default"]
+    elif scanner_type == "optional":
+        return scanners["optional"]
+    else:
+        all_scanners = {}
+        all_scanners.update(scanners.get('default', {}))
+        all_scanners.update(scanners.get('optional', {}))
+        return all_scanners
+
+
+def categorize_scanners(scanners):
+    """Categorize scanners into bounding, sanitation, and validator."""
+    categorized = {"bounding": [], "sanitation": [], "validator": []}
+    for scanner in scanners:
+        for category, names in SCANNER_CATEGORIES.items():
+            if scanner in names:
+                categorized[category].append(scanner)
+                break
+    return categorized
+
+st.title('Guardrails Demo')
+
+row1 = st.columns(2)
+
+with row1[0]:
+    st.header('Input payload')
+    payload = st.text_area('Input your payload here', height=400)
+
+with row1[1]:
+    st.header("Default policies")
+    st.write("Default scanners will be displayed here")
+    for data_type in DATA_TYPE:
+        st.expander("{} scanners".format(data_type), expanded=True)
+        default_scanners = get_scanners_by_type(data_type, "default")
+        categorized_default = categorize_scanners(default_scanners.keys())
+        for cat, names in categorized_default.items():
+                if names:
+                    st.markdown(f"**{data_type.upper()} {cat.upper()}**")
+                    for name in names:
+                        st.markdown(f"`✓ {name}`")
+                        scanner_config = default_scanners[name]
+                        st.json(scanner_config)
+
+row2 = st.columns(2)
+
+with row2[0]:
+    st.header('Output')
+    st.write('Output will be displayed here')
+
+with row2[1]:
+    st.header("Use case manifest")
+    manifest = st.text_area('Input your use case manifest here', height=400)
+
+
+
+
+st.button("execute the usecase manifest")
+
+version: v1.0.0
+Consumer:
+  - type: "new"
+  - consumer_name: "abcdedf"
+  - description: "this is for cash OTT"
+  - domain_id: DMN0001
+  - subdomain_id: SDMN0001
+  - country:
+      - IN
+  - consumer_ITAM: 51433
+  - request_method:
+      - request_api: <URL>
+      - response_url: "default"
+      - sub_topic: <topic>
+      - pub_topic: <topic>
+Ops_agents:
+  agent1:
+    agent_id: AGNT00001
+    role: "maker"
+    country: IN
+    guardrails:
+      input_data:
+        text:
+          - data:
+              - "params.service_path"
+            type: "text"
+            policies:
+              - 001_free_text_bounding_policy
+              - 002_free_text_sanitation_policy
+          - data:
+              - "params.output_path"
+            type: "text"
+            policies:
+              - 001_free_text_bounding_policy
+              - 002_free_text_sanitation_policy
+        image:
+          - data:
+              - "params.stream_path"
+            type: "64bitencode"
+            policies:
+              - 002_file_bounding_policy
+          - data:
+            - "params.output_path"
+            type: "image"
+            policies:
+              - 002_file_bounding_policy
+        json:
+          data: "*"
+          policies:
+            - 000_payload_validation_policy
+            # - 002_file_bounding_policy
+            # - 003_file_bounding_encryption_polic
+
+
+payload = {
+            "job_params": {
+                "jobid": "JID-54ca58ba-c495-11ed-b20c-0a586e830578",
+                "task_id": "TID-54ca58ba-c495-11ed-b20c-0a586e830578",
+                "app_name": "synthesizer",
+                "use_case": "aadhar_redact",
+            },
+            "service_params": {
+                "callback_url": "http://service-swoosh-orchestrator.swoosh-dev.svc.cluster.local:8889/api/v1/callback",
+                "job_object": {
+                    "io": "i",
+                    "policy_id": "policy_00001",
+                    "data": 13,
+                    "execution_plan": {}
+                }
+            }
+        }
+
+
+
+{
+    "Version": "2024-08-26",
+    "Statement": [
+        {
+            "id": "0011",
+            "name": "text_bounding_policy",
+            "Effect": "",
+            "Type": "DataPolicy",
+            "Action": [
+                "text_bounding:TokonLimit",
+                "text_bounding:ProfanityCheck",
+                "text_bounding:ExecutableScript",
+                "text_bounding:HarmfulString"
+            ],
+            "NotAction":[],
+            "Resource": "Payload text",
+            "Condition": {
+                "TokonLimit": {"token_limit": 100,"token_method":"nltk"},
+                "ProfanityCheck": {},
+                "ExecutableScript": {},
+                "HarmfulString": {"case_sensitive": false}
+            }
+        }
+    ]
+}
