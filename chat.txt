@@ -1,84 +1,81 @@
-import yaml
+import json
+import os
+from typing import Dict, List, Any
 
-def extract_policies(yaml_content):
+def load_execution_plan(policy_names: List[str], policy_dir: str = "policies") -> Dict[str, Any]:
     """
-    从YAML内容中提取每个数据类型的每个数据对应的策略
+    加载策略执行计划
     
-    :param yaml_content: YAML格式的字符串内容
-    :return: 嵌套字典结构 {数据类型: {数据项: [策略列表]}}
+    :param policy_names: 需要加载的策略名称列表
+    :param policy_dir: 策略文件存储目录，默认为"policies"
+    :return: 结构化的执行计划字典
     """
-    data = yaml.safe_load(yaml_content)
-    input_data = data['Ops_agents']['agent1']['guardrails']['input_data']
+    execution_plan = {}
     
-    result = {}
-    
-    for data_type, entries in input_data.items():
-        result[data_type] = {}
+    for policy_name in policy_names:
+        file_path = os.path.join(policy_dir, f"{policy_name}.json")
         
-        # 统一处理为列表格式
-        if not isinstance(entries, list):
-            entries = [entries]
+        try:
+            # 读取策略文件
+            with open(file_path, 'r') as f:
+                policy = json.load(f)
             
-        for entry in entries:
-            # 获取数据项列表（处理单字符串和多列表情况）
-            data_items = entry.get('data', [])
-            if not isinstance(data_items, list):
-                data_items = [data_items]
-                
-            # 获取策略列表
-            policies = entry.get('policies', [])
+            # 提取条件数据
+            conditions = []
+            for statement in policy.get("Statement", []):
+                # 合并通用条件和特殊条件
+                condition = {
+                    "policy_meta": {
+                        "id": statement.get("id"),
+                        "name": statement.get("name"),
+                        "type": statement.get("Type")
+                    },
+                    ​**statement.get("Condition", {})
+                }
+                conditions.append(condition)
             
-            # 将每个数据项与策略关联
-            for item in data_items:
-                result[data_type][item] = list(policies)  # 复制策略列表避免引用问题
-                
-    return result
+            # 存储到执行计划
+            execution_plan[policy_name] = {
+                "version": policy.get("Version"),
+                "conditions": conditions
+            }
+            
+        except FileNotFoundError:
+            print(f"警告：策略文件 {policy_name} 不存在")
+            execution_plan[policy_name] = None
+        except json.JSONDecodeError:
+            print(f"错误：策略文件 {policy_name} 格式错误")
+            execution_plan[policy_name] = None
+        except Exception as e:
+            print(f"处理 {policy_name} 时发生未知错误: {str(e)}")
+            execution_plan[policy_name] = None
+            
+    return execution_plan
 
 # 示例用法
-yaml_content = """
-version: v1.0.0
-Consumer: [...]  # 省略部分内容
-Ops_agents:
-  agent1:
-    agent_id: AGNT00001
-    role: "maker"
-    country: IN
-    guardrails:
-      input_data:
-        text:
-          - data:
-              - "params.service_path"
-            type: "text"
-            policies:
-              - 001_free_text_bounding_policy
-              - 002_free_text_sanitation_policy
-          - data:
-              - "params.output_path"
-            type: "text"
-            policies:
-              - 001_free_text_bounding_policy
-              - 002_free_text_sanitation_policy
-        image:
-          - data:
-              - "params.stream_path"
-            type: "64bitencode"
-            policies:
-              - 002_file_bounding_policy
-          - data:
-              - "params.output_path"
-            type: "image"
-            policies:
-              - 002_file_bounding_policy
-        json:
-          data: "*"
-          policies:
-            - 000_payload_validation_policy
-"""
-
-result = extract_policies(yaml_content)
-for data_type, mappings in result.items():
-    print(f"数据类型: {data_type}")
-    for data_item, policies in mappings.items():
-        print(f"  - 数据项: {data_item}")
-        print(f"    策略: {policies}")
-    print()
+if __name__ == "__main__":
+    # 假设从上一阶段获取到的策略列表
+    policy_list = [
+        "001_free_text_bounding_policy",
+        "002_free_text_sanitation_policy",
+        "000_payload_validation_policy"
+    ]
+    
+    # 加载执行计划
+    plan = load_execution_plan(policy_list)
+    
+    # 存储执行计划到文件（可选）
+    with open("execution_plan.json", "w") as f:
+        json.dump(plan, f, indent=2)
+    
+    # 打印执行计划结构
+    print("生成执行计划结构：")
+    for policy_name, data in plan.items():
+        print(f"\n策略：{policy_name}")
+        print(f"版本：{data['version']}") if data else None
+        if data and data["conditions"]:
+            print("条件配置：")
+            for idx, cond in enumerate(data["conditions"], 1):
+                print(f"  Statement {idx}:")
+                for k, v in cond.items():
+                    print(f"    {k}: {v}")
