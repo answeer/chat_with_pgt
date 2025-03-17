@@ -1,38 +1,52 @@
 def generate_payloads(input_payload, data):
     generated_payloads = []
     
-    # 遍历所有数据类型（text/image/json等）
+    # 统一处理所有数据类型
     for data_type in data:
-        for item in data[data_type]:
-            # 获取数据路径配置
-            data_path = item['data'][0]
+        # 标准化数据结构为列表
+        items = data[data_type]
+        if not isinstance(items, list):
+            items = [items]
+        
+        for item in items:
+            # 处理数据路径
+            data_paths = item.get('data', [])
+            if not isinstance(data_paths, list):
+                data_paths = [data_paths]
             
-            # 处理通配符情况
-            if data_path == "*":
-                data_value = "*"
-            else:
-                # 解析常规参数路径 params.xxx
-                param_key = data_path.split('.')[1]
-                data_value = input_payload["service_params"]["job_object"].get(param_key)
-            
-            # 合并execution_plan步骤
-            merged_plan = {}
-            for step in item['execution_plan']:
-                merged_plan.update(step)
-            
-            # 构建新payload
-            new_payload = {
-                "job_params": input_payload["job_params"],
-                "service_params": {
-                    "callback_url": input_payload["service_params"]["callback_url"],
-                    "job_object": {
-                        "io": input_payload["service_params"]["job_object"]["io"],
-                        "policy_id": input_payload["service_params"]["job_object"]["policy_id"],
-                        "data": data_value,
-                        "execution_plan": merged_plan
+            # 处理通配符和普通路径
+            for data_path in data_paths:
+                # 通配符处理
+                if data_path == "*":
+                    data_value = "*"
+                # 常规参数路径处理
+                elif data_path.startswith("params."):
+                    param_key = data_path.split('.')[1]
+                    data_value = input_payload["service_params"]["job_object"].get(param_key)
+                else:
+                    continue  # 跳过无法识别的路径格式
+                
+                # 合并执行计划
+                merged_plan = {}
+                execution_plan = item.get('execution_plan', [])
+                if not isinstance(execution_plan, list):
+                    execution_plan = [execution_plan]
+                for step in execution_plan:
+                    merged_plan.update(step)
+                
+                # 构建新payload
+                new_payload = {
+                    "job_params": input_payload["job_params"],
+                    "service_params": {
+                        "callback_url": input_payload["service_params"]["callback_url"],
+                        "job_object": {
+                            "io": input_payload["service_params"]["job_object"]["io"],
+                            "policy_id": input_payload["service_params"]["job_object"]["policy_id"],
+                            "data": data_value,
+                            "execution_plan": merged_plan
+                        }
                     }
                 }
-            }
-            generated_payloads.append(new_payload)
+                generated_payloads.append(new_payload)
     
     return generated_payloads
