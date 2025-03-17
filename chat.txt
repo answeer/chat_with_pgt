@@ -1,16 +1,111 @@
+import requests
+from typing import Dict, Tuple
+
+SCANNER_CATEGORIES = {
+    "bounding": ["SoftwareCheck", "EncryptionDetector", "PageCount", "ImageBlurCheck",
+                 "ImageDimCheck", "ImageMemoryCheck", "ExecutableScript", "ProfanityCheck",
+                 "HarmfulString", "PiiDetector", "BinTransform", "TokenLimit"],
+    "sanitation": ["RemoveUnicode", "Secrets"],
+    "validator": ["JsonValidator"]
+}
+
 API_MAPPING = {
     "bounding": "http://localhost:8000/api/v1/bounding",
     "sanitation": "http://localhost:8001/api/v1/sanitation",
     "validator": "http://localhost:8002/api/v1/validator"
 }
 
-SCANNER_CATEGORIES = {
-    "bounding": ["SoftwareCheck", "EncryptionDetector", "PageCount","ImageBlurCheck", 
-                 "ImageDimCheck", "ImageMemoryCheck", "ExecutableScript", "ProfanityCheck",
-                 "HarmfulString", "PiiDetector", "BinTransform","TokenLimit"],
-    "sanitation": ["RemoveUnicode", "Secrets"],
-    "validator": ["JsonValidator"]
-}
+def determine_scanner_category(execution_plan: Dict) -> Tuple[str, str]:
+    """确定payload所属的分类及对应的API地址"""
+    # 构建扫描器到分类的反向映射
+    scanner_mapping = {}
+    for category, scanners in SCANNER_CATEGORIES.items():
+        for scanner in scanners:
+            scanner_mapping[scanner.lower()] = category
+    
+    # 收集所有扫描器分类
+    found_categories = set()
+    for scanner in execution_plan.keys():
+        normalized_scanner = scanner.replace(' ', '').lower()
+        
+        # 处理已知的拼写差异
+        if normalized_scanner == "tokonlimit":
+            normalized_scanner = "tokenlimit"
+        
+        category = scanner_mapping.get(normalized_scanner)
+        if not category:
+            raise ValueError(f"未知的扫描器类型: {scanner}")
+        found_categories.add(category)
+    
+    # 验证分类一致性
+    if len(found_categories) == 0:
+        raise ValueError("未找到匹配的扫描器分类")
+    if len(found_categories) > 1:
+        raise ValueError(f"发现冲突的分类: {found_categories}")
+    
+    category = found_categories.pop()
+    return category, API_MAPPING[category]
 
-{'job_params': {'jobid': 'JID-54ca58ba-c495-11ed-b20c-0a586e830578', 'task_id': 'TID-54ca58ba-c495-11ed-b20c-0a586e830578', 'app_name': 'synthesizer', 'use_case': 'aadhar_redact'}, 'service_params': {'callback_url': 'http://service-swoosh-orchestrator.swoosh-dev.svc.cluster.local:8889/api/v1/callback', 'job_object': {'io': 'i', 'policy_id': '001_free_text_bounding_policy', 'data': 'what are you doing', 'execution_plan': {'TokonLimit': {'token_limit': 100, 'token_method': 'nltk'}, 'ProfanityCheck': {}, 'ExecutableScript': {}, 'HarmfulString': {'case_sensitive': False}}}}}
+def execute_payload(payload: Dict) -> Dict:
+    """执行单个payload请求"""
+    try:
+        execution_plan = payload["service_params"]["job_object"]["execution_plan"]
+        category, api_url = determine_scanner_category(execution_plan)
+        
+        response = requests.post(
+            url=api_url,
+            json=payload,
+            headers={"Content-Type": "application/json"},
+            timeout=30
+        )
+        
+        return {
+            "status": "success",
+            "category": category,
+            "status_code": response.status_code,
+            "response": response.json(),
+            "payload_id": payload["job_params"]["jobid"]
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "error": str(e),
+            "payload_id": payload["job_params"].get("jobid", "unknown")
+        }
 
+def process_all_payloads(payloads: list) -> list:
+    """批量处理所有payload"""
+    results = []
+    for payload in payloads:
+        results.append(execute_payload(payload))
+    return results
+
+# 使用示例
+if __name__ == "__main__":
+    # 示例payload（注意修正了TokenLimit的拼写）
+    sample_payload = {
+        "job_params": {
+            "jobid": "JID-54ca58ba-c495-11ed-b20c-0a586e830578",
+            "task_id": "TID-54ca58ba-c495-11ed-b20c-0a586e830578",
+            "app_name": "synthesizer",
+            "use_case": "aadhar_redact",
+        },
+        "service_params": {
+            "callback_url": "http://service-swoosh-orchestrator.swoosh-dev.svc.cluster.local:8889/api/v1/callback",
+            "job_object": {
+                "io": "i",
+                "policy_id": "001_free_text_bounding_policy",
+                "data": "what are you doing",
+                "execution_plan": {
+                    "TokenLimit": {"token_limit": 100, "token_method": "nltk"},
+                    "ProfanityCheck": {},
+                    "ExecutableScript": {},
+                    "HarmfulString": {"case_sensitive": False}
+                }
+            }
+        }
+    }
+    
+    # 执行单个payload测试
+    result = execute_payload(sample_payload)
+    print("执行结果:", result)
