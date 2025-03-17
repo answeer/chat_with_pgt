@@ -1,39 +1,35 @@
-input_payload = {
-            "job_params": {
-                "jobid": "JID-54ca58ba-c495-11ed-b20c-0a586e830578",
-                "task_id": "TID-54ca58ba-c495-11ed-b20c-0a586e830578",
-                "app_name": "synthesizer",
-                "use_case": "aadhar_redact",
-            },
-            "service_params": {
-                "callback_url": "http://service-swoosh-orchestrator.swoosh-dev.svc.cluster.local:8889/api/v1/callback",
-                "job_object": {
-                    "io": "i",
-                    "policy_id": "policy_00001",
-                    "service_path": "what are you doing",
-                    "output_path":"I'm writing a book",
-                    "output_path":r"C:\Users\1657820\Desktop\test_imgs\006.jpg"
+def generate_payloads(input_payload, data):
+    generated_payloads = []
+    
+    # 遍历所有数据类型（text/image）
+    for data_type in data:
+        for item in data[data_type]:
+            # 获取数据路径（params.xxx）
+            data_path = item['data'][0]  # 取第一个路径
+            param_key = data_path.split('.')[1]  # 解析字段名称
+            
+            # 从job_object获取数据值
+            job_object = input_payload['service_params']['job_object']
+            data_value = job_object.get(param_key)
+            
+            # 合并execution_plan步骤
+            merged_plan = {}
+            for step in item['execution_plan']:
+                merged_plan.update(step)
+            
+            # 构建新payload
+            new_payload = {
+                "job_params": input_payload["job_params"],
+                "service_params": {
+                    "callback_url": input_payload["service_params"]["callback_url"],
+                    "job_object": {
+                        "io": job_object["io"],
+                        "policy_id": job_object["policy_id"],
+                        "data": data_value,
+                        "execution_plan": merged_plan
+                    }
                 }
             }
-        }
-
-
-data = {'text': [{'data': ['params.service_path'], 'type': 'text', 'policies': ['001_free_text_bounding_policy', '002_free_text_sanitation_policy'], 'execution_plan': [{'TokonLimit': {'token_limit': 100, 'token_method': 'nltk'}, 'ProfanityCheck': {}, 'ExecutableScript': {}, 'HarmfulString': {'case_sensitive': False}}, {'PiiDetector': {'sanitize': True}, 'RemoveUnicode': {'sanitize': True}, 'Secrets': {'sanitize': True}}]}, {'data': ['params.output_path'], 'type': 'text', 'policies': ['001_free_text_bounding_policy', '002_free_text_sanitation_policy'], 'execution_plan': [{'TokonLimit': {'token_limit': 100, 'token_method': 'nltk'}, 'ProfanityCheck': {}, 'ExecutableScript': {}, 'HarmfulString': {'case_sensitive': False}}, {'PiiDetector': {'sanitize': True}, 'RemoveUnicode': {'sanitize': True}, 'Secrets': {'sanitize': True}}]}], 'image': [{'data': ['params.output_path'], 'type': 'image', 'policies': ['002_file_bounding_policy'], 'execution_plan': [{'EncryptionDetector': {}, 'FormatCheck': {'format_list': ['jpg', 'png', 'PNG', 'jpeg', 'tif', 'tiff', 'gif', 'bmp']}, 'SofwareCheck': {'software_blacklist': ['', 'Photoshop', 'Corel', 'PhotoScape', 'PhotoPlus', 'GIMP', 'Pixelmator', 'Illustrator', 'Windows Photo Editor', 'ilovepdf']}}]}]}
-
-payload = {
-            "job_params": {
-                "jobid": "JID-54ca58ba-c495-11ed-b20c-0a586e830578",
-                "task_id": "TID-54ca58ba-c495-11ed-b20c-0a586e830578",
-                "app_name": "synthesizer",
-                "use_case": "aadhar_redact",
-            },
-            "service_params": {
-                "callback_url": "http://service-swoosh-orchestrator.swoosh-dev.svc.cluster.local:8889/api/v1/callback",
-                "job_object": {
-                    "io": "i",
-                    "policy_id": "policy_00001",
-                    "data": "what are you doing",
-                    "execution_plan": {'TokonLimit': {'token_limit': 100, 'token_method': 'nltk'}, 'ProfanityCheck': {}, 'ExecutableScript': {}, 'HarmfulString': {'case_sensitive': False}',PiiDetector': {'sanitize': True}, 'RemoveUnicode': {'sanitize': True}, 'Secrets': {'sanitize': True}
-                }
-            }
-        }
+            generated_payloads.append(new_payload)
+    
+    return generated_payloads
