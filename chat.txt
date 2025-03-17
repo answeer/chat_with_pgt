@@ -1,52 +1,60 @@
 def generate_payloads(input_payload, data):
     generated_payloads = []
     
-    # 统一处理所有数据类型
     for data_type in data:
-        # 标准化数据结构为列表
         items = data[data_type]
-        if not isinstance(items, list):
-            items = [items]
+        items = items if isinstance(items, list) else [items]
         
         for item in items:
             # 处理数据路径
             data_paths = item.get('data', [])
-            if not isinstance(data_paths, list):
-                data_paths = [data_paths]
+            data_paths = data_paths if isinstance(data_paths, list) else [data_paths]
             
-            # 处理通配符和普通路径
             for data_path in data_paths:
-                # 通配符处理
+                # 获取数据值
                 if data_path == "*":
                     data_value = "*"
-                # 常规参数路径处理
                 elif data_path.startswith("params."):
                     param_key = data_path.split('.')[1]
                     data_value = input_payload["service_params"]["job_object"].get(param_key)
                 else:
-                    continue  # 跳过无法识别的路径格式
+                    continue
                 
-                # 合并执行计划
-                merged_plan = {}
-                execution_plan = item.get('execution_plan', [])
-                if not isinstance(execution_plan, list):
-                    execution_plan = [execution_plan]
-                for step in execution_plan:
-                    merged_plan.update(step)
+                # 获取策略和执行计划的对应关系
+                policies = item.get('policies', [])
+                execution_plan_steps = item.get('execution_plan', [])
                 
-                # 构建新payload
-                new_payload = {
-                    "job_params": input_payload["job_params"],
-                    "service_params": {
-                        "callback_url": input_payload["service_params"]["callback_url"],
-                        "job_object": {
-                            "io": input_payload["service_params"]["job_object"]["io"],
-                            "policy_id": input_payload["service_params"]["job_object"]["policy_id"],
-                            "data": data_value,
-                            "execution_plan": merged_plan
+                # 对齐策略和步骤数量
+                num_policies = len(policies)
+                num_steps = len(execution_plan_steps)
+                
+                # 生成对应数量的payload
+                for idx in range(max(num_policies, num_steps)):
+                    # 合并当前步骤的执行计划
+                    current_step = {}
+                    if idx < num_steps:
+                        current_step = execution_plan_steps[idx]
+                        if isinstance(current_step, list):
+                            current_step = {k: v for step in current_step for k, v in step.items()}
+                        elif isinstance(current_step, dict):
+                            current_step = current_step.copy()
+                    
+                    # 获取当前策略
+                    current_policy = policies[idx] if idx < num_policies else f"policy_{idx+1:03d}"
+                    
+                    # 构建payload
+                    new_payload = {
+                        "job_params": input_payload["job_params"],
+                        "service_params": {
+                            "callback_url": input_payload["service_params"]["callback_url"],
+                            "job_object": {
+                                "io": input_payload["service_params"]["job_object"]["io"],
+                                "policy_id": current_policy,
+                                "data": data_value,
+                                "execution_plan": current_step
+                            }
                         }
                     }
-                }
-                generated_payloads.append(new_payload)
+                    generated_payloads.append(new_payload)
     
     return generated_payloads
