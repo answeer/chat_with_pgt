@@ -1,1 +1,39 @@
-{'text': [{'data': ['params.service_path'], 'type': 'text', 'policies': ['001_free_text_bounding_policy', '002_free_text_sanitation_policy']}, {'data': ['params.output_path'], 'type': 'text', 'policies': ['001_free_text_bounding_policy', '002_free_text_sanitation_policy']}], 'image': [{'data': ['params.stream_path'], 'type': '64bitencode', 'policies': ['002_file_bounding_policy']}, {'data': ['params.output_path'], 'type': 'image', 'policies': ['002_file_bounding_policy']}], 'json': {'data': '*', 'policies': ['000_payload_validation_policy']}}
+input_payload = {
+            "job_params": {
+                "jobid": "JID-54ca58ba-c495-11ed-b20c-0a586e830578",
+                "task_id": "TID-54ca58ba-c495-11ed-b20c-0a586e830578",
+                "app_name": "synthesizer",
+                "use_case": "aadhar_redact",
+            },
+            "service_params": {
+                "callback_url": "http://service-swoosh-orchestrator.swoosh-dev.svc.cluster.local:8889/api/v1/callback",
+                "job_object": {
+                    "io": "i",
+                    "policy_id": "policy_00001",
+                    "service_path": "what are you doing",
+                    "output_path":"I'm writing a book",
+                    "output_path":r"C:\Users\1657820\Desktop\test_imgs\006.jpg"
+                }
+            }
+        }
+
+
+data = {'text': [{'data': ['params.service_path'], 'type': 'text', 'policies': ['001_free_text_bounding_policy', '002_free_text_sanitation_policy'], 'execution_plan': [{'TokonLimit': {'token_limit': 100, 'token_method': 'nltk'}, 'ProfanityCheck': {}, 'ExecutableScript': {}, 'HarmfulString': {'case_sensitive': False}}, {'PiiDetector': {'sanitize': True}, 'RemoveUnicode': {'sanitize': True}, 'Secrets': {'sanitize': True}}]}, {'data': ['params.output_path'], 'type': 'text', 'policies': ['001_free_text_bounding_policy', '002_free_text_sanitation_policy'], 'execution_plan': [{'TokonLimit': {'token_limit': 100, 'token_method': 'nltk'}, 'ProfanityCheck': {}, 'ExecutableScript': {}, 'HarmfulString': {'case_sensitive': False}}, {'PiiDetector': {'sanitize': True}, 'RemoveUnicode': {'sanitize': True}, 'Secrets': {'sanitize': True}}]}], 'image': [{'data': ['params.output_path'], 'type': 'image', 'policies': ['002_file_bounding_policy'], 'execution_plan': [{'EncryptionDetector': {}, 'FormatCheck': {'format_list': ['jpg', 'png', 'PNG', 'jpeg', 'tif', 'tiff', 'gif', 'bmp']}, 'SofwareCheck': {'software_blacklist': ['', 'Photoshop', 'Corel', 'PhotoScape', 'PhotoPlus', 'GIMP', 'Pixelmator', 'Illustrator', 'Windows Photo Editor', 'ilovepdf']}}]}]}
+
+payload = {
+            "job_params": {
+                "jobid": "JID-54ca58ba-c495-11ed-b20c-0a586e830578",
+                "task_id": "TID-54ca58ba-c495-11ed-b20c-0a586e830578",
+                "app_name": "synthesizer",
+                "use_case": "aadhar_redact",
+            },
+            "service_params": {
+                "callback_url": "http://service-swoosh-orchestrator.swoosh-dev.svc.cluster.local:8889/api/v1/callback",
+                "job_object": {
+                    "io": "i",
+                    "policy_id": "policy_00001",
+                    "data": "what are you doing",
+                    "execution_plan": {'TokonLimit': {'token_limit': 100, 'token_method': 'nltk'}, 'ProfanityCheck': {}, 'ExecutableScript': {}, 'HarmfulString': {'case_sensitive': False}',PiiDetector': {'sanitize': True}, 'RemoveUnicode': {'sanitize': True}, 'Secrets': {'sanitize': True}
+                }
+            }
+        }
