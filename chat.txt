@@ -1,16 +1,19 @@
 def generate_payloads(input_payload, data):
     generated_payloads = []
     
-    # 遍历所有数据类型（text/image）
+    # 遍历所有数据类型（text/image/json等）
     for data_type in data:
         for item in data[data_type]:
-            # 获取数据路径（params.xxx）
-            data_path = item['data'][0]  # 取第一个路径
-            param_key = data_path.split('.')[1]  # 解析字段名称
+            # 获取数据路径配置
+            data_path = item['data'][0]
             
-            # 从job_object获取数据值
-            job_object = input_payload['service_params']['job_object']
-            data_value = job_object.get(param_key)
+            # 处理通配符情况
+            if data_path == "*":
+                data_value = "*"
+            else:
+                # 解析常规参数路径 params.xxx
+                param_key = data_path.split('.')[1]
+                data_value = input_payload["service_params"]["job_object"].get(param_key)
             
             # 合并execution_plan步骤
             merged_plan = {}
@@ -23,8 +26,8 @@ def generate_payloads(input_payload, data):
                 "service_params": {
                     "callback_url": input_payload["service_params"]["callback_url"],
                     "job_object": {
-                        "io": job_object["io"],
-                        "policy_id": job_object["policy_id"],
+                        "io": input_payload["service_params"]["job_object"]["io"],
+                        "policy_id": input_payload["service_params"]["job_object"]["policy_id"],
                         "data": data_value,
                         "execution_plan": merged_plan
                     }
