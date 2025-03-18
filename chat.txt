@@ -1,16 +1,57 @@
 def show_scanner_config():
-    """展示扫描器配置"""
-    st.markdown("### 🔍 Default Scanners Configuration")
+    """优化后的紧凑型扫描器配置展示"""
+    st.markdown("### 🔍 Default Scanners Config")
     
-    for category, scanners in DEFAULT_SCANNERS.items():
-        # 美化分类名称
-        category_name = category.replace('_', ' ').title()
+    # 使用选项卡组织大类
+    tabs = st.tabs([f"📦 {c.replace('_',' ').title()}" for c in DEFAULT_SCANNERS.keys()])
+    
+    for tab, (category, scanners) in zip(tabs, DEFAULT_SCANNERS.items()):
+        with tab:
+            for name, params in scanners.items():
+                # 紧凑型标题
+                with st.expander(f"🔧 ​**{name}**", expanded=False):
+                    if not params:
+                        st.caption("No parameters")
+                        continue
+                    
+                    # 参数分组显示
+                    cols = st.columns([1,3])
+                    with cols[0]:
+                        # 参数类型标识
+                        st.markdown(f"`{_get_param_type(params)}`")
+                        
+                    with cols[1]:
+                        # 智能参数显示
+                        _show_smart_params(params)
+
+def _get_param_type(params: dict) -> str:
+    """识别参数类型"""
+    if any(isinstance(v, list) for v in params.values()):
+        return "List Config"
+    if any(isinstance(v, dict) for v in params.values()):
+        return "Nested Config"
+    return "Basic Config"
+
+def _show_smart_params(params: dict):
+    """智能参数显示组件"""
+    for k, v in params.items():
+        # 处理长列表
+        if isinstance(v, list) and len(v) > 3:
+            st.markdown(f"**{k}**:")
+            with st.expander(f"Show {len(v)} items", False):
+                st.write(v[:5] + ["..."] if len(v)>5 else v)
+            continue
         
-        with st.expander(f"📁 {category_name}", expanded=True):
-            for scanner_name, params in scanners.items():
-                st.markdown(f"<div class='scanner-name'>🛡️ {scanner_name}</div>", unsafe_allow_html=True)
-                
-                if params:
-                    st.code(f"Parameters:\n{json.dumps(params, indent=4)}", language='json')
-                else:
-                    st.caption("No parameters required")
+        # 处理嵌套字典
+        if isinstance(v, dict):
+            with st.expander(k, False):
+                st.json(v)
+            continue
+            
+        # 常规显示
+        st.markdown(f"`{k}`: {_truncate_value(v)}")
+
+def _truncate_value(value, max_len=30):
+    """值截断处理"""
+    str_val = str(value)
+    return str_val[:max_len] + "..." if len(str_val) > max_len else str_val
