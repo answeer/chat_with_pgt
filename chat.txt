@@ -1,105 +1,245 @@
+import streamlit as st
+import json
+import yaml
+import os
 import copy
+import requests
+from typing import Dict, List, Any
 
-def merge_scanners_flattened(default_scanners, user_scanners):
-    # 定义需要特殊合并的参数路径（元组表示嵌套路径）
-    SPECIAL_MERGE_PATHS = {
-        ('SoftwareCheck', 'software_blacklist'),
-        ('JsonValidator', 'mandate_keys', 'clientData.country'),
-        ('JsonValidator', 'mandate_keys', 'clientData.appName')
-    }
 
-    def is_special_path(current_path):
-        """检查当前路径是否匹配任意特殊路径"""
-        return any(
-            len(current_path) >= len(special_path) and 
-            current_path[:len(special_path)] == special_path
-            for special_path in SPECIAL_MERGE_PATHS
+with open("scanner_list.json") as f:
+    scanners_config = json.load(f)
+
+API_MAPPING = {
+    "bounding": "http://localhost:8000/api/v1/bounding",
+    "sanitation": "http://localhost:8001/api/v1/sanitation",
+    "validator": "http://localhost:8002/api/v1/validator"
+}
+
+SCANNER_CATEGORIES = {
+    "bounding": ["SoftwareCheck", "EncryptionDetector", "PageCount","ImageBlurCheck", "FormatCheck",
+                 "ImageDimCheck", "ImageMemoryCheck", "ExecutableScript", "ProfanityCheck",
+                 "HarmfulString", "PiiDetector", "BinTransform","TokenLimit"],
+    "sanitation": ["RemoveUnicode", "Secrets"],
+    "validator": ["JsonValidator"]
+}
+
+def determine_scanner_category(execution_plan: Dict):
+    """确定payload所属的分类及对应的API地址"""
+    # 构建扫描器到分类的反向映射
+    scanner_mapping = {}
+    for category, scanners in SCANNER_CATEGORIES.items():
+        for scanner in scanners:
+            scanner_mapping[scanner.lower()] = category
+    
+    # 收集所有扫描器分类
+    found_categories = set()
+    for scanner in execution_plan.keys():
+        normalized_scanner = scanner.replace(' ', '').lower()
+        
+        category = scanner_mapping.get(normalized_scanner)
+        if not category:
+            raise ValueError(f"未知的扫描器类型: {scanner}")
+        found_categories.add(category)
+    
+    # 验证分类一致性
+    if len(found_categories) == 0:
+        raise ValueError("未找到匹配的扫描器分类")
+    if len(found_categories) > 1:
+        raise ValueError(f"发现冲突的分类: {found_categories}")
+    
+    category = found_categories.pop()
+    return category, API_MAPPING[category]
+
+def execute_payload(payload: Dict) -> Dict:
+    """执行单个payload请求"""
+    try:
+        execution_plan = payload["service_params"]["job_object"]["execution_plan"]
+        category, api_url = determine_scanner_category(execution_plan)
+        
+        response = requests.post(
+            url=api_url,
+            json=payload,
+            headers={"Content-Type": "application/json"},
+            timeout=300
         )
-
-    def deep_merge_param(default_val, user_val, current_path):
-        """递归合并参数"""
-        # 如果是特殊路径且都是列表
-        if is_special_path(current_path) and isinstance(default_val, list) and isinstance(user_val, list):
-            # 合并去重（保持顺序）
-            seen = {}
-            merged = []
-            for item in default_val + user_val:
-                if item not in seen:
-                    seen[item] = True
-                    merged.append(item)
-            return merged
         
-        # 如果是字典则递归合并
-        if isinstance(default_val, dict) and isinstance(user_val, dict):
-            merged_dict = copy.deepcopy(default_val)
-            for key, sub_user_val in user_val.items():
-                new_path = current_path + (key,)
-                if key in merged_dict:
-                    merged_dict[key] = deep_merge_param(merged_dict[key], sub_user_val, new_path)
+        return {
+            "status": "success",
+            "category": category,
+            "status_code": response.status_code,
+            "response": response.json(),
+            "payload_id": payload["job_params"]["jobid"]
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "error": str(e),
+            "payload_id": payload["job_params"].get("jobid", "unknown")
+        }
+
+def process_all_payloads(payloads: list) -> list:
+    """批量处理所有payload"""
+    results = []
+    for payload in payloads:
+        results.append(execute_payload(payload))
+    return results
+
+def parse_manifest(manifest_path):
+    try:
+        with open(manifest_path) as f:
+            manifest = f.read()
+        manifest = yaml.safe_load(manifest)
+        return manifest
+    except yaml.YAMLError as e:
+        st.error(f"Manifest parsing failed: {str(e)}")
+        return {}
+    
+
+def generate_payloads(input_payload, data):
+    generated_payloads = []
+    
+    for data_type in data:
+        items = data[data_type]
+        items = items if isinstance(items, list) else [items]
+        
+        for item in items:
+            # 处理数据路径
+            data_paths = item.get('data', [])
+            dtype = item.get('type', [])
+            data_paths = data_paths if isinstance(data_paths, list) else [data_paths]
+            
+            for data_path in data_paths:
+                # 获取数据值
+                if data_path == "*":
+                    data_value = "*"
                 else:
-                    merged_dict[key] = copy.deepcopy(sub_user_val)
-            return merged_dict
+                    param_key = data_path.split('.')[-1]
+                    data_value = input_payload["service_params"]["job_object"].get(param_key)
+                
+                if not data_value:
+                    continue
+                
+                # 获取策略和执行计划的对应关系
+                policies = item.get('policies', [])
+                execution_plan_steps = item.get('execution_plan', [])
+                
+                # 对齐策略和步骤数量
+                num_policies = len(policies)
+                num_steps = len(execution_plan_steps)
+                
+                # 生成对应数量的payload
+                for idx in range(max(num_policies, num_steps)):
+                    # 合并当前步骤的执行计划
+                    current_step = {}
+                    if idx < num_steps:
+                        current_step = execution_plan_steps[idx]
+                        if isinstance(current_step, list):
+                            current_step = {k: v for step in current_step for k, v in step.items()}
+                        elif isinstance(current_step, dict):
+                            current_step = current_step.copy()
+                    
+                    # 获取当前策略
+                    current_policy = policies[idx] if idx < num_policies else f"policy_{idx+1:03d}"
+                    
+                    # 构建payload
+                    new_payload = {
+                        "job_params": input_payload["job_params"],
+                        "service_params": {
+                            "callback_url": input_payload["service_params"]["callback_url"],
+                            "job_object": {
+                                "io": input_payload["service_params"]["job_object"]["io"],
+                                "policy_id": current_policy,
+                                "data": data_value,
+                                "data_type":dtype,
+                                "execution_plan": current_step
+                            }
+                        }
+                    }
+                    generated_payloads.append(new_payload)
+    
+    return generated_payloads
+
+
+def load_execution_plan(policy_names: List[str], policy_dir: str = "policies") -> Dict[str, Any]:
+    execution_plan = {}
+    for policy_name in policy_names:
+        file_path = os.path.join(policy_dir, f"{policy_name}.json")
+        try:
+            with open(file_path, 'r') as f:
+                policy = json.load(f)
+            
+            execution_plan[policy_name] = policy['Statement'][0]["Condition"]
+            
+        except FileNotFoundError:
+            print(f" {policy_name} is not exist")
+            execution_plan[policy_name] = None
+        except json.JSONDecodeError:
+            print(f" {policy_name} format error")
+            execution_plan[policy_name] = None
+        except Exception as e:
+            print(f"Processing {policy_name} error: {str(e)}")
+            execution_plan[policy_name] = None
+            
+    return execution_plan
+
+
+def enrich_data_with_plans(original_data: Dict[str, Any], policy_dir: str = "policies") -> Dict[str, Any]:
+    """
+    增强数据结构，为每个数据项添加执行计划
+    
+    :param original_data: 原始数据结构
+    :param policy_dir: 策略文件存储目录
+    :return: 增强后的数据结构
+    """
+    # 深拷贝原始数据避免污染
+    data = copy.deepcopy(original_data)
+    
+    # 收集所有唯一策略名称
+    all_policies = set()
+    for data_type in data.values():
+        items = data_type if isinstance(data_type, list) else [data_type]
+        for item in items:
+            all_policies.update(item.get('policies', []))
+    
+    execution_plans = load_execution_plan(all_policies, policy_dir)
+
+    for data_type, items in data.items():
+        processed_items = items if isinstance(items, list) else [items]
         
-        # 其他情况直接使用用户值
-        return copy.deepcopy(user_val)
-
-    merged = copy.deepcopy(default_scanners)
+        for item in processed_items:
+            item["execution_plan"] = []
+            for policy_name in item.get('policies', []):
+                if policy_plan := execution_plans.get(policy_name):
+                    
+                    item["execution_plan"].append(policy_plan)
+        data[data_type] = processed_items if isinstance(items, list) else processed_items[0]
     
-    for scanner_name, user_params in user_scanners.items():
-        if scanner_name not in merged:
-            merged[scanner_name] = copy.deepcopy(user_params)
-        else:
-            # 从扫描器名称开始构建路径
-            merged[scanner_name] = deep_merge_param(
-                default_val=merged[scanner_name],
-                user_val=user_params,
-                current_path=(scanner_name,)
-            )
-    
-    return merged
+    return data
 
-# 示例数据
-default = {
-    "SoftwareCheck": {
-        "software_blacklist": ["", "Photoshop", "Corel", "pdfTeX"]
-    },
-    "JsonValidator": {
-        "mandate_keys": {
-            "clientData.country": ["IN", "CH"],
-            "clientData.appName": ["seige_v2", "seige_v3"]
+if __name__ == "__main__":
+    input_payload = {
+            "job_params": {
+                "jobid": "JID-54ca58ba-c495-11ed-b20c-0a586e830578",
+                "task_id": "TID-54ca58ba-c495-11ed-b20c-0a586e830578",
+                "app_name": "synthesizer",
+                "use_case": "aadhar_redact",
+            },
+            "service_params": {
+                "callback_url": "http://service-swoosh-orchestrator.swoosh-dev.svc.cluster.local:8889/api/v1/callback",
+                "job_object": {
+                    "io": "i",
+                    "policy_id": "policy_00001",
+                    "service_path": "what are you doing",
+                    "output_path":"I'm writing a book",
+                    "output_img_path":r"C:\Users\1657820\Desktop\test_imgs\006.jpg",
+                }
+            }
         }
-    }
-}
-
-user = {
-    "SoftwareCheck": {
-        "software_blacklist": ["NewSoft", "Photoshop"]
-    },
-    "JsonValidator": {
-        "mandate_keys": {
-            "clientData.country": ["US"],
-            "clientData.appName": ["seige_v4"],
-            "new_key": "value"
-        }
-    },
-    "NewScanner": {"param": 123}
-}
-
-# 执行合并
-merged = merge_scanners_flattened(default, user)
-
-# 验证结果
-print(merged["SoftwareCheck"]["software_blacklist"])
-# 输出：['', 'Photoshop', 'Corel', 'pdfTeX', 'NewSoft']
-
-print(merged["JsonValidator"]["mandate_keys"]["clientData.country"])
-# 输出：['IN', 'CH', 'US']
-
-print(merged["JsonValidator"]["mandate_keys"]["clientData.appName"])
-# 输出：['seige_v2', 'seige_v3', 'seige_v4']
-
-print(merged["JsonValidator"]["mandate_keys"]["new_key"])
-# 输出：'value'
-
-print(merged["NewScanner"])
-# 输出：{'param': 123}
+    manifest_path = r"C:\Users\1657820\Desktop\51433-friday-experiments\guardrails_demo\usecase_manifest_upd1.yml"
+    manifest = parse_manifest(manifest_path)
+    input_data = manifest['Ops_agents']['agent1']['guardrails']['input_data']
+    data = enrich_data_with_plans(input_data,policy_dir="guardrails_demo\\policies")
+    payloads = generate_payloads(input_payload, data)
+    results = process_all_payloads(payloads)
+    print(results)
