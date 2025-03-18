@@ -1,34 +1,105 @@
-{
-  "file_bounding": {
-    "SoftwareCheck": {"software_blacklist":  ["","Photoshop","Corel","PhotoScape","PhotoPlus","GIMP","Pixelmator","Illustrator","Windows Photo Editor","ilovepdf","pdfTeX"]},
-    "EncryptionDetector": {}
-  },
+import copy
 
-  "image_bounding": {
-    "ImageBlurCheck": {"score_thresh": 0.5, "save_folder": "save_folder"},
-    "ImageDimCheck": {"img_dim_thresh": [256, 256]},
-    "ImageMemoryCheck":{"max_size":1024,"min_size":128}
-  },
+def merge_scanners_flattened(default_scanners, user_scanners):
+    # 定义需要特殊合并的参数路径（元组表示嵌套路径）
+    SPECIAL_MERGE_PATHS = {
+        ('SoftwareCheck', 'software_blacklist'),
+        ('JsonValidator', 'mandate_keys', 'clientData.country'),
+        ('JsonValidator', 'mandate_keys', 'clientData.appName')
+    }
 
-  "text_bounding": {
-    "ExecutableScript": {},
-    "HarmfulString": {"case_sensitive": false}},
+    def is_special_path(current_path):
+        """检查当前路径是否匹配任意特殊路径"""
+        return any(
+            len(current_path) >= len(special_path) and 
+            current_path[:len(special_path)] == special_path
+            for special_path in SPECIAL_MERGE_PATHS
+        )
 
-  "text_data_sanitation":{
-    "RemoveUnicode": {"sanitize":true},
-    "Secrets":{"sanitize": true}},
+    def deep_merge_param(default_val, user_val, current_path):
+        """递归合并参数"""
+        # 如果是特殊路径且都是列表
+        if is_special_path(current_path) and isinstance(default_val, list) and isinstance(user_val, list):
+            # 合并去重（保持顺序）
+            seen = {}
+            merged = []
+            for item in default_val + user_val:
+                if item not in seen:
+                    seen[item] = True
+                    merged.append(item)
+            return merged
+        
+        # 如果是字典则递归合并
+        if isinstance(default_val, dict) and isinstance(user_val, dict):
+            merged_dict = copy.deepcopy(default_val)
+            for key, sub_user_val in user_val.items():
+                new_path = current_path + (key,)
+                if key in merged_dict:
+                    merged_dict[key] = deep_merge_param(merged_dict[key], sub_user_val, new_path)
+                else:
+                    merged_dict[key] = copy.deepcopy(sub_user_val)
+            return merged_dict
+        
+        # 其他情况直接使用用户值
+        return copy.deepcopy(user_val)
 
-    "validators":{
-      "JsonValidator":{"mandate_keys":
-              {
-              "clientData.alpha numeric":"[a-zA-Z0-9]{4,8}",
-              "clientData.country":["IN","CH"],
-              "clientData.appName":["seige_v2","seige_v3"],
-              "clientData.JID":"JID-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$",
-              "clientData.doc-id":"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
-              }
-      }},
-      
-  "numeric_bounding":{
-    "BinTransform": {"catagories":[{"name": "high", "range": [70, 100]},{"name": "medium", "range": [40, 60]},{"name": "low", "range": [0, 39]}],"default":"undefined"}
-  }}
+    merged = copy.deepcopy(default_scanners)
+    
+    for scanner_name, user_params in user_scanners.items():
+        if scanner_name not in merged:
+            merged[scanner_name] = copy.deepcopy(user_params)
+        else:
+            # 从扫描器名称开始构建路径
+            merged[scanner_name] = deep_merge_param(
+                default_val=merged[scanner_name],
+                user_val=user_params,
+                current_path=(scanner_name,)
+            )
+    
+    return merged
+
+# 示例数据
+default = {
+    "SoftwareCheck": {
+        "software_blacklist": ["", "Photoshop", "Corel", "pdfTeX"]
+    },
+    "JsonValidator": {
+        "mandate_keys": {
+            "clientData.country": ["IN", "CH"],
+            "clientData.appName": ["seige_v2", "seige_v3"]
+        }
+    }
+}
+
+user = {
+    "SoftwareCheck": {
+        "software_blacklist": ["NewSoft", "Photoshop"]
+    },
+    "JsonValidator": {
+        "mandate_keys": {
+            "clientData.country": ["US"],
+            "clientData.appName": ["seige_v4"],
+            "new_key": "value"
+        }
+    },
+    "NewScanner": {"param": 123}
+}
+
+# 执行合并
+merged = merge_scanners_flattened(default, user)
+
+# 验证结果
+print(merged["SoftwareCheck"]["software_blacklist"])
+# 输出：['', 'Photoshop', 'Corel', 'pdfTeX', 'NewSoft']
+
+print(merged["JsonValidator"]["mandate_keys"]["clientData.country"])
+# 输出：['IN', 'CH', 'US']
+
+print(merged["JsonValidator"]["mandate_keys"]["clientData.appName"])
+# 输出：['seige_v2', 'seige_v3', 'seige_v4']
+
+print(merged["JsonValidator"]["mandate_keys"]["new_key"])
+# 输出：'value'
+
+print(merged["NewScanner"])
+# 输出：{'param': 123}
