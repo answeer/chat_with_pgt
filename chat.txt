@@ -1,245 +1,73 @@
-import streamlit as st
-import json
-import yaml
-import os
-import copy
-import requests
-from typing import Dict, List, Any
+一、框架核心功能解析
+​1. Kubeflow
 
+​定位: Kubernetes 原生的机器学习平台，解决端到端 MLOps 流程。
+​核心模块:
+​Pipeline: 基于 Argo 的工作流引擎，支持可视化编排训练/部署流程。
+​Katib: 自动化超参数调优（AutoML）。
+​KServe: 模型服务化框架，支持 TensorFlow/PyTorch 等多框架模型部署。
+​Training Operators: 分布式训练框架集成（如 TFJob、PyTorchJob）。
+​关键技术: 深度依赖 Kubernetes，强调容器化、弹性伸缩和云原生部署。
+​2. MLFlow
 
-with open("scanner_list.json") as f:
-    scanners_config = json.load(f)
+​定位: 轻量级机器学习生命周期管理工具，聚焦实验跟踪与模型治理。
+​核心模块:
+​Tracking: 记录实验参数、指标、代码版本和输出文件。
+​Projects: 打包可复现的代码环境（支持 Conda/Docker）。
+​Models: 标准化模型格式，支持跨框架部署（ONNX、PyTorch 等）。
+​Registry: 中央模型仓库，支持版本控制和生命周期管理。
+​关键技术: 以 Python 为中心，强调易用性和快速集成。
+​3. Ray
 
-API_MAPPING = {
-    "bounding": "http://localhost:8000/api/v1/bounding",
-    "sanitation": "http://localhost:8001/api/v1/sanitation",
-    "validator": "http://localhost:8002/api/v1/validator"
-}
+​定位: 通用分布式计算框架，专为高性能并行计算设计。
+​核心模块:
+​Ray Core: 基于 Actor 模型的分布式任务调度（支持 Python/Java）。
+​Ray Tune: 超参数优化库，支持异步分布式搜索。
+​Ray Serve: 轻量级模型服务框架，支持多模型部署和 A/B 测试。
+​RLlib: 强化学习专用库，集成主流算法（如 PPO、DQN）。
+​关键技术: 低延迟任务调度和计算并行化，适合实时计算场景。
+​二、优劣势对比
+​维度	​Kubeflow	​MLFlow	​Ray
+​核心优势	- 完整的 MLOps 流水线支持
+- 云原生弹性伸缩	- 轻量级实验跟踪
+- 模型管理友好	- 高性能并行计算
+- 低延迟任务调度
+​学习曲线	陡峭（需熟悉 Kubernetes）	平缓（Python 友好）	中等（需理解分布式编程模型）
+​部署复杂度	高（依赖 Kubernetes 集群）	低（单机或轻量级服务）	中等（需集群但自动化程度高）
+​扩展性	高（通过 K8s 自动扩缩容）	有限（依赖外部资源管理）	极高（动态扩缩容，毫秒级响应）
+​生态集成	多云厂商兼容（AWS/GCP/Azure）	主流 ML 框架（TF/PyTorch/XGBoost）	深度学习、强化学习专用库（如 RLlib）
+​劣势	- 配置复杂
+- 过度依赖 K8s	- 无内置资源调度
+- 功能较单一	- 模型管理较弱
+- 社区较小
+​三、适用场景推荐
+​1. Kubeflow 的理想场景
 
-SCANNER_CATEGORIES = {
-    "bounding": ["SoftwareCheck", "EncryptionDetector", "PageCount","ImageBlurCheck", "FormatCheck",
-                 "ImageDimCheck", "ImageMemoryCheck", "ExecutableScript", "ProfanityCheck",
-                 "HarmfulString", "PiiDetector", "BinTransform","TokenLimit"],
-    "sanitation": ["RemoveUnicode", "Secrets"],
-    "validator": ["JsonValidator"]
-}
+​企业级 MLOps 平台：需要端到端自动化流程（从数据预处理到模型监控）的大规模团队。
+​云原生环境：已使用 Kubernetes 且需要弹性扩缩容（如应对突发训练任务）。
+​复杂流水线：涉及多阶段任务（数据清洗 → 特征工程 → 多模型训练 → A/B 测试）。
+典型案例：金融风控团队在 GCP 上部署自动化反欺诈模型，每周需处理千万级数据并滚动更新模型。
 
-def determine_scanner_category(execution_plan: Dict):
-    """确定payload所属的分类及对应的API地址"""
-    # 构建扫描器到分类的反向映射
-    scanner_mapping = {}
-    for category, scanners in SCANNER_CATEGORIES.items():
-        for scanner in scanners:
-            scanner_mapping[scanner.lower()] = category
-    
-    # 收集所有扫描器分类
-    found_categories = set()
-    for scanner in execution_plan.keys():
-        normalized_scanner = scanner.replace(' ', '').lower()
-        
-        category = scanner_mapping.get(normalized_scanner)
-        if not category:
-            raise ValueError(f"未知的扫描器类型: {scanner}")
-        found_categories.add(category)
-    
-    # 验证分类一致性
-    if len(found_categories) == 0:
-        raise ValueError("未找到匹配的扫描器分类")
-    if len(found_categories) > 1:
-        raise ValueError(f"发现冲突的分类: {found_categories}")
-    
-    category = found_categories.pop()
-    return category, API_MAPPING[category]
+​2. MLFlow 的理想场景
 
-def execute_payload(payload: Dict) -> Dict:
-    """执行单个payload请求"""
-    try:
-        execution_plan = payload["service_params"]["job_object"]["execution_plan"]
-        category, api_url = determine_scanner_category(execution_plan)
-        
-        response = requests.post(
-            url=api_url,
-            json=payload,
-            headers={"Content-Type": "application/json"},
-            timeout=300
-        )
-        
-        return {
-            "status": "success",
-            "category": category,
-            "status_code": response.status_code,
-            "response": response.json(),
-            "payload_id": payload["job_params"]["jobid"]
-        }
-    except Exception as e:
-        return {
-            "status": "error",
-            "error": str(e),
-            "payload_id": payload["job_params"].get("jobid", "unknown")
-        }
+​实验密集型项目：算法团队频繁调整超参数，需追踪数百次实验效果。
+​模型治理优先：需要严格管理模型版本、阶段（Staging/Production）和审计追踪。
+​轻量级部署：中小团队希望快速搭建实验管理系统，无需复杂基础设施。
+典型案例：电商推荐算法团队使用 MLFlow 对比不同深度学习模型的 CTR 指标，并通过 Model Registry 管理线上模型版本。
 
-def process_all_payloads(payloads: list) -> list:
-    """批量处理所有payload"""
-    results = []
-    for payload in payloads:
-        results.append(execute_payload(payload))
-    return results
+​3. Ray 的理想场景
 
-def parse_manifest(manifest_path):
-    try:
-        with open(manifest_path) as f:
-            manifest = f.read()
-        manifest = yaml.safe_load(manifest)
-        return manifest
-    except yaml.YAMLError as e:
-        st.error(f"Manifest parsing failed: {str(e)}")
-        return {}
-    
+​计算密集型任务：强化学习训练（如自动驾驶仿真）、实时数据处理（如流式特征计算）。
+​高并发推理：需要毫秒级响应的推荐系统（使用 Ray Serve 部署多模型并行服务）。
+​快速原型开发：研究人员需要分布式计算但不希望管理底层集群（如 Ray 的单机模拟分布式环境）。
+典型案例：游戏公司使用 RLlib 训练多智能体对抗模型，并通过 Ray Serve 实现实时 AI 对战服务。
 
-def generate_payloads(input_payload, data):
-    generated_payloads = []
-    
-    for data_type in data:
-        items = data[data_type]
-        items = items if isinstance(items, list) else [items]
-        
-        for item in items:
-            # 处理数据路径
-            data_paths = item.get('data', [])
-            dtype = item.get('type', [])
-            data_paths = data_paths if isinstance(data_paths, list) else [data_paths]
-            
-            for data_path in data_paths:
-                # 获取数据值
-                if data_path == "*":
-                    data_value = "*"
-                else:
-                    param_key = data_path.split('.')[-1]
-                    data_value = input_payload["service_params"]["job_object"].get(param_key)
-                
-                if not data_value:
-                    continue
-                
-                # 获取策略和执行计划的对应关系
-                policies = item.get('policies', [])
-                execution_plan_steps = item.get('execution_plan', [])
-                
-                # 对齐策略和步骤数量
-                num_policies = len(policies)
-                num_steps = len(execution_plan_steps)
-                
-                # 生成对应数量的payload
-                for idx in range(max(num_policies, num_steps)):
-                    # 合并当前步骤的执行计划
-                    current_step = {}
-                    if idx < num_steps:
-                        current_step = execution_plan_steps[idx]
-                        if isinstance(current_step, list):
-                            current_step = {k: v for step in current_step for k, v in step.items()}
-                        elif isinstance(current_step, dict):
-                            current_step = current_step.copy()
-                    
-                    # 获取当前策略
-                    current_policy = policies[idx] if idx < num_policies else f"policy_{idx+1:03d}"
-                    
-                    # 构建payload
-                    new_payload = {
-                        "job_params": input_payload["job_params"],
-                        "service_params": {
-                            "callback_url": input_payload["service_params"]["callback_url"],
-                            "job_object": {
-                                "io": input_payload["service_params"]["job_object"]["io"],
-                                "policy_id": current_policy,
-                                "data": data_value,
-                                "data_type":dtype,
-                                "execution_plan": current_step
-                            }
-                        }
-                    }
-                    generated_payloads.append(new_payload)
-    
-    return generated_payloads
-
-
-def load_execution_plan(policy_names: List[str], policy_dir: str = "policies") -> Dict[str, Any]:
-    execution_plan = {}
-    for policy_name in policy_names:
-        file_path = os.path.join(policy_dir, f"{policy_name}.json")
-        try:
-            with open(file_path, 'r') as f:
-                policy = json.load(f)
-            
-            execution_plan[policy_name] = policy['Statement'][0]["Condition"]
-            
-        except FileNotFoundError:
-            print(f" {policy_name} is not exist")
-            execution_plan[policy_name] = None
-        except json.JSONDecodeError:
-            print(f" {policy_name} format error")
-            execution_plan[policy_name] = None
-        except Exception as e:
-            print(f"Processing {policy_name} error: {str(e)}")
-            execution_plan[policy_name] = None
-            
-    return execution_plan
-
-
-def enrich_data_with_plans(original_data: Dict[str, Any], policy_dir: str = "policies") -> Dict[str, Any]:
-    """
-    增强数据结构，为每个数据项添加执行计划
-    
-    :param original_data: 原始数据结构
-    :param policy_dir: 策略文件存储目录
-    :return: 增强后的数据结构
-    """
-    # 深拷贝原始数据避免污染
-    data = copy.deepcopy(original_data)
-    
-    # 收集所有唯一策略名称
-    all_policies = set()
-    for data_type in data.values():
-        items = data_type if isinstance(data_type, list) else [data_type]
-        for item in items:
-            all_policies.update(item.get('policies', []))
-    
-    execution_plans = load_execution_plan(all_policies, policy_dir)
-
-    for data_type, items in data.items():
-        processed_items = items if isinstance(items, list) else [items]
-        
-        for item in processed_items:
-            item["execution_plan"] = []
-            for policy_name in item.get('policies', []):
-                if policy_plan := execution_plans.get(policy_name):
-                    
-                    item["execution_plan"].append(policy_plan)
-        data[data_type] = processed_items if isinstance(items, list) else processed_items[0]
-    
-    return data
-
-if __name__ == "__main__":
-    input_payload = {
-            "job_params": {
-                "jobid": "JID-54ca58ba-c495-11ed-b20c-0a586e830578",
-                "task_id": "TID-54ca58ba-c495-11ed-b20c-0a586e830578",
-                "app_name": "synthesizer",
-                "use_case": "aadhar_redact",
-            },
-            "service_params": {
-                "callback_url": "http://service-swoosh-orchestrator.swoosh-dev.svc.cluster.local:8889/api/v1/callback",
-                "job_object": {
-                    "io": "i",
-                    "policy_id": "policy_00001",
-                    "service_path": "what are you doing",
-                    "output_path":"I'm writing a book",
-                    "output_img_path":r"C:\Users\1657820\Desktop\test_imgs\006.jpg",
-                }
-            }
-        }
-    manifest_path = r"C:\Users\1657820\Desktop\51433-friday-experiments\guardrails_demo\usecase_manifest_upd1.yml"
-    manifest = parse_manifest(manifest_path)
-    input_data = manifest['Ops_agents']['agent1']['guardrails']['input_data']
-    data = enrich_data_with_plans(input_data,policy_dir="guardrails_demo\\policies")
-    payloads = generate_payloads(input_payload, data)
-    results = process_all_payloads(payloads)
-    print(results)
+​四、综合选型建议
+​组合使用：多数团队选择混合方案，例如：
+MLFlow（实验跟踪） + Ray（分布式训练） + Kubeflow（生产部署）
+​团队技术栈：
+已有 Kubernetes 专家 → Kubeflow
+Python 为主且需快速迭代 → MLFlow
+强化学习/高并发计算 → Ray
+​关键决策点：
+优先考虑是否需要云原生支持（Kubeflow）、实验管理（MLFlow）还是计算性能（Ray）。
