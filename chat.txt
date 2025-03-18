@@ -1,50 +1,34 @@
-import copy
-
-def merge_scanners(default_scanners, user_scanners):
-    merged = copy.deepcopy(default_scanners)
-    for scanner_name, user_params in user_scanners.items():
-        if scanner_name not in merged:
-            merged[scanner_name] = copy.deepcopy(user_params)
-        else:
-            merged_params = merged[scanner_name]
-            for key, user_value in user_params.items():
-                if key in merged_params:
-                    default_value = merged_params[key]
-                    # 如果当前键对应的值都是列表，则合并去重
-                    if isinstance(default_value, list) and isinstance(user_value, list):
-                        # 使用字典来去重并保持顺序（Python 3.7+）
-                        merged_list = []
-                        seen = set()
-                        for item in default_value + user_value:
-                            if item not in seen:
-                                seen.add(item)
-                                merged_list.append(item)
-                        merged_params[key] = merged_list
-                    else:
-                        # 非列表类型则直接更新
-                        merged_params[key] = copy.deepcopy(user_value)
-                else:
-                    # 新增参数
-                    merged_params[key] = copy.deepcopy(user_value)
-    return merged
-
-# 示例用法
-default = {
-    "SoftwareCheck": {
-        "software_blacklist": ["","Photoshop","Corel","PhotoScape","PhotoPlus","GIMP","Pixelmator","Illustrator","Windows Photo Editor","ilovepdf","pdfTeX"]
-    },
+{
+  "file_bounding": {
+    "SoftwareCheck": {"software_blacklist":  ["","Photoshop","Corel","PhotoScape","PhotoPlus","GIMP","Pixelmator","Illustrator","Windows Photo Editor","ilovepdf","pdfTeX"]},
     "EncryptionDetector": {}
-}
+  },
 
-user = {
-    'EncryptionDetector': {}, 
-    'FormatCheck': {
-        'format_list': ['jpg', 'png', 'PNG', 'jpeg', 'tif', 'tiff', 'gif', 'bmp']
-    }, 
-    'SoftwareCheck': {
-        'software_blacklist': ['', 'Photoshop', 'Corel', 'PhotoScape', 'PhotoPlus', 'GIMP', 'Pixelmator', 'Illustrator', 'Windows Photo Editor', 'ilovepdf']
-    }
-}
+  "image_bounding": {
+    "ImageBlurCheck": {"score_thresh": 0.5, "save_folder": "save_folder"},
+    "ImageDimCheck": {"img_dim_thresh": [256, 256]},
+    "ImageMemoryCheck":{"max_size":1024,"min_size":128}
+  },
 
-merged = merge_scanners(default, user)
-print(merged)
+  "text_bounding": {
+    "ExecutableScript": {},
+    "HarmfulString": {"case_sensitive": false}},
+
+  "text_data_sanitation":{
+    "RemoveUnicode": {"sanitize":true},
+    "Secrets":{"sanitize": true}},
+
+    "validators":{
+      "JsonValidator":{"mandate_keys":
+              {
+              "clientData.alpha numeric":"[a-zA-Z0-9]{4,8}",
+              "clientData.country":["IN","CH"],
+              "clientData.appName":["seige_v2","seige_v3"],
+              "clientData.JID":"JID-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$",
+              "clientData.doc-id":"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+              }
+      }},
+      
+  "numeric_bounding":{
+    "BinTransform": {"catagories":[{"name": "high", "range": [70, 100]},{"name": "medium", "range": [40, 60]},{"name": "low", "range": [0, 39]}],"default":"undefined"}
+  }}
