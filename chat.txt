@@ -1,35 +1,16 @@
-
-  {
-  "file_bounding": {
-    "SoftwareCheck": {"software_blacklist":  ["","Photoshop","Corel","PhotoScape","PhotoPlus","GIMP","Pixelmator","Illustrator","Windows Photo Editor","ilovepdf","pdfTeX"]},
-    "EncryptionDetector": {}
-  },
-
-  "image_bounding": {
-    "ImageBlurCheck": {"score_thresh": 0.5, "save_folder": "save_folder"},
-    "ImageDimCheck": {"img_dim_thresh": [256, 256]},
-    "ImageMemoryCheck":{"max_size":1024,"min_size":128}
-  },
-
-  "text_bounding": {
-    "ExecutableScript": {},
-    "HarmfulString": {"case_sensitive": false}},
-
-  "text_data_sanitation":{
-    "RemoveUnicode": {"sanitize":true},
-    "Secrets":{"sanitize": true}},
-
-    "validators":{
-      "JsonValidator":{"mandate_keys":
-              {
-              "clientData.alpha numeric":"[a-zA-Z0-9]{4,8}",
-              "clientData.country":"(?i)(IN|CH)",
-              "clientData.appName":"(?i)(seige_v3|seige_v2)",
-              "clientData.JID":"JID-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$",
-              "clientData.doc-id":"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
-              }
-      }},
-      
-  "numeric_bounding":{
-    "BinTransform": {"catagories":[{"name": "high", "range": [70, 100]},{"name": "medium", "range": [40, 60]},{"name": "low", "range": [0, 39]}],"default":"undefined"}
-  }}
+def show_scanner_config():
+    """展示扫描器配置"""
+    st.markdown("### 🔍 Default Scanners Configuration")
+    
+    for category, scanners in DEFAULT_SCANNERS.items():
+        # 美化分类名称
+        category_name = category.replace('_', ' ').title()
+        
+        with st.expander(f"📁 {category_name}", expanded=True):
+            for scanner_name, params in scanners.items():
+                st.markdown(f"<div class='scanner-name'>🛡️ {scanner_name}</div>", unsafe_allow_html=True)
+                
+                if params:
+                    st.code(f"Parameters:\n{json.dumps(params, indent=4)}", language='json')
+                else:
+                    st.caption("No parameters required")
