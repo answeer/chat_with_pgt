@@ -1,130 +1,35 @@
-import streamlit as st
-import json
-import yaml
-from typing import Dict, List, Any
 
-# 配置页面
-st.set_page_config(page_title="Guardrails Processor", layout="wide")
+  {
+  "file_bounding": {
+    "SoftwareCheck": {"software_blacklist":  ["","Photoshop","Corel","PhotoScape","PhotoPlus","GIMP","Pixelmator","Illustrator","Windows Photo Editor","ilovepdf","pdfTeX"]},
+    "EncryptionDetector": {}
+  },
 
-# 初始化session状态
-if 'results' not in st.session_state:
-    st.session_state.results = []
+  "image_bounding": {
+    "ImageBlurCheck": {"score_thresh": 0.5, "save_folder": "save_folder"},
+    "ImageDimCheck": {"img_dim_thresh": [256, 256]},
+    "ImageMemoryCheck":{"max_size":1024,"min_size":128}
+  },
 
-# 定义样式
-st.markdown("""
-<style>
-.json-box {border: 1px solid #ccc; padding: 10px; border-radius: 5px; margin-bottom: 20px;}
-.result-box {background-color: #f9f9f9; padding: 15px; border-radius: 5px; margin-top: 20px;}
-pre {background-color: #f5f5f5; padding: 10px; border-radius: 4px;}
-</style>
-""", unsafe_allow_html=True)
+  "text_bounding": {
+    "ExecutableScript": {},
+    "HarmfulString": {"case_sensitive": false}},
 
-# 加载扫描器配置
-with open("scanner_list.json") as f:
-    scanners_config = json.load(f)
+  "text_data_sanitation":{
+    "RemoveUnicode": {"sanitize":true},
+    "Secrets":{"sanitize": true}},
 
-# 布局定义
-col1, col2, col3 = st.columns([1, 1, 1])
-
-# 第一列：Payload输入
-with col1:
-    st.subheader("Input Payload")
-    payload_input = st.text_area(
-        "Paste JSON payload here",
-        height=400,
-        value=json.dumps({
-            "job_params": {
-                "jobid": "JID-...",
-                "task_id": "TID-...",
-                "app_name": "sample_app",
-                "use_case": "sample_use_case"
-            },
-            "service_params": {
-                "callback_url": "http://example.com/callback",
-                "job_object": {
-                    "io": "i",
-                    "policy_id": "policy_00001",
-                    "service_path": "sample_path",
-                    "output_path": "sample_output"
-                }
-            }
-        }, indent=2)
-    )
-
-# 第二列：Manifest输入
-with col2:
-    st.subheader("Manifest Content")
-    manifest_input = st.text_area(
-        "Paste YAML manifest here",
-        height=400,
-        value="""Ops_agents:
-  agent1:
-    guardrails:
-      input_data:
-        text:
-          - data: service_params.job_object.service_path
-            type: text
-            policies: [policy_0001]
-        image:
-          - data: service_params.job_object.output_img_path
-            type: image
-            policies: [policy_0002]"""
-    )
-
-# 第三列：扫描器参数展示
-with col3:
-    st.subheader("Scanner Parameters")
-    with st.expander("View Scanner Configurations"):
-        for scanner in scanners_config:
-            st.markdown(f"**{scanner['name']}**")
-            st.code(f"Parameters: {json.dumps(scanner['params'], indent=2)}")
-
-# 处理按钮
-if st.button("🚀 Process Payloads", use_container_width=True):
-    try:
-        # 解析输入
-        payload = json.loads(payload_input)
-        manifest = yaml.safe_load(manifest_input)
-        
-        # 处理数据
-        input_data = manifest['Ops_agents']['agent1']['guardrails']['input_data']
-        enriched_data = enrich_data_with_plans(input_data)
-        generated_payloads = generate_payloads(payload, enriched_data)
-        
-        # 执行处理
-        results = process_all_payloads(generated_payloads)
-        st.session_state.results = results
-        
-    except Exception as e:
-        st.error(f"Processing error: {str(e)}")
-
-# 结果显示
-if st.session_state.results:
-    st.subheader("Processing Results")
-    
-    for result in st.session_state.results:
-        with st.container():
-            if result["status"] == "success":
-                header = f"✅ {result['payload_id']} ({result['category']})"
-                color = "green"
-            else:
-                header = f"❌ {result['payload_id']}"
-                color = "red"
-            
-            st.markdown(f"<h4 style='color:{color}'>{header}</h4>", unsafe_allow_html=True)
-            
-            with st.expander("Details"):
-                cols = st.columns([1, 2])
-                with cols[0]:
-                    st.metric("Status Code", result.get("status_code", "N/A"))
-                with cols[1]:
-                    st.metric("API Endpoint", result.get("category", "N/A"))
-                
-                st.subheader("Response Details")
-                if result["status"] == "success":
-                    st.json(result["response"])
-                else:
-                    st.error(result.get("error", "Unknown error"))
-
-# 注意：此处需要保留原有的处理函数（process_all_payloads, generate_payloads等）
-# 需要在应用中包含所有依赖函数和API_MAPPING等配置
+    "validators":{
+      "JsonValidator":{"mandate_keys":
+              {
+              "clientData.alpha numeric":"[a-zA-Z0-9]{4,8}",
+              "clientData.country":"(?i)(IN|CH)",
+              "clientData.appName":"(?i)(seige_v3|seige_v2)",
+              "clientData.JID":"JID-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$",
+              "clientData.doc-id":"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+              }
+      }},
+      
+  "numeric_bounding":{
+    "BinTransform": {"catagories":[{"name": "high", "range": [70, 100]},{"name": "medium", "range": [40, 60]},{"name": "low", "range": [0, 39]}],"default":"undefined"}
+  }}
