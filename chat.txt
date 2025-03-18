@@ -1,122 +1,130 @@
-### Comparison of Kubeflow, MLflow, and Ray  
-Here’s a detailed breakdown of these frameworks, their strengths, weaknesses, and ideal use cases:
+import streamlit as st
+import json
+import yaml
+from typing import Dict, List, Any
 
----
+# 配置页面
+st.set_page_config(page_title="Guardrails Processor", layout="wide")
 
-### ​**1. Kubeflow**  
-**Overview**:  
-A Kubernetes-native platform for end-to-end ML workflows, including pipeline orchestration, hyperparameter tuning, and model serving.  
+# 初始化session状态
+if 'results' not in st.session_state:
+    st.session_state.results = []
 
-**Key Features**:  
-- ​**Workflow Orchestration**: Built-in pipelines (Argo-based) for multi-step ML workflows.  
-- ​**Hyperparameter Tuning**: Katib for automated hyperparameter optimization.  
-- ​**Model Serving**: KFServing for scalable, multi-framework inference (TensorFlow, PyTorch, etc.).  
-- ​**Multi-Tool Integration**: Supports Jupyter notebooks, TensorFlow Extended (TFX), and PyTorch operators.  
-- ​**Cloud-Native**: Designed for Kubernetes clusters (GKE, EKS, AKS).  
+# 定义样式
+st.markdown("""
+<style>
+.json-box {border: 1px solid #ccc; padding: 10px; border-radius: 5px; margin-bottom: 20px;}
+.result-box {background-color: #f9f9f9; padding: 15px; border-radius: 5px; margin-top: 20px;}
+pre {background-color: #f5f5f5; padding: 10px; border-radius: 4px;}
+</style>
+""", unsafe_allow_html=True)
 
-**Strengths**:  
-- ​**Scalability**: Seamlessly handles large-scale distributed training and serving.  
-- ​**Production-Grade**: Robust support for CI/CD, versioning, and multi-team collaboration.  
-- ​**Unified Ecosystem**: Integrates with cloud services (e.g., AWS SageMaker, GCP AI Platform).  
+# 加载扫描器配置
+with open("scanner_list.json") as f:
+    scanners_config = json.load(f)
 
-**Weaknesses**:  
-- ​**Complex Setup**: Requires Kubernetes expertise and infrastructure.  
-- ​**Steep Learning Curve**: Overkill for small projects or teams without Kubernetes experience.  
-- ​**Resource-Intensive**: High operational overhead for maintenance and updates.  
+# 布局定义
+col1, col2, col3 = st.columns([1, 1, 1])
 
-**Ideal For**:  
-- Enterprises with Kubernetes-based infrastructure.  
-- Teams needing production-grade ML pipelines and multi-framework serving.  
-- Use cases requiring strict compliance, auditability, and scalability (e.g., financial services, healthcare).  
+# 第一列：Payload输入
+with col1:
+    st.subheader("Input Payload")
+    payload_input = st.text_area(
+        "Paste JSON payload here",
+        height=400,
+        value=json.dumps({
+            "job_params": {
+                "jobid": "JID-...",
+                "task_id": "TID-...",
+                "app_name": "sample_app",
+                "use_case": "sample_use_case"
+            },
+            "service_params": {
+                "callback_url": "http://example.com/callback",
+                "job_object": {
+                    "io": "i",
+                    "policy_id": "policy_00001",
+                    "service_path": "sample_path",
+                    "output_path": "sample_output"
+                }
+            }
+        }, indent=2)
+    )
 
----
+# 第二列：Manifest输入
+with col2:
+    st.subheader("Manifest Content")
+    manifest_input = st.text_area(
+        "Paste YAML manifest here",
+        height=400,
+        value="""Ops_agents:
+  agent1:
+    guardrails:
+      input_data:
+        text:
+          - data: service_params.job_object.service_path
+            type: text
+            policies: [policy_0001]
+        image:
+          - data: service_params.job_object.output_img_path
+            type: image
+            policies: [policy_0002]"""
+    )
 
-### ​**2. MLflow**  
-**Overview**:  
-An open-source platform for managing the ML lifecycle, focusing on experiment tracking, reproducibility, and deployment.  
+# 第三列：扫描器参数展示
+with col3:
+    st.subheader("Scanner Parameters")
+    with st.expander("View Scanner Configurations"):
+        for scanner in scanners_config:
+            st.markdown(f"**{scanner['name']}**")
+            st.code(f"Parameters: {json.dumps(scanner['params'], indent=2)}")
 
-**Key Features**:  
-- ​**Experiment Tracking**: Log parameters, metrics, and artifacts (e.g., models, plots).  
-- ​**Model Registry**: Centralized model versioning and stage transitions (Staging → Production).  
-- ​**Project Packaging**: Reproducible environments via `conda`/`Docker`.  
-- ​**Model Serving**: REST API deployment for Python models (limited scalability).  
+# 处理按钮
+if st.button("🚀 Process Payloads", use_container_width=True):
+    try:
+        # 解析输入
+        payload = json.loads(payload_input)
+        manifest = yaml.safe_load(manifest_input)
+        
+        # 处理数据
+        input_data = manifest['Ops_agents']['agent1']['guardrails']['input_data']
+        enriched_data = enrich_data_with_plans(input_data)
+        generated_payloads = generate_payloads(payload, enriched_data)
+        
+        # 执行处理
+        results = process_all_payloads(generated_payloads)
+        st.session_state.results = results
+        
+    except Exception as e:
+        st.error(f"Processing error: {str(e)}")
 
-**Strengths**:  
-- ​**Simplicity**: Lightweight and easy to integrate with existing code (supports all ML libraries).  
-- ​**Flexibility**: Works locally or on cloud storage (AWS S3, Azure Blob).  
-- ​**Community Support**: Widely adopted with strong documentation and plugins (e.g., TensorBoard, PyTorch).  
+# 结果显示
+if st.session_state.results:
+    st.subheader("Processing Results")
+    
+    for result in st.session_state.results:
+        with st.container():
+            if result["status"] == "success":
+                header = f"✅ {result['payload_id']} ({result['category']})"
+                color = "green"
+            else:
+                header = f"❌ {result['payload_id']}"
+                color = "red"
+            
+            st.markdown(f"<h4 style='color:{color}'>{header}</h4>", unsafe_allow_html=True)
+            
+            with st.expander("Details"):
+                cols = st.columns([1, 2])
+                with cols[0]:
+                    st.metric("Status Code", result.get("status_code", "N/A"))
+                with cols[1]:
+                    st.metric("API Endpoint", result.get("category", "N/A"))
+                
+                st.subheader("Response Details")
+                if result["status"] == "success":
+                    st.json(result["response"])
+                else:
+                    st.error(result.get("error", "Unknown error"))
 
-**Weaknesses**:  
-- ​**Limited Orchestration**: No built-in pipeline orchestration or distributed training support.  
-- ​**Scalability Constraints**: Model serving lacks advanced features (e.g., autoscaling, GPU optimization).  
-- ​**Minimal Governance**: No native RBAC or audit logging.  
-
-**Ideal For**:  
-- Small to medium teams prioritizing experiment tracking and model management.  
-- Projects requiring rapid prototyping and reproducibility (e.g., research, academic work).  
-- Use cases where lightweight deployment suffices (e.g., batch inference, small API endpoints).  
-
----
-
-### ​**3. Ray**  
-**Overview**:  
-A distributed compute framework for scalable ML workloads, including hyperparameter tuning, reinforcement learning (RL), and model serving.  
-
-**Key Features**:  
-- ​**Distributed Training**: Scale PyTorch/TensorFlow workloads with minimal code changes.  
-- ​**Hyperparameter Tuning**: Ray Tune for parallel optimization (ASHA, Bayesian, etc.).  
-- ​**Reinforcement Learning**: RLlib for production-grade RL algorithms.  
-- ​**Model Serving**: Ray Serve for low-latency, autoscaling inference.  
-
-**Strengths**:  
-- ​**Performance**: Optimized for high-throughput, low-latency distributed computing.  
-- ​**Flexible API**: Python-first design simplifies scaling tasks (e.g., `@ray.remote` decorators).  
-- ​**Dynamic Workloads**: Efficiently handles iterative tasks like RL and simulation.  
-
-**Weaknesses**:  
-- ​**Complexity for Simple Tasks**: Overkill for non-distributed use cases.  
-- ​**Limited Ecosystem**: Fewer integrations compared to Kubeflow/MLflow.  
-- ​**Operational Overhead**: Requires cluster management (e.g., Ray Cluster, Kubernetes).  
-
-**Ideal For**:  
-- Teams needing distributed training or reinforcement learning at scale.  
-- High-performance computing tasks (e.g., simulations, real-time recommendation systems).  
-- Use cases requiring dynamic autoscaling and hybrid CPU/GPU workloads.  
-
----
-
-### ​**Head-to-Head Comparison**  
-| ​**Feature**               | ​**Kubeflow**                | ​**MLflow**                  | ​**Ray**                     |  
-|---------------------------|-----------------------------|-----------------------------|-----------------------------|  
-| ​**Core Focus**             | End-to-end ML on Kubernetes | Experiment tracking & model lifecycle | Distributed compute & RL |  
-| ​**Orchestration**          | ✅ Advanced (Argo)          | ❌                          | ✅ Custom (Ray workflows)   |  
-| ​**Hyperparameter Tuning**  | ✅ (Katib)                  | ❌                          | ✅✅ (Ray Tune)             |  
-| ​**Model Serving**          | ✅✅ (KFServing)            | ✅ Basic                    | ✅ (Ray Serve)              |  
-| ​**Distributed Training**   | ✅ (TF/PyTorch Operators)   | ❌                          | ✅✅ (Native integration)   |  
-| ​**Ease of Use**            | ❌ (K8s expertise needed)  | ✅✅ (Minimal setup)         | ✅ (Python-centric)         |  
-| ​**Scalability**            | ✅✅ (Enterprise-grade)     | ✅ (Small to medium)        | ✅✅ (High-performance)     |  
-| ​**Ideal Team Size**        | Large enterprises           | Small to medium teams       | Medium to large teams       |  
-| ​**Best Use Case**          | Cloud-native ML pipelines   | Experiment tracking & reproducibility | Distributed RL/HPC |  
-
----
-
-### ​**Recommendations**  
-- ​**Choose Kubeflow if**:  
-  - You already use Kubernetes and need a production-ready platform for complex workflows.  
-  - Compliance, audit trails, and multi-team collaboration are critical.  
-
-- ​**Choose MLflow if**:  
-  - Your priority is experiment tracking, model versioning, and lightweight deployment.  
-  - You work in a small team or on research projects requiring reproducibility.  
-
-- ​**Choose Ray if**:  
-  - You need distributed computing for RL, simulations, or high-throughput training.  
-  - Autoscaling, low-latency serving, and hybrid CPU/GPU workloads are essential.  
-
----
-
-### ​**Hybrid Approaches**  
-- ​**MLflow + Ray**: Use MLflow for tracking and Ray Tune/Serve for distributed tuning and serving.  
-- ​**Kubeflow + Ray**: Deploy Ray within Kubeflow pipelines for high-performance compute tasks.  
-
-Each framework excels in specific niches—align your choice with team expertise, infrastructure, and workflow complexity.  
+# 注意：此处需要保留原有的处理函数（process_all_payloads, generate_payloads等）
+# 需要在应用中包含所有依赖函数和API_MAPPING等配置
