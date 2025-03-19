@@ -1,1 +1,55 @@
-[[{'Version': '2024-08-26', 'Statement': [{'id': '0011', 'name': 'text_bounding_policy', 'Effect': '', 'Type': 'DataPolicy', 'Action': ['text_bounding:TokenLimit', 'text_bounding:ProfanityCheck', 'text_bounding:ExecutableScript', 'text_bounding:HarmfulString'], 'NotAction': [], 'Resource': 'Payload text', 'Condition': {'TokenLimit': {'token_limit': 100, 'token_method': 'nltk'}, 'ProfanityCheck': {}, 'ExecutableScript': {}, 'HarmfulString': {'case_sensitive': False}}}]}, {'Version': '2024-08-26', 'Statement': [{'id': '0011', 'name': 'data_sanitization_policy', 'Effect': '', 'Type': 'DataPolicy', 'Action': ['data_sanitization:RemoveUnicode', 'data_sanitization:Secrets'], 'Resource': 'Payload text', 'Condition': {'RemoveUnicode': {'sanitize': True}, 'Secrets': {'sanitize': True}}}]}], None, [{'Version': '2024-08-26', 'Statement': [{'id': '0011', 'name': 'file_bounding_policy', 'Effect': '', 'Type': 'DataPolicy', 'Action': ['file_bounding:EncryptionDetector', 'file_bounding:FormatCheck', 'file_bounding:SofwareCheck'], 'NotAction': [], 'Resource': 'Payload text', 'Condition': {'EncryptionDetector': {}, 'FormatCheck': {'format_list': ['jpg', 'png', 'PNG', 'jpeg', 'tif', 'tiff', 'gif', 'bmp']}, 'SoftwareCheck': {'software_blacklist': ['', 'Photoshop', 'Corel', 'PhotoScape', 'PhotoPlus', 'GIMP', 'Pixelmator', 'Illustrator', 'Windows Photo Editor', 'ilovepdf']}}}]}], [{'Version': '2024-17-22', 'Statement': [{'id': '0011', 'name': 'free_text_bounding_policy', 'Effect': '', 'Type': 'DataPolicy', 'Action': ['payload_validator:*'], 'NotAction': [], 'Resource': 'Payload text', 'Condition': {'JsonValidator': {'mandate_keys': {'clientData.appName': ['seige_v3', 'RTOB_IN_AADHAR', 'SSO'], 'clientData.country': ['IN'], 'clientData.consumerid': [], 'clientData.clientRefNumber': []}}}}]}]]
+def extract_conditions(data):
+    def process_item(item):
+        if isinstance(item, list):
+            return [process_element(e) for e in item if e is not None]
+        return item
+
+    def process_element(element):
+        if isinstance(element, dict):
+            new_element = {}
+            if 'Version' in element:
+                new_element['Version'] = element['Version']
+                new_element['Statement'] = []
+                for statement in element.get('Statement', []):
+                    new_statement = {
+                        'id': statement.get('id'),
+                        'name': statement.get('name'),
+                        'Condition': statement.get('Condition', {})
+                    }
+                    new_element['Statement'].append(new_statement)
+            return new_element
+        return element
+
+    execution_plan = []
+    for entry in data:
+        if entry is None:
+            execution_plan.append(None)
+        elif isinstance(entry, list):
+            processed = []
+            for item in entry:
+                processed_item = process_item(item)
+                if isinstance(processed_item, list):
+                    processed.extend(processed_item)
+                else:
+                    processed.append(processed_item)
+            execution_plan.append(processed)
+        else:
+            execution_plan.append(entry)
+    return execution_plan
+
+# 使用示例
+input_data = [
+    [
+        {'Version': '2024-08-26', 'Statement': [{'id': '0011', 'name': 'text_bounding_policy', 'Condition': {'TokenLimit': 100}}]},
+        {'Version': '2024-08-26', 'Statement': [{'id': '0011', 'name': 'data_sanitization_policy', 'Condition': {'RemoveUnicode': True}}]}
+    ],
+    None,
+    [
+        {'Version': '2024-08-26', 'Statement': [{'id': '0011', 'name': 'file_bounding_policy', 'Condition': {'FormatCheck': ['jpg']}}]}
+    ],
+    [
+        {'Version': '2024-17-22', 'Statement': [{'id': '0011', 'name': 'free_text_bounding_policy', 'Condition': {'JsonValidator': {}}}]}
+    ]
+]
+
+execution_plan = extract_conditions(input_data)
