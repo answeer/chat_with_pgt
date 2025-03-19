@@ -1,42 +1,15 @@
+res_col1, res_col2,res_col3 = st.columns([1, 1, 1])
 
-def format_output(result):
-    """Format the API response for display."""
-    output = []
-    encryption_status = None
-    skipped_scanners = []
-    data = result['response'].get('result', {})
-    for scanner_res in data:
-        if scanner_res["scanner_nm"].lower() == "encryption_destector":
-            encryption_status = scanner_res["prediction"].get("is_protected", False)
-            if encryption_status:
-                output.append(
-                    f'<div style="background-color:#FFEBEE; padding:1rem; border-radius:8px;'
-                    f'margin-bottom:1.5rem; border-left:4px solid #FF5252;">'
-                    f'⚠️ <strong>Encrypted file prompt</strong><br/>'
-                    f'Encrypted file detected. Scanners dependent on unencrypted status were skipped.<br/>'
-                    f'<code style="color:#D32F2F;">SoftwareCheck</code>, '
-                    f'<code style="color:#D32F2F;">PageCount</code>'
-                    f'</div>'
-                )
-        scanner = scanner_res["scanner_nm"]
-        prediction = list(scanner_res["prediction"].values())[0]
-        nstp = scanner_res["NSTP"]
-        sanitized_text = scanner_res.get("sanitized_data", None)
-        if sanitized_text is not None:
-            sanitized_text_escaped = escape(sanitized_text)
-            sanitized_text = sanitized_text_escaped.replace('\n', '<br/>')
-        scanner_style = "font-weight:600;font-size:16px;color:#333;"
-        sanitized_line = (
-            f'<strong>Sanitized Text:</strong> <code>{sanitized_text}</code><br/>' 
-            if sanitized_text 
-            else ''
-        )
-        
-        output.append(
-            f'<div style="margin-left:0.8rem;font-size:15px;line-height:1.5;margin-bottom:0.5rem;">'
-            f'<strong>Scanner:</strong> <code style="{scanner_style}">{scanner}</code><br/>'
-            f'<strong>NSTP:</strong> <code style="{scanner_style}">{nstp}</code><br/>'
-            f'<strong>Prediction:</strong> {prediction}<br/>{sanitized_line}</div>'
-        )
-    
-    return "".join(output)
+if st.session_state.results:
+    st.subheader("Processing Results")
+    for result in st.session_state.results:
+        with st.container():
+            if result["status"] == "success":
+                header = f"✅ Processing successful for {result['data_id']}"
+                color = "green"
+                st.markdown(f"<h5 style='color:{color};'>{header}</h5>", unsafe_allow_html=True)
+                st.markdown(format_output(result), unsafe_allow_html=True)
+            else:
+                header = f"❌ Processing failed for {result['data_id']}"
+                color = "red"
+                st.markdown(f"<h5 style='color:{color};'>{header}</h5>", unsafe_allow_html=True)
