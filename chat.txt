@@ -1,132 +1,42 @@
-def execute_payload(payload: Dict) -> Dict:
-    """执行单个payload请求，支持EncryptionDetector优先检测逻辑"""
-    try:
-        execution_plan = payload["service_params"]["job_object"]["execution_plan"]
-        original_payload = deepcopy(payload)
-        encryption_result = None
-        final_response = None
 
-        # 检查是否需要优先处理EncryptionDetector
-        if "EncryptionDetector" in execution_plan:
-            # 创建专用加密检测payload
-            encryption_payload = deepcopy(original_payload)
-            encryption_payload["service_params"]["job_object"]["execution_plan"] = {
-                "EncryptionDetector": execution_plan.pop("EncryptionDetector")
-            }
-
-            # 执行加密检测
-            encryption_result = execute_single_scanner(encryption_payload, "EncryptionDetector")
-            
-            # 如果加密检测失败或文件受保护，直接返回
-            if encryption_result["status"] != "success" or is_file_protected(encryption_result):
-                return build_final_response(
-                    original_payload,
-                    [encryption_result],
-                    skip_reason="Encryption check failed or file protected" if encryption_result["status"] == "success" else None
+def format_output(result):
+    """Format the API response for display."""
+    output = []
+    encryption_status = None
+    skipped_scanners = []
+    data = result['response'].get('result', {})
+    for scanner_res in data:
+        if scanner_res["scanner_nm"].lower() == "encryption_destector":
+            encryption_status = scanner_res["prediction"].get("is_protected", False)
+            if encryption_status:
+                output.append(
+                    f'<div style="background-color:#FFEBEE; padding:1rem; border-radius:8px;'
+                    f'margin-bottom:1.5rem; border-left:4px solid #FF5252;">'
+                    f'⚠️ <strong>Encrypted file prompt</strong><br/>'
+                    f'Encrypted file detected. Scanners dependent on unencrypted status were skipped.<br/>'
+                    f'<code style="color:#D32F2F;">SoftwareCheck</code>, '
+                    f'<code style="color:#D32F2F;">PageCount</code>'
+                    f'</div>'
                 )
-
-        # 执行剩余检测项
-        if execution_plan:
-            remaining_result = execute_single_scanner(original_payload, "RemainingScanners")
-            final_results = merge_results(encryption_result, remaining_result)
-        else:
-            final_results = [encryption_result]
-
-        return build_final_response(original_payload, final_results)
-
-    except Exception as e:
-        return error_response(original_payload, str(e))
-
-def execute_single_scanner(payload: Dict, category: str) -> Dict:
-    """执行单个检测器或检测组"""
-    try:
-        execution_plan = payload["service_params"]["job_object"]["execution_plan"]
-        _, api_url = determine_scanner_category(json.dumps(execution_plan))
-        
-        response = requests.post(
-            url=api_url,
-            json=payload,
-            headers={"Content-Type": "application/json"},
-            timeout=300
+        scanner = scanner_res["scanner_nm"]
+        prediction = list(scanner_res["prediction"].values())[0]
+        nstp = scanner_res["NSTP"]
+        sanitized_text = scanner_res.get("sanitized_data", None)
+        if sanitized_text is not None:
+            sanitized_text_escaped = escape(sanitized_text)
+            sanitized_text = sanitized_text_escaped.replace('\n', '<br/>')
+        scanner_style = "font-weight:600;font-size:16px;color:#333;"
+        sanitized_line = (
+            f'<strong>Sanitized Text:</strong> <code>{sanitized_text}</code><br/>' 
+            if sanitized_text 
+            else ''
         )
-        response.raise_for_status()
-
-        return {
-            "status": "success",
-            "category": category,
-            "status_code": response.status_code,
-            "response": response.json(),
-            "payload_id": payload["job_params"]["jobid"]
-        }
-    except requests.exceptions.RequestException as re:
-        return {
-            "status": "error",
-            "error": f"Request failed: {str(re)}",
-            "payload_id": payload["job_params"].get("jobid", "unknown")
-        }
-    except JSONDecodeError as je:
-        return {
-            "status": "error",
-            "error": f"JSON decode failed: {str(je)}",
-            "payload_id": payload["job_params"].get("jobid", "unknown")
-        }
-
-def is_file_protected(encryption_result: Dict) -> bool:
-    """判断加密检测结果是否为受保护文件"""
-    if encryption_result["status"] == "success":
-        try:
-            return encryption_result["response"]["result"][0]["prediction"]["is_protected"]
-        except (KeyError, IndexError):
-            return False
-    return False
-
-def merge_results(encryption_result: Optional[Dict], remaining_result: Dict) -> List[Dict]:
-    """合并多个检测结果"""
-    merged = []
-    if encryption_result and encryption_result["status"] == "success":
-        merged.append(encryption_result["response"]["result"][0])
-    if remaining_result["status"] == "success":
-        merged.extend(remaining_result["response"]["result"])
-    return merged
-
-def build_final_response(original_payload: Dict, results: List[Dict], skip_reason: str = None) -> Dict:
-    """构建最终返回结构"""
-    base_response = {
-        "error_code": "",
-        "error_message": "",
-        "result": [],
-        "status": "execute completed"
-    }
-
-    # 合并所有成功结果
-    for res in results:
-        if res["status"] == "success":
-            base_response["result"].extend(res["response"]["result"])
-        else:
-            base_response["error_code"] = "PARTIAL_FAILURE"
-            base_response["error_message"] += f"{res['category']} error: {res['error']}; "
-
-    # 处理跳过逻辑
-    if skip_reason:
-        base_response["status"] = "early termination"
-        base_response["error_message"] += f"Skipped: {skip_reason}"
-
-    return {
-        "status": "success" if all(r["status"] == "success" for r in results) else "partial_success",
-        "payload_id": original_payload["job_params"]["jobid"],
-        "service_response": base_response
-    }
-
-def error_response(payload: Dict, error_msg: str) -> Dict:
-    """统一错误返回格式"""
-    return {
-        "status": "error",
-        "error": error_msg,
-        "payload_id": payload["job_params"].get("jobid", "unknown"),
-        "service_response": {
-            "error_code": "SYSTEM_ERROR",
-            "error_message": error_msg,
-            "result": [],
-            "status": "execution failed"
-        }
-    }
+        
+        output.append(
+            f'<div style="margin-left:0.8rem;font-size:15px;line-height:1.5;margin-bottom:0.5rem;">'
+            f'<strong>Scanner:</strong> <code style="{scanner_style}">{scanner}</code><br/>'
+            f'<strong>NSTP:</strong> <code style="{scanner_style}">{nstp}</code><br/>'
+            f'<strong>Prediction:</strong> {prediction}<br/>{sanitized_line}</div>'
+        )
+    
+    return "".join(output)
