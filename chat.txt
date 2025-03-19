@@ -1,8 +1,47 @@
 def execute_payload(payload: Dict) -> Dict:
-    """执行单个payload请求"""
+    """执行单个payload请求，支持EncryptionDetector优先检测逻辑"""
     try:
         execution_plan = payload["service_params"]["job_object"]["execution_plan"]
-        category, api_url = determine_scanner_category(execution_plan)
+        original_payload = deepcopy(payload)
+        encryption_result = None
+        final_response = None
+
+        # 检查是否需要优先处理EncryptionDetector
+        if "EncryptionDetector" in execution_plan:
+            # 创建专用加密检测payload
+            encryption_payload = deepcopy(original_payload)
+            encryption_payload["service_params"]["job_object"]["execution_plan"] = {
+                "EncryptionDetector": execution_plan.pop("EncryptionDetector")
+            }
+
+            # 执行加密检测
+            encryption_result = execute_single_scanner(encryption_payload, "EncryptionDetector")
+            
+            # 如果加密检测失败或文件受保护，直接返回
+            if encryption_result["status"] != "success" or is_file_protected(encryption_result):
+                return build_final_response(
+                    original_payload,
+                    [encryption_result],
+                    skip_reason="Encryption check failed or file protected" if encryption_result["status"] == "success" else None
+                )
+
+        # 执行剩余检测项
+        if execution_plan:
+            remaining_result = execute_single_scanner(original_payload, "RemainingScanners")
+            final_results = merge_results(encryption_result, remaining_result)
+        else:
+            final_results = [encryption_result]
+
+        return build_final_response(original_payload, final_results)
+
+    except Exception as e:
+        return error_response(original_payload, str(e))
+
+def execute_single_scanner(payload: Dict, category: str) -> Dict:
+    """执行单个检测器或检测组"""
+    try:
+        execution_plan = payload["service_params"]["job_object"]["execution_plan"]
+        _, api_url = determine_scanner_category(json.dumps(execution_plan))
         
         response = requests.post(
             url=api_url,
@@ -10,7 +49,8 @@ def execute_payload(payload: Dict) -> Dict:
             headers={"Content-Type": "application/json"},
             timeout=300
         )
-        
+        response.raise_for_status()
+
         return {
             "status": "success",
             "category": category,
@@ -18,16 +58,75 @@ def execute_payload(payload: Dict) -> Dict:
             "response": response.json(),
             "payload_id": payload["job_params"]["jobid"]
         }
-    except Exception as e:
+    except requests.exceptions.RequestException as re:
         return {
             "status": "error",
-            "error": str(e),
+            "error": f"Request failed: {str(re)}",
+            "payload_id": payload["job_params"].get("jobid", "unknown")
+        }
+    except JSONDecodeError as je:
+        return {
+            "status": "error",
+            "error": f"JSON decode failed: {str(je)}",
             "payload_id": payload["job_params"].get("jobid", "unknown")
         }
 
+def is_file_protected(encryption_result: Dict) -> bool:
+    """判断加密检测结果是否为受保护文件"""
+    if encryption_result["status"] == "success":
+        try:
+            return encryption_result["response"]["result"][0]["prediction"]["is_protected"]
+        except (KeyError, IndexError):
+            return False
+    return False
 
-{'EncryptionDetector': {}, 'FormatCheck': {'format_list': ['jpg', 'png', 'PNG', 'jpeg', 'tif', 'tiff', 'gif', 'bmp']}, 'SoftwareCheck': {'software_blacklist': ['', 'Photoshop', 'Corel', 'PhotoScape', 'PhotoPlus', 'GIMP', 'Pixelmator', 'Illustrator', 'Windows Photo Editor', 'ilovepdf']}}
+def merge_results(encryption_result: Optional[Dict], remaining_result: Dict) -> List[Dict]:
+    """合并多个检测结果"""
+    merged = []
+    if encryption_result and encryption_result["status"] == "success":
+        merged.append(encryption_result["response"]["result"][0])
+    if remaining_result["status"] == "success":
+        merged.extend(remaining_result["response"]["result"])
+    return merged
 
-{'job_params': {'jobid': 'JID-54ca58ba-c495-11ed-b20c-0a586e830578', 'task_id': 'TID-54ca58ba-c495-11ed-b20c-0a586e830578', 'app_name': 'synthesizer', 'use_case': 'aadhar_redact'}, 'service_params': {'callback_url': 'http://service-swoosh-orchestrator.swoosh-dev.svc.cluster.local:8889/api/v1/callback', 'job_object': {'io': 'i', 'policy_id': '002_file_bounding_policy', 'data': 'C:\\Users\\1657820\\Desktop\\test_imgs\\006.jpg', 'data_type': 'image', 'execution_plan': {'EncryptionDetector': {}, 'FormatCheck': {'format_list': ['jpg', 'png', 'PNG', 'jpeg', 'tif', 'tiff', 'gif', 'bmp']}, 'SoftwareCheck': {'software_blacklist': ['', 'Photoshop', 'Corel', 'PhotoScape', 'PhotoPlus', 'GIMP', 'Pixelmator', 'Illustrator', 'Windows Photo Editor', 'ilovepdf']}}, 'data_id': 'service_params.job_object.output_img_path'}}}
+def build_final_response(original_payload: Dict, results: List[Dict], skip_reason: str = None) -> Dict:
+    """构建最终返回结构"""
+    base_response = {
+        "error_code": "",
+        "error_message": "",
+        "result": [],
+        "status": "execute completed"
+    }
 
-{'error_code': '', 'error_message': '', 'result': [{'NSTP': True, 'prediction': {'is_protected': False}, 'sanitized_data': None, 'scanner_nm': 'encryption_detector', 'score': 0}, {'NSTP': False, 'prediction': {'format': 'valid format'}, 'sanitized_data': None, 'scanner_nm': 'format_check', 'score': 1}, {'NSTP': False, 'prediction': {'software_check': 'Potentially not tampered, Software used for creation is V'}, 'sanitized_data': None, 'scanner_nm': 'software_check', 'score': 1}], 'status': 'execute completed'}
+    # 合并所有成功结果
+    for res in results:
+        if res["status"] == "success":
+            base_response["result"].extend(res["response"]["result"])
+        else:
+            base_response["error_code"] = "PARTIAL_FAILURE"
+            base_response["error_message"] += f"{res['category']} error: {res['error']}; "
+
+    # 处理跳过逻辑
+    if skip_reason:
+        base_response["status"] = "early termination"
+        base_response["error_message"] += f"Skipped: {skip_reason}"
+
+    return {
+        "status": "success" if all(r["status"] == "success" for r in results) else "partial_success",
+        "payload_id": original_payload["job_params"]["jobid"],
+        "service_response": base_response
+    }
+
+def error_response(payload: Dict, error_msg: str) -> Dict:
+    """统一错误返回格式"""
+    return {
+        "status": "error",
+        "error": error_msg,
+        "payload_id": payload["job_params"].get("jobid", "unknown"),
+        "service_response": {
+            "error_code": "SYSTEM_ERROR",
+            "error_message": error_msg,
+            "result": [],
+            "status": "execution failed"
+        }
+    }
