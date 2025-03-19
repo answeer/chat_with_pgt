@@ -1,57 +1,33 @@
-def show_scanner_config():
-    """优化后的紧凑型扫描器配置展示"""
-    st.markdown("### 🔍 Default Scanners Config")
-    
-    # 使用选项卡组织大类
-    tabs = st.tabs([f"📦 {c.replace('_',' ').title()}" for c in DEFAULT_SCANNERS.keys()])
-    
-    for tab, (category, scanners) in zip(tabs, DEFAULT_SCANNERS.items()):
-        with tab:
-            for name, params in scanners.items():
-                # 紧凑型标题
-                with st.expander(f"🔧 ​**{name}**", expanded=False):
-                    if not params:
-                        st.caption("No parameters")
-                        continue
-                    
-                    # 参数分组显示
-                    cols = st.columns([1,3])
-                    with cols[0]:
-                        # 参数类型标识
-                        st.markdown(f"`{_get_param_type(params)}`")
-                        
-                    with cols[1]:
-                        # 智能参数显示
-                        _show_smart_params(params)
-
-def _get_param_type(params: dict) -> str:
-    """识别参数类型"""
-    if any(isinstance(v, list) for v in params.values()):
-        return "List Config"
-    if any(isinstance(v, dict) for v in params.values()):
-        return "Nested Config"
-    return "Basic Config"
-
-def _show_smart_params(params: dict):
-    """智能参数显示组件"""
-    for k, v in params.items():
-        # 处理长列表
-        if isinstance(v, list) and len(v) > 3:
-            st.markdown(f"**{k}**:")
-            with st.expander(f"Show {len(v)} items", False):
-                st.write(v[:5] + ["..."] if len(v)>5 else v)
-            continue
+def execute_payload(payload: Dict) -> Dict:
+    """执行单个payload请求"""
+    try:
+        execution_plan = payload["service_params"]["job_object"]["execution_plan"]
+        category, api_url = determine_scanner_category(execution_plan)
         
-        # 处理嵌套字典
-        if isinstance(v, dict):
-            with st.expander(k, False):
-                st.json(v)
-            continue
-            
-        # 常规显示
-        st.markdown(f"`{k}`: {_truncate_value(v)}")
+        response = requests.post(
+            url=api_url,
+            json=payload,
+            headers={"Content-Type": "application/json"},
+            timeout=300
+        )
+        
+        return {
+            "status": "success",
+            "category": category,
+            "status_code": response.status_code,
+            "response": response.json(),
+            "payload_id": payload["job_params"]["jobid"]
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "error": str(e),
+            "payload_id": payload["job_params"].get("jobid", "unknown")
+        }
 
-def _truncate_value(value, max_len=30):
-    """值截断处理"""
-    str_val = str(value)
-    return str_val[:max_len] + "..." if len(str_val) > max_len else str_val
+
+{'EncryptionDetector': {}, 'FormatCheck': {'format_list': ['jpg', 'png', 'PNG', 'jpeg', 'tif', 'tiff', 'gif', 'bmp']}, 'SoftwareCheck': {'software_blacklist': ['', 'Photoshop', 'Corel', 'PhotoScape', 'PhotoPlus', 'GIMP', 'Pixelmator', 'Illustrator', 'Windows Photo Editor', 'ilovepdf']}}
+
+{'job_params': {'jobid': 'JID-54ca58ba-c495-11ed-b20c-0a586e830578', 'task_id': 'TID-54ca58ba-c495-11ed-b20c-0a586e830578', 'app_name': 'synthesizer', 'use_case': 'aadhar_redact'}, 'service_params': {'callback_url': 'http://service-swoosh-orchestrator.swoosh-dev.svc.cluster.local:8889/api/v1/callback', 'job_object': {'io': 'i', 'policy_id': '002_file_bounding_policy', 'data': 'C:\\Users\\1657820\\Desktop\\test_imgs\\006.jpg', 'data_type': 'image', 'execution_plan': {'EncryptionDetector': {}, 'FormatCheck': {'format_list': ['jpg', 'png', 'PNG', 'jpeg', 'tif', 'tiff', 'gif', 'bmp']}, 'SoftwareCheck': {'software_blacklist': ['', 'Photoshop', 'Corel', 'PhotoScape', 'PhotoPlus', 'GIMP', 'Pixelmator', 'Illustrator', 'Windows Photo Editor', 'ilovepdf']}}, 'data_id': 'service_params.job_object.output_img_path'}}}
+
+{'error_code': '', 'error_message': '', 'result': [{'NSTP': True, 'prediction': {'is_protected': False}, 'sanitized_data': None, 'scanner_nm': 'encryption_detector', 'score': 0}, {'NSTP': False, 'prediction': {'format': 'valid format'}, 'sanitized_data': None, 'scanner_nm': 'format_check', 'score': 1}, {'NSTP': False, 'prediction': {'software_check': 'Potentially not tampered, Software used for creation is V'}, 'sanitized_data': None, 'scanner_nm': 'software_check', 'score': 1}], 'status': 'execute completed'}
