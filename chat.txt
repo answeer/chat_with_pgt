@@ -45,3 +45,12 @@ def generate_payloads(input_payload, data):
                     generated_payloads.append(payload)
     
     return generated_payloads
+
+
+SCANNER_CATEGORIES = {
+    "bounding": ["SoftwareCheck", "EncryptionDetector", "PageCount","ImageBlurCheck", "FormatCheck",
+                 "ImageDimCheck", "ImageMemoryCheck", "ExecutableScript", "ProfanityCheck",
+                 "HarmfulString", "PiiDetector", "BinTransform","TokenLimit"],
+    "sanitation": ["RemoveUnicode", "Secrets"],
+    "validator": ["JsonValidator"]
+}
