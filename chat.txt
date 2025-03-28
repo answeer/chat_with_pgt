@@ -1,96 +1,114 @@
-from copy import deepcopy
+import pytesseract
+from PIL import Image
+from presidio_analyzer import AnalyzerEngine
+from presidio_anonymizer import AnonymizerEngine
 
-SCANNER_CATEGORIES = {
-    "bounding": ["SoftwareCheck", "EncryptionDetector", "PageCount","ImageBlurCheck", "FormatCheck",
-                 "ImageDimCheck", "ImageMemoryCheck", "ExecutableScript", "ProfanityCheck",
-                 "HarmfulString", "PiiDetector", "BinTransform","TokenLimit"],
-    "sanitation": ["RemoveUnicode", "Secrets"],
-    "validator": ["JsonValidator"]
-}
-
-POLICY_TYPE_MAPPING = {
-    "text": ["bounding", "sanitation"],
-    "image": ["bounding"],
-    "file": ["bounding"],
-    "numeric": ["bounding"],
-    "json": ["validator"]
-}
-
-def generate_dynamic_steps(data_type):
-    """动态生成策略步骤容器"""
-    steps = {}
-    for policy_type in POLICY_TYPE_MAPPING.get(data_type, []):
-        step_name = f"{data_type}_{policy_type}_policy"
-        steps[step_name] = {}
-    return steps
-
-def detect_policy_category(condition):
-    """根据检测器类型自动归类策略"""
-    if not isinstance(condition, dict):
-        return None
-        
-    # 深度遍历条件字典寻找检测器
-    detectors = []
-    stack = [condition]
-    while stack:
-        current = stack.pop()
-        if isinstance(current, dict):
-            for k, v in current.items():
-                if k == "detector" and isinstance(v, str):
-                    detectors.append(v)
-                elif isinstance(v, (dict, list)):
-                    stack.append(v)
-        elif isinstance(current, list):
-            stack.extend(current)
-    
-    # 匹配分类
-    for detector in detectors:
-        for category, patterns in SCANNER_CATEGORIES.items():
-            if any(pattern in detector for pattern in patterns):
-                return category
-    return None
-
-def generate_payloads(input_payload, data):
-    generated_payloads = []
-    
-    for data_type in data:
-        items = data[data_type]
-        items = items if isinstance(items, list) else [items]
-        
-        for item in items:
-            # 动态初始化策略容器
-            execution_plan_steps = generate_dynamic_steps(data_type)
+class PIIDetector:
+    def __init__(self, tesseract_path=None, lang='eng', entities=None):
+        """
+        初始化PII检测器
+        :param tesseract_path: Tesseract可执行文件路径（如果不在系统PATH中）
+        :param lang: OCR语言，默认英语 ('eng')，中文使用 'chi_sim'
+        :param entities: 要检测的PII实体类型列表
+        """
+        if tesseract_path:
+            pytesseract.pytesseract.tesseract_cmd = tesseract_path
             
-            # 处理策略声明
-            policies = item.get('policies', [])
-            for policy in policies:
-                for statement in policy.get('Statement', []):
-                    # 安全获取策略名称
-                    step_name = statement.get('name") or "unnamed_policy"
-                    
-                    # 自动检测策略类型
-                    condition = statement.get("Condition", {})
-                    detected_category = detect_policy_category(condition)
-                    
-                    # 生成最终策略标识
-                    if detected_category:
-                        final_step = f"{data_type}_{detected_category}_policy"
-                    else:
-                        final_step = f"{data_type}_custom_policy"
-                    
-                    # 合并策略配置
-                    execution_plan_steps.setdefault(final_step, {}).update({
-                        step_name: condition
-                    })
-
-            # 处理数据路径...（保持原有逻辑）
-            # ...（此处省略数据路径处理部分，保持与之前相同的逻辑）
-            
-            # 生成最终payload
-            for step_name, step_config in execution_plan_steps.items():
-                if step_config:  # 只生成有实际配置的策略
-                    new_payload = deepcopy(input_payload)
-                    # ...（保持原有payload组装逻辑）
-                    generated_payloads.append(new_payload)
+        self.lang = lang
+        self.entities = entities or [
+            'PERSON', 'PHONE_NUMBER', 'EMAIL_ADDRESS',
+            'CREDIT_CARD', 'LOCATION', 'DATE_TIME'
+        ]
+        
+        # 初始化Presidio组件
+        self.analyzer = AnalyzerEngine()
+        self.anonymizer = AnonymizerEngine()
+        
+    def ocr_extract(self, image_path):
+        """
+        执行OCR文本提取
+        :param image_path: 图片文件路径
+        :return: 提取的文本（失败返回None）
+        """
+        try:
+            with Image.open(image_path) as img:
+                return pytesseract.image_to_string(img, lang=self.lang).strip()
+        except Exception as e:
+            print(f"OCR提取失败: {str(e)}")
+            return None
     
-    return generated_payloads
+    def analyze_pii(self, text):
+        """
+        分析文本中的PII信息
+        :param text: 待分析文本
+        :return: (检测结果列表, 匿名化文本)
+        """
+        results = self.analyzer.analyze(
+            text=text,
+            language='en',  # 分析语言独立于OCR语言
+            entities=self.entities
+        )
+        anonymized = self.anonymizer.anonymize(text, results).text
+        return results, anonymized
+    
+    def analyze_image(self, image_path):
+        """
+        完整处理流程
+        :param image_path: 图片路径
+        :return: 字典包含完整结果（包含错误信息）
+        """
+        result = {
+            'success': False,
+            'text': None,
+            'pii': [],
+            'anonymized': None,
+            'error': None
+        }
+        
+        text = self.ocr_extract(image_path)
+        if not text:
+            result['error'] = "OCR提取失败"
+            return result
+            
+        try:
+            pii_results, anonymized = self.analyze_pii(text)
+            result.update({
+                'success': True,
+                'text': text,
+                'pii': [self._format_result(r, text) for r in pii_results],
+                'anonymized': anonymized
+            })
+        except Exception as e:
+            result['error'] = f"PII分析失败: {str(e)}"
+            
+        return result
+    
+    def _format_result(self, result, full_text):
+        """格式化单个PII检测结果"""
+        return {
+            'entity_type': result.entity_type,
+            'confidence': round(result.score, 2),
+            'text': full_text[result.start:result.end],
+            'start': result.start,
+            'end': result.end
+        }
+
+# 示例用法
+if __name__ == "__main__":
+    # 初始化检测器（参数根据需要配置）
+    detector = PIIDetector(
+        lang='eng',  # 使用中文识别时改为 'chi_sim'
+        entities=['PHONE_NUMBER', 'EMAIL_ADDRESS', 'CREDIT_CARD']
+    )
+    
+    # 分析图片
+    analysis = detector.analyze_image("sample_document.png")
+    
+    if analysis['success']:
+        print("提取文本：\n", analysis['text'])
+        print("\n检测到PII信息：")
+        for pii in analysis['pii']:
+            print(f"- [{pii['entity_type']}] {pii['text']} (置信度: {pii['confidence']})")
+        print("\n匿名化文本：\n", analysis['anonymized'])
+    else:
+        print("处理失败:", analysis['error'])
