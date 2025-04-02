@@ -1,95 +1,13 @@
-from llm_sanitation.scanners.scanner_base import Scanner
-import json
-import numpy as np
-from jsonschema import validate, ValidationError, SchemaError
-from llm_sanitation.logging.logging_setup import LogUtil, LogType, LogLevel
-
-class JsonSchemaValidator(Scanner):
-    """
-    A Scanner class for validating JSON payloads against a JSON Schema.
-
-    This class checks if the provided JSON payload adheres to the specified JSON Schema.
-
-    Attributes:
-        schema (dict): The JSON Schema used to validate the payload.
-    """
-
-    def __init__(self, ​**kwargs):
-        """
-        Initializes the JsonSchemaValidator scanner.
-
-        Args:
-            schema (dict): The JSON Schema definition for validation.
-        """
-        schema = kwargs["schema"]
-        super().__init__("json_schema_validator", 1, schema=schema)
-
-    def check_json_format(self, payload):
-        """
-        Validates that a value is parseable as valid JSON.
-
-        Args:
-            payload (Any): The data to check for JSON format.
-
-        Returns:
-            tuple: A tuple containing the parsed JSON object and any error that occurred during parsing.
-        """
-        stringified = payload
-        parsed_payload, error = (None, None)
-        try:
-            if not isinstance(payload, str):
-                stringified = json.dumps(payload)
-            parsed_payload = json.loads(stringified)
-        except (json.decoder.JSONDecodeError, TypeError) as e:
-            error = str(e)
-        return parsed_payload, error
-
-    def validate_with_schema(self, parsed_payload):
-        """
-        Validates the parsed JSON payload against the JSON Schema.
-
-        Args:
-            parsed_payload (dict): The parsed JSON object to validate.
-
-        Returns:
-            tuple: A tuple containing a list of error messages and the validation score.
-        """
-        predict = []
-        score = []
-        try:
-            # 执行 JSON Schema 校验
-            validate(instance=parsed_payload, schema=self._kwargs["schema"])
-            # 如果校验通过，无错误
-            predict.append("Valid JSON payload.")
-            score.append(1)
-        except ValidationError as ve:
-            # 捕获校验失败的具体错误
-            error_msg = f"Validation error: {ve.message} (Path: {' -> '.join(map(str, ve.path))})"
-            predict.append(error_msg)
-            score.append(0)
-        except SchemaError as se:
-            # 捕获 Schema 定义错误
-            error_msg = f"Invalid JSON Schema: {se.message}"
-            predict.append(error_msg)
-            score.append(0)
-        return predict, np.mean(score)
-
-    def predict(self, payload):
-        """
-        Main prediction method that validates the JSON payload.
-
-        Args:
-            payload (Any): The JSON object or string to validate.
-
-        Returns:
-            tuple: A tuple containing error messages and a validation score.
-        """
-        parsed_payload, error = self.check_json_format(payload)
-        if error is not None:
-            return [f"Invalid JSON format: {error}"], 0
-        else:
-            return self.validate_with_schema(parsed_payload)
-
-    def format_response(self):
-        self.response["prediction"]["json_schema_validator"] = self.pred[0]
-        self.response["score"] = self.pred[1]
+"mandate_keys": {
+                    "clientData.clientRefNumber": [],
+                    "clientData.consumerid": [],
+                    "clientData.country": [
+                        "IN",
+                        "CH"
+                    ],
+                    "clientData.appName": [
+                        "seige_v3",
+                        "seige_v2",
+                        "RTOB_IN_AADHAR"
+                    ]
+                    }
