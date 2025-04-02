@@ -1,13 +1,3 @@
-"mandate_keys": {
-                    "clientData.clientRefNumber": [],
-                    "clientData.consumerid": [],
-                    "clientData.country": [
-                        "IN",
-                        "CH"
-                    ],
-                    "clientData.appName": [
-                        "seige_v3",
-                        "seige_v2",
-                        "RTOB_IN_AADHAR"
-                    ]
-                    }
+for error in errors:
+    for suberror in sorted(error.context, key=lambda e: e.schema_path):
+        print(list(suberror.schema_path), suberror.message, sep=", ")
