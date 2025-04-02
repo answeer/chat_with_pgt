@@ -1,114 +1,135 @@
-import pytesseract
-from PIL import Image
-from presidio_analyzer import AnalyzerEngine
-from presidio_anonymizer import AnonymizerEngine
+from llm_sanitation.scanners.scanner_base import Scanner
+import json
+import numpy as np
+import re
+from llm_sanitation.logging.logging_setup import LogUtil, LogType, LogLevel
 
-class PIIDetector:
-    def __init__(self, tesseract_path=None, lang='eng', entities=None):
-        """
-        初始化PII检测器
-        :param tesseract_path: Tesseract可执行文件路径（如果不在系统PATH中）
-        :param lang: OCR语言，默认英语 ('eng')，中文使用 'chi_sim'
-        :param entities: 要检测的PII实体类型列表
-        """
-        if tesseract_path:
-            pytesseract.pytesseract.tesseract_cmd = tesseract_path
-            
-        self.lang = lang
-        self.entities = entities or [
-            'PERSON', 'PHONE_NUMBER', 'EMAIL_ADDRESS',
-            'CREDIT_CARD', 'LOCATION', 'DATE_TIME'
-        ]
-        
-        # 初始化Presidio组件
-        self.analyzer = AnalyzerEngine()
-        self.anonymizer = AnonymizerEngine()
-        
-    def ocr_extract(self, image_path):
-        """
-        执行OCR文本提取
-        :param image_path: 图片文件路径
-        :return: 提取的文本（失败返回None）
-        """
-        try:
-            with Image.open(image_path) as img:
-                return pytesseract.image_to_string(img, lang=self.lang).strip()
-        except Exception as e:
-            print(f"OCR提取失败: {str(e)}")
-            return None
-    
-    def analyze_pii(self, text):
-        """
-        分析文本中的PII信息
-        :param text: 待分析文本
-        :return: (检测结果列表, 匿名化文本)
-        """
-        results = self.analyzer.analyze(
-            text=text,
-            language='en',  # 分析语言独立于OCR语言
-            entities=self.entities
-        )
-        anonymized = self.anonymizer.anonymize(text, results).text
-        return results, anonymized
-    
-    def analyze_image(self, image_path):
-        """
-        完整处理流程
-        :param image_path: 图片路径
-        :return: 字典包含完整结果（包含错误信息）
-        """
-        result = {
-            'success': False,
-            'text': None,
-            'pii': [],
-            'anonymized': None,
-            'error': None
-        }
-        
-        text = self.ocr_extract(image_path)
-        if not text:
-            result['error'] = "OCR提取失败"
-            return result
-            
-        try:
-            pii_results, anonymized = self.analyze_pii(text)
-            result.update({
-                'success': True,
-                'text': text,
-                'pii': [self._format_result(r, text) for r in pii_results],
-                'anonymized': anonymized
-            })
-        except Exception as e:
-            result['error'] = f"PII分析失败: {str(e)}"
-            
-        return result
-    
-    def _format_result(self, result, full_text):
-        """格式化单个PII检测结果"""
-        return {
-            'entity_type': result.entity_type,
-            'confidence': round(result.score, 2),
-            'text': full_text[result.start:result.end],
-            'start': result.start,
-            'end': result.end
-        }
+class JsonValidator(Scanner):
+    """
+    A Scanner class for validating JSON payloads against a set of mandated keys and patterns.
 
-# 示例用法
-if __name__ == "__main__":
-    # 初始化检测器（参数根据需要配置）
-    detector = PIIDetector(
-        lang='eng',  # 使用中文识别时改为 'chi_sim'
-        entities=['PHONE_NUMBER', 'EMAIL_ADDRESS', 'CREDIT_CARD']
-    )
-    
-    # 分析图片
-    analysis = detector.analyze_image("sample_document.png")
-    
-    if analysis['success']:
-        print("提取文本：\n", analysis['text'])
-        print("\n检测到PII信息：")
-        for pii in analysis['pii']:
-            print(f"- [{pii['entity_type']}] {pii['text']} (置信度: {pii['confidence']})")
-        print("\n匿名化文本：\n", analysis['anonymized'])
-    else:
-        print("处理失败:", analysis['error'])
+    This class checks if the provided JSON payload adheres to the required structure and 
+    contains the necessary key-value pairs that match specified patterns.
+
+    Attributes:
+        mandate_checks (dict): A dictionary containing the keys and corresponding regex patterns 
+                               to validate against the JSON payload.
+    """
+
+    def __init__(self, **kwargs):
+        """
+        Initializes the JsonValidator scanner.
+
+        Args:
+            mandate_checks (dict): A dictionary of keys and regex patterns to validate against the JSON payload.
+        """
+        mandate_checks = kwargs["mandate_keys"]
+        super().__init__("json_validator", 1, mandate_checks=mandate_checks)
+
+    def get_value(self, payload, keys):
+        """
+        Retrieves the value from the nested JSON payload using dot notation.
+
+        Args:
+            payload (dict): The JSON object to retrieve the value from.
+            keys (str): The dot-separated key string indicating the path in the JSON object.
+
+        Returns:
+            Any: The value found at the specified path, or None if the key does not exist.
+        """
+        keys = keys.split(".")
+        value = payload
+        for key in keys:
+            if isinstance(value, dict):
+                value = value.get(key)
+            else:
+                return None
+        return value
+
+    def check_mandate_keys(self, payload):
+        """
+        Validates the JSON payload against the mandated keys and patterns.
+
+        Args:
+            payload (dict): The JSON object to validate.
+
+        Returns:
+            tuple: A tuple containing a list of prediction strings and the average score.
+        """
+        self.mandate_keys = self._kwargs["mandate_checks"].keys()
+
+        predict = []
+        score = []
+        try:
+            for mandate_key in self.mandate_keys:
+                mandate_pattern = self._kwargs["mandate_checks"].get(mandate_key, [])
+                if isinstance(mandate_pattern,list):
+                    mandate_pattern = '|'.join(map(re.escape, mandate_pattern))
+                pattern = re.compile(mandate_pattern)
+                
+                value = self.get_value(payload, mandate_key)
+
+                if value is None:
+                    score.append(0)
+                    predict.append("Key `{}` not found".format(mandate_key))
+
+                elif re.match(pattern, value):
+                    score.append(1)
+                else:
+                    score.append(0)
+                    predict.append("For Key `{}` value {} is not in the correct pattern.".format(mandate_key, value))
+            if len(predict) == 0:
+                predict = "Valid json payload."
+
+        except Exception as e:
+            LogUtil.log(LogType.ERROR, LogLevel.ERROR, e)
+            predict.append("Error occurred: {}".format(e))
+            score.append(0)
+
+        return predict, np.mean(score)
+
+    def check_json_format(self, payload):
+        """
+        Validates that a value is parseable as valid JSON.
+
+        Args:
+            payload (Any): The data to check for JSON format.
+
+        Returns:
+            tuple: A tuple containing the parsed JSON object and any error that occurred during parsing.
+        """
+        stringified = payload
+        parsed_payload, error = (None, None)
+        try:
+            if not isinstance(payload, str):
+                stringified = json.dumps(payload)
+
+            parsed_payload = json.loads(stringified)
+        except json.decoder.JSONDecodeError as json_error:
+            error = json_error
+        except TypeError as type_error:
+            error = type_error
+        return parsed_payload, error
+
+    def predict(self, payload):
+        """
+        Main prediction method that validates the JSON payload.
+
+        Args:
+            payload (Any): The JSON object or string to validate.
+
+        Returns:
+            tuple: A tuple containing a list of prediction strings or error and a score.
+        """
+        parsed_payload, error = self.check_json_format(payload)
+        if error is not None:
+            score = 0
+            predict = error
+            return predict, score
+        else:
+            predict, score = self.check_mandate_keys(parsed_payload)
+        return predict, score
+
+    def format_response(self):
+        self.response["prediction"]["json_validator"] = self.pred[0]
+        self.response["score"] = self.pred[1]
