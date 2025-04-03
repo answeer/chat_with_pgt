@@ -1,89 +1,25 @@
-from llm_sanitation.scanners.scanner_base import Scanner
-import json
-import numpy as np
-from jsonschema import Draft202012Validator, SchemaError, ValidationError
-from llm_sanitation.logging.logging_setup import LogUtil, LogType, LogLevel
-from typing import Dict, Any, Tuple, List, Union
+def _format_validation_errors(self, errors: List[ValidationError]) -> str:
+    """合并所有错误消息为单一字符串"""
+    return "\n".join(f"JSON Validation Error: {err.message}" for err in errors)
 
-class JsonSchemaValidator(Scanner):
-    """
-    A Scanner class for validating JSON payloads against a JSON Schema (Draft-2020-12).
+def predict(self, payload: Any) -> Tuple[str, float]:  # 修改返回类型为 str
+    parsed_payload, parse_error = self.check_json_format(payload)
+    if parse_error is not None:
+        return f"Invalid JSON format: {parse_error}", 0.0  # 直接返回字符串
 
-    Attributes:
-        schema (dict): The JSON Schema to validate against.
-        validator (Draft202012Validator): The validator instance pre-configured with the schema.
-    """
+    try:
+        errors = list(self.validator.iter_errors(parsed_payload))
+        if not errors:
+            return "Valid JSON payload", 1.0  # 返回纯字符串
+        else:
+            return self._format_validation_errors(errors), 0.0  # 直接返回合并后的字符串
+    except SchemaError as e:
+        return f"Internal Schema Error: {e.message}", 0.0
+    except Exception as e:
+        LogUtil.log(LogType.ERROR, LogLevel.ERROR, f"Unexpected error: {e}")
+        return f"Validation failed: {e}", 0.0
 
-    def __init__(self, **kwargs):
-        """
-        Initializes the JsonSchemaValidator scanner.
-
-        Args:
-            json_schema (dict): The JSON Schema (Draft-2020-12) to validate against.
-        """
-        # 从参数中提取 JSON Schema
-        self.schema = kwargs.get("json_schema", {})
-        # 预检查 Schema 的合法性
-        self._validate_schema()
-        # 创建验证器实例
-        self.validator = Draft202012Validator(self.schema)
-        super().__init__("json_schema_validator", 1, json_schema=self.schema)
-
-    def _validate_schema(self) -> None:
-        """检查 Schema 的合法性，如果无效则抛出 SchemaError"""
-        try:
-            Draft202012Validator.check_schema(self.schema)
-        except SchemaError as e:
-            LogUtil.log(LogType.ERROR, LogLevel.ERROR, f"Invalid JSON Schema: {e.message}")
-            raise  # 可选择向上抛出或在此处处理
-
-    def check_json_format(self, payload: Any) -> Tuple[Union[Dict, List], Exception]:
-        """
-        验证输入是否为合法 JSON，并返回解析后的对象。
-
-        Returns:
-            tuple: (parsed_json, error)
-        """
-        try:
-            if not isinstance(payload, str):
-                payload = json.dumps(payload)
-            return json.loads(payload), None
-        except (json.JSONDecodeError, TypeError) as e:
-            return None, e
-
-    def _format_validation_errors(self, errors: List[ValidationError]) -> List[str]:
-        """将验证错误转换为可读的消息列表"""
-        return [f"[JSON Schema Error] {error.message} (Path: {'->'.join(map(str, error.absolute_path))})" for error in errors]
-
-    def predict(self, payload: Any) -> Tuple[List[str], float]:
-        """
-        主验证方法：验证输入 JSON 是否符合 Schema。
-
-        Returns:
-            tuple: (错误消息列表, 验证通过率 0~1)
-        """
-        parsed_payload, parse_error = self.check_json_format(payload)
-        if parse_error is not None:
-            return [f"Invalid JSON format: {str(parse_error)}"], 0.0
-
-        try:
-            # 执行 Schema 验证
-            errors = list(self.validator.iter_errors(parsed_payload))
-            if not errors:
-                return ["Valid JSON payload"], 1.0
-            else:
-                error_messages = self._format_validation_errors(errors)
-                score = 0.0  # 可根据错误严重性调整得分
-                return error_messages, score
-        except SchemaError as e:
-            # 处理 Schema 动态变化后的意外错误
-            return [f"Internal Schema Error: {e.message}"], 0.0
-        except Exception as e:
-            LogUtil.log(LogType.ERROR, LogLevel.ERROR, f"Unexpected error: {str(e)}")
-            return [f"Validation failed: {str(e)}"], 0.0
-
-    def format_response(self) -> Dict:
-        """格式化输出响应"""
-        self.response["prediction"]["json_schema_validator"] = self.pred[0]
-        self.response["score"] = self.pred[1]
-        return self.response
+# 使用示例：
+errors, score = validator.predict({"name": 123})
+print(errors)  # 输出类型为 str，例如：
+# "JSON Validation Error: 123 is not of type 'string'\nJSON Validation Error: 'email' is a required property"
