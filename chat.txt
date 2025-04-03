@@ -1,25 +1,94 @@
-def _format_validation_errors(self, errors: List[ValidationError]) -> str:
-    """合并所有错误消息为单一字符串"""
-    return "\n".join(f"JSON Validation Error: {err.message}" for err in errors)
+from llm_sanitation.scanners.scanner_base import Scanner
+import json
+import numpy as np
+from jsonschema import Draft202012Validator, SchemaError, ValidationError
+from llm_sanitation.logging.logging_setup import LogUtil, LogType, LogLevel
 
-def predict(self, payload: Any) -> Tuple[str, float]:  # 修改返回类型为 str
-    parsed_payload, parse_error = self.check_json_format(payload)
-    if parse_error is not None:
-        return f"Invalid JSON format: {parse_error}", 0.0  # 直接返回字符串
+class SchemaValidator(Scanner):
+    """
+    A Scanner class for validating JSON payloads against a JSON Schema (Draft-2020-12).
 
-    try:
-        errors = list(self.validator.iter_errors(parsed_payload))
-        if not errors:
-            return "Valid JSON payload", 1.0  # 返回纯字符串
+    Attributes:
+        schema (dict): The JSON Schema to validate against.
+        validator (Draft202012Validator): The validator instance pre-configured with the schema.
+    """
+
+    def __init__(self, **kwargs):
+        """
+        Initializes the JsonSchemaValidator scanner.
+
+        Args:
+            json_schema (dict): The JSON Schema (Draft-2020-12) to validate against.
+        """
+        with open(r"llm_sanitation\configs\request_schema.json", "r") as file:
+            self.request_schema = json.load(file)
+        with open(r"llm_sanitation\configs\response_schema.json", "r") as file:
+            self.response_schema = json.load(file)
+        event = kwargs['event']
+        if event ==  "idp_input":
+            self.schema = self.request_schema
+        elif event == "idp_output":
+            self.schema = self.response_schema
         else:
-            return self._format_validation_errors(errors), 0.0  # 直接返回合并后的字符串
-    except SchemaError as e:
-        return f"Internal Schema Error: {e.message}", 0.0
-    except Exception as e:
-        LogUtil.log(LogType.ERROR, LogLevel.ERROR, f"Unexpected error: {e}")
-        return f"Validation failed: {e}", 0.0
+            self.schema = {}
+        self.validator = Draft202012Validator(self.schema)
+        super().__init__("json_schema_validator", 1, json_schema=self.schema)
 
-# 使用示例：
-errors, score = validator.predict({"name": 123})
-print(errors)  # 输出类型为 str，例如：
-# "JSON Validation Error: 123 is not of type 'string'\nJSON Validation Error: 'email' is a required property"
+    def _validate_schema(self):
+        try:
+            Draft202012Validator.check_schema(self.schema)
+        except SchemaError as e:
+            LogUtil.log(LogType.ERROR, LogLevel.ERROR, f"Invalid JSON Schema: {e.message}")
+            return f"Invalid JSON Schema: {e.message}"
+
+    def check_json_format(self, payload):
+        """
+        Validates that a value is parseable as valid JSON.
+
+        Args:
+            payload (Any): The data to check for JSON format.
+
+        Returns:
+            tuple: A tuple containing the parsed JSON object and any error that occurred during parsing.
+        """
+        stringified = payload
+        parsed_payload, error = (None, None)
+        try:
+            if not isinstance(payload, str):
+                stringified = json.dumps(payload)
+
+            parsed_payload = json.loads(stringified)
+        except json.decoder.JSONDecodeError as json_error:
+            error = json_error
+        except TypeError as type_error:
+            error = type_error
+        return parsed_payload, error
+
+    def _format_validation_errors(self, errors):
+        return "\n".join(f"JSON Validation Error: {err.message}" for err in errors)
+
+    def predict(self, payload):
+        schema_error = self._validate_schema()
+        if schema_error:
+            return schema_error, 0.0
+        parsed_payload, parse_error = self.check_json_format(payload)
+        if parse_error is not None:
+            return f"Invalid JSON format: {str(parse_error)}", 0.0
+ 
+        try:
+            errors = list(self.validator.iter_errors(parsed_payload))
+            if not errors:
+                return "Valid JSON payload", 1.0
+            else:
+                error_messages = self._format_validation_errors(errors)
+                score = 0.0
+                return error_messages, score
+        except SchemaError as e:
+            return f"Internal Schema Error: {e.message}", 0.0
+        except Exception as e:
+            LogUtil.log(LogType.ERROR, LogLevel.ERROR, f"Unexpected error: {str(e)}")
+            return f"Validation failed: {str(e)}", 0.0
+
+    def format_response(self):
+        self.response["prediction"]["json_schema_validator"] = self.pred[0]
+        self.response["score"] = self.pred[1]
