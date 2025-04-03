@@ -1,94 +1,149 @@
 from llm_sanitation.scanners.scanner_base import Scanner
 import json
+import os
 import numpy as np
 from jsonschema import Draft202012Validator, SchemaError, ValidationError
 from llm_sanitation.logging.logging_setup import LogUtil, LogType, LogLevel
 
 class SchemaValidator(Scanner):
-    """
-    A Scanner class for validating JSON payloads against a JSON Schema (Draft-2020-12).
+    """Validates JSON payloads against JSON Schema Draft 2020-12 based on event type.
+    
+    This scanner loads the appropriate JSON schema (request or response) based on the
+    provided event type ('idp_input' or 'idp_output'). It validates the structure and
+    content of JSON payloads against the selected schema.
 
     Attributes:
-        schema (dict): The JSON Schema to validate against.
-        validator (Draft202012Validator): The validator instance pre-configured with the schema.
+        request_schema (dict): Loaded schema for IDP input events.
+        response_schema (dict): Loaded schema for IDP output events.
+        schema (dict): Active schema based on event type.
+        validator (Draft202012Validator): Validator instance for the active schema.
     """
 
     def __init__(self, **kwargs):
-        """
-        Initializes the JsonSchemaValidator scanner.
+        """Initializes the SchemaValidator with the appropriate schema.
 
         Args:
-            json_schema (dict): The JSON Schema (Draft-2020-12) to validate against.
+            event (str): Event type determining which schema to load.
+                Must be 'idp_input' or 'idp_output'.
+            **kwargs: Additional keyword arguments passed to the parent Scanner.
+
+        Raises:
+            ValueError: If the event type is invalid or schema files cannot be loaded.
         """
-        with open(r"llm_sanitation\configs\request_schema.json", "r") as file:
-            self.request_schema = json.load(file)
-        with open(r"llm_sanitation\configs\response_schema.json", "r") as file:
-            self.response_schema = json.load(file)
-        event = kwargs['event']
-        if event ==  "idp_input":
-            self.schema = self.request_schema
-        elif event == "idp_output":
-            self.schema = self.response_schema
-        else:
-            self.schema = {}
-        self.validator = Draft202012Validator(self.schema)
-        super().__init__("json_schema_validator", 1, json_schema=self.schema)
+        try:
+            # Get base directory path
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            
+            # Load schema files using OS-agnostic paths
+            schema_dir = os.path.join(base_dir, "..", "configs")
+            with open(os.path.join(schema_dir, "request_schema.json"), "r") as file:
+                self.request_schema = json.load(file)
+            with open(os.path.join(schema_dir, "response_schema.json"), "r") as file:
+                self.response_schema = json.load(file)
+            
+            # Determine event type
+            event = kwargs.get('event')
+            if event == "idp_input":
+                self.schema = self.request_schema
+            elif event == "idp_output":
+                self.schema = self.response_schema
+            else:
+                raise ValueError(f"Invalid event type: {event}. Must be 'idp_input' or 'idp_output'.")
+            
+            # Validate schema and create validator
+            self._validate_schema()
+            self.validator = Draft202012Validator(self.schema)
+            
+            super().__init__("json_schema_validator", 1, json_schema=self.schema)
+            
+        except (json.JSONDecodeError, FileNotFoundError) as e:
+            LogUtil.log(LogType.ERROR, LogLevel.ERROR, f"Schema loading failed: {str(e)}")
+            raise ValueError(f"Schema loading failed: {str(e)}") from e
 
     def _validate_schema(self):
+        """Validates the configured schema against the JSON Schema metaschema.
+
+        Raises:
+            SchemaError: If the schema is invalid.
+        """
         try:
             Draft202012Validator.check_schema(self.schema)
         except SchemaError as e:
-            LogUtil.log(LogType.ERROR, LogLevel.ERROR, f"Invalid JSON Schema: {e.message}")
-            return f"Invalid JSON Schema: {e.message}"
+            LogUtil.log(LogType.ERROR, LogLevel.ERROR, 
+                       f"Invalid JSON Schema: {e.message}")
+            raise
 
-    def check_json_format(self, payload):
-        """
-        Validates that a value is parseable as valid JSON.
+    def _check_json_format(self, payload):
+        """Attempts to parse payload as JSON, returns parsed object and any error.
 
         Args:
-            payload (Any): The data to check for JSON format.
+            payload (Any): Data to be parsed as JSON. Can be a string or serializable object.
 
         Returns:
-            tuple: A tuple containing the parsed JSON object and any error that occurred during parsing.
+            tuple: 
+                - (dict/list): Parsed JSON object if successful, None otherwise
+                - (Exception): Error object if parsing failed, None otherwise
         """
-        stringified = payload
-        parsed_payload, error = (None, None)
         try:
             if not isinstance(payload, str):
-                stringified = json.dumps(payload)
-
-            parsed_payload = json.loads(stringified)
-        except json.decoder.JSONDecodeError as json_error:
-            error = json_error
-        except TypeError as type_error:
-            error = type_error
-        return parsed_payload, error
+                payload = json.dumps(payload)
+            return json.loads(payload), None
+        except (json.JSONDecodeError, TypeError) as e:
+            return None, e
 
     def _format_validation_errors(self, errors):
-        return "\n".join(f"JSON Validation Error: {err.message}" for err in errors)
+        """Formats schema validation errors into a human-readable string.
+
+        Args:
+            errors (list): List of ValidationError objects.
+
+        Returns:
+            str: Formatted error messages concatenated with newlines.
+        """
+        return "\n".join(f"• {error.message} (Path: {' -> '.join(map(str, error.absolute_path))})"
+                        for error in errors)
 
     def predict(self, payload):
-        schema_error = self._validate_schema()
-        if schema_error:
-            return schema_error, 0.0
-        parsed_payload, parse_error = self.check_json_format(payload)
-        if parse_error is not None:
-            return f"Invalid JSON format: {str(parse_error)}", 0.0
- 
+        """Validates the given payload against the configured JSON schema.
+
+        Args:
+            payload (Any): The data payload to validate. Can be a JSON string or
+                a Python object to be converted to JSON.
+
+        Returns:
+            tuple: 
+                - str: Validation result message
+                - float: Validation score (1.0 for valid, 0.0 for invalid)
+
+        Raises:
+            SchemaError: If the internal schema validation fails
+        """
         try:
-            errors = list(self.validator.iter_errors(parsed_payload))
-            if not errors:
-                return "Valid JSON payload", 1.0
-            else:
-                error_messages = self._format_validation_errors(errors)
-                score = 0.0
-                return error_messages, score
+            # Parse payload to JSON
+            parsed_payload, parse_error = self._check_json_format(payload)
+            if parse_error:
+                return f"Invalid JSON format: {str(parse_error)}", 0.0
+            
+            # Validate against schema
+            validation_errors = list(self.validator.iter_errors(parsed_payload))
+            
+            if not validation_errors:
+                return "Payload is valid against the schema", 1.0
+            return f"Validation failed:\n{self._format_validation_errors(validation_errors)}", 0.0
+            
         except SchemaError as e:
-            return f"Internal Schema Error: {e.message}", 0.0
+            LogUtil.log(LogType.ERROR, LogLevel.ERROR,
+                       f"Schema validation error: {str(e)}")
+            return f"Internal schema error: {str(e)}", 0.0
         except Exception as e:
-            LogUtil.log(LogType.ERROR, LogLevel.ERROR, f"Unexpected error: {str(e)}")
+            LogUtil.log(LogType.ERROR, LogLevel.ERROR,
+                       f"Unexpected validation error: {str(e)}")
             return f"Validation failed: {str(e)}", 0.0
 
     def format_response(self):
+        """Formats the validation result into the standard response format.
+        
+        Populates the response dictionary with validation results and score.
+        """
         self.response["prediction"]["json_schema_validator"] = self.pred[0]
         self.response["score"] = self.pred[1]
