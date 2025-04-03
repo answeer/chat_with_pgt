@@ -1,189 +1,135 @@
+from llm_sanitation.scanners.scanner_base import Scanner
 import json
-from typing import Any, Dict, List, Optional
-from jsonschema import Draft202012Validator, ValidationError
-from referencing import Registry, jsonschema as jsonschema_ref
+import numpy as np
+import re
+from llm_sanitation.logging.logging_setup import LogUtil, LogType, LogLevel
 
-# from guardrails.actions.reask import SkeletonReAsk
-# from guardrails.classes.validation.validation_result import FailResult
-
-
-class SchemaValidationError(Exception):
-    fields: Dict[str, List[str]] = {}
-
-    def __init__(self, *args: object, fields: Dict[str, List[str]]):
-        self.fields = fields
-        super().__init__(*args)
-
-
-def validate_against_schema(
-    payload: Any,
-    validator: Draft202012Validator,
-    *,
-    validate_subschema: Optional[bool] = False,
-):
-    fields: Dict[str, List[str]] = {}
-    error: ValidationError
-    for error in validator.iter_errors(payload):
-        if validate_subschema is True and error.message.endswith(
-            "is a required property"
-        ):
-            continue
-        fields[error.json_path] = fields.get(error.json_path, [])
-        fields[error.json_path].append(error.message)
-
-    if fields:
-        error_message = (
-            "The provided payload is not compliant with the provided schema!"
-        )
-        raise SchemaValidationError(error_message, fields=fields)
-
-
-def validate_json_schema(json_schema: Dict[str, Any]):
-    """Validates a json_schema, against the JSON Meta Schema Draft 2020-12.
-
-    Raises a SchemaValidationError if invalid.
+class JsonValidator(Scanner):
     """
-    json_schema_validator = Draft202012Validator(
-        {
-            "$ref": "https://json-schema.org/draft/2020-12/schema",
-        }
-    )
-    try:
-        validate_against_schema(json_schema, json_schema_validator)
-    except SchemaValidationError as e:
-        schema_name = json_schema.get("title", json_schema.get("$id"))
-        error_message = (
-            f"Schema {schema_name} is not compliant with JSON Schema Draft 2020-12!"
-        )
-        raise SchemaValidationError(error_message, fields=e.fields)
+    A Scanner class for validating JSON payloads against a set of mandated keys and patterns.
 
+    This class checks if the provided JSON payload adheres to the required structure and 
+    contains the necessary key-value pairs that match specified patterns.
 
-def validate_payload(
-    payload: Any,
-    json_schema: Dict[str, Any],
-    *,
-    validate_subschema: Optional[bool] = False,
-):
-    """Validates a payload, against the provided JSON Schema.
-
-    Raises a SchemaValidationError if invalid.
+    Attributes:
+        mandate_checks (dict): A dictionary containing the keys and corresponding regex patterns 
+                               to validate against the JSON payload.
     """
-    schema_id = json_schema.get("$id", "temp-schema")
-    registry = Registry().with_resources(
-        [
-            (
-                f"urn:{schema_id}",
-                jsonschema_ref.DRAFT202012.create_resource(json_schema),
-            )
-        ]
-    )
-    validator = Draft202012Validator(
-        {
-            "$ref": f"urn:{schema_id}",
-        },
-        registry=registry,
-        # TODO: Add custom checks for date: format,
-        #   time: format, date-time: format, etc.
-        # format_checker=draft202012_format_checker
-    )
-    validate_against_schema(payload, validator, validate_subschema=validate_subschema)
 
+    def __init__(self, **kwargs):
+        """
+        Initializes the JsonValidator scanner.
 
-def schema_validation(llm_output: Any, output_schema: Dict[str, Any], **kwargs):
-    validate_subschema = kwargs.get("validate_subschema", False)
+        Args:
+            mandate_checks (dict): A dictionary of keys and regex patterns to validate against the JSON payload.
+        """
+        mandate_checks = kwargs["mandate_keys"]
+        super().__init__("json_validator", 1, mandate_checks=mandate_checks)
 
-    schema_error = None
-    try:
-        validate_payload(
-            llm_output, output_schema, validate_subschema=validate_subschema
-        )
-    except SchemaValidationError as sve:
-        formatted_error_fields = json.dumps(sve.fields, indent=2)
-        schema_error = f"JSON does not match schema:\n{formatted_error_fields}"
+    def get_value(self, payload, keys):
+        """
+        Retrieves the value from the nested JSON payload using dot notation.
 
-    if schema_error:
-        return schema_error
-        # return SkeletonReAsk(
-        #     incorrect_value=llm_output,
-        #     fail_results=[
-        #         FailResult(
-        #             fix_value=None,
-        #             error_message=schema_error,
-        #         )
-        #     ],
-        # )
+        Args:
+            payload (dict): The JSON object to retrieve the value from.
+            keys (str): The dot-separated key string indicating the path in the JSON object.
 
-if __name__ == "__main__":
-    schema = {
-            "type": "object",
-            "properties": {
-                "user_id": {
-                    "type": "integer",
-                    "minimum": 1
-                },
-                "name": {
-                    "type": "string",
-                    "minLength": 2
-                },
-                "email": {
-                    "type": "string",
-                    "format": "email",
-                    "pattern": "^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\\.[a-zA-Z0-9-.]+$"
-                },
-                "phone": {
-                    "type": "string",
-                    "pattern": "^\\+?[1-9]\\d{1,14}$"
-                },
-                "birth_date": {
-                    "type": "string",
-                    "pattern": "^(0[1-9]|[12][0-9]|3[01])-(0[1-9]|1[0-2])-(\\d{4})$"
-                },
-                "addresses": {
-                    "type": "array",
-                    "minItems": 1,
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "street": {
-                                "type": "string"
-                            },
-                            "city": {
-                                "type": "string"
-                            },
-                            "postal_code": {
-                                "type": "string",
-                                "pattern": "^[0-9]{5}(-[0-9]{4})?$"
-                            }
-                        },
-                        "required": [
-                            "street",
-                            "city",
-                            "postal_code"
-                        ]
-                    }
-                }
-            },
-            "required": [
-                "user_id",
-                "name",
-                "email",
-                "birth_date",
-                "addresses"
-            ]
-        }
+        Returns:
+            Any: The value found at the specified path, or None if the key does not exist.
+        """
+        keys = keys.split(".")
+        value = payload
+        for key in keys:
+            if isinstance(value, dict):
+                value = value.get(key)
+            else:
+                return None
+        return value
 
+    def check_mandate_keys(self, payload):
+        """
+        Validates the JSON payload against the mandated keys and patterns.
 
-    data = {
-        "name": "John Doe",
-        "email": "johndoe@example.com",
-        "phone": "+123w4567890",
-        "birth_date": "15-05-1990",
-        "addresses": [
-            {
-                "city": "New York",
-                "postal_code": "A"
-            }
-        ]
-    }
-    result = schema_validation(llm_output=data,output_schema=schema)
-    print(result)
+        Args:
+            payload (dict): The JSON object to validate.
+
+        Returns:
+            tuple: A tuple containing a list of prediction strings and the average score.
+        """
+        self.mandate_keys = self._kwargs["mandate_checks"].keys()
+
+        predict = []
+        score = []
+        try:
+            for mandate_key in self.mandate_keys:
+                mandate_pattern = self._kwargs["mandate_checks"].get(mandate_key, [])
+                if isinstance(mandate_pattern,list):
+                    mandate_pattern = '|'.join(map(re.escape, mandate_pattern))
+                pattern = re.compile(mandate_pattern)
+                
+                value = self.get_value(payload, mandate_key)
+
+                if value is None:
+                    score.append(0)
+                    predict.append("Key `{}` not found".format(mandate_key))
+
+                elif re.match(pattern, value):
+                    score.append(1)
+                else:
+                    score.append(0)
+                    predict.append("For Key `{}` value {} is not in the correct pattern.".format(mandate_key, value))
+            if len(predict) == 0:
+                predict = "Valid json payload."
+
+        except Exception as e:
+            LogUtil.log(LogType.ERROR, LogLevel.ERROR, e)
+            predict.append("Error occurred: {}".format(e))
+            score.append(0)
+
+        return predict, np.mean(score)
+
+    def check_json_format(self, payload):
+        """
+        Validates that a value is parseable as valid JSON.
+
+        Args:
+            payload (Any): The data to check for JSON format.
+
+        Returns:
+            tuple: A tuple containing the parsed JSON object and any error that occurred during parsing.
+        """
+        stringified = payload
+        parsed_payload, error = (None, None)
+        try:
+            if not isinstance(payload, str):
+                stringified = json.dumps(payload)
+
+            parsed_payload = json.loads(stringified)
+        except json.decoder.JSONDecodeError as json_error:
+            error = json_error
+        except TypeError as type_error:
+            error = type_error
+        return parsed_payload, error
+
+    def predict(self, payload):
+        """
+        Main prediction method that validates the JSON payload.
+
+        Args:
+            payload (Any): The JSON object or string to validate.
+
+        Returns:
+            tuple: A tuple containing a list of prediction strings or error and a score.
+        """
+        parsed_payload, error = self.check_json_format(payload)
+        if error is not None:
+            score = 0
+            predict = error
+            return predict, score
+        else:
+            predict, score = self.check_mandate_keys(parsed_payload)
+        return predict, score
+
+    def format_response(self):
+        self.response["prediction"]["json_validator"] = self.pred[0]
+        self.response["score"] = self.pred[1]
