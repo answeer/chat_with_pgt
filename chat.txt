@@ -1,61 +1,25 @@
-from copy import deepcopy
-
-def merge_exe_plan(default_plan, custom_plans):
-    """
-    深度合并执行计划的增强实现
-    
-    :param default_plan: 默认基准执行计划
-    :param custom_plans: 需要合并的自定义计划列表
-    :return: 合并后的最终执行计划
-    
-    合并规则：
-    1. 树状结构合并：支持业务技能→AI技能→参数的多级合并
-    2. 列表智能合并：相同路径下的列表参数执行并集操作
-    3. 值覆盖规则：非列表参数使用自定义值覆盖默认值
-    4. 结构扩展：自定义计划中的新节点直接追加
-    """
-    
-    def merge_dict(dst, src):
-        """递归合并字典节点"""
-        for key, src_value in src.items():
-            # 新节点直接添加
-            if key not in dst:
-                dst[key] = deepcopy(src_value)
-                continue
-
-            dst_value = dst[key]
-            
-            # 处理列表类型合并
-            if isinstance(src_value, list) and isinstance(dst_value, list):
-                # 列表合并去重（保持顺序）
-                merged = dst_value + [x for x in src_value if x not in dst_value]
-                dst[key] = merged
-            # 处理字典嵌套合并
-            elif isinstance(src_value, dict) and isinstance(dst_value, dict):
-                merge_dict(dst_value, src_value)
-            # 其他类型直接覆盖
-            else:
-                dst[key] = deepcopy(src_value)
-    
-    # 创建默认计划的深拷贝作为合并基准
-    merged_plan = deepcopy(default_plan)
-    
-    # 逐层合并每个自定义计划
-    for plan in custom_plans:
-        for b_skill, ai_skills in plan.items():
-            # 创建业务技能节点
-            if b_skill not in merged_plan:
-                merged_plan[b_skill] = deepcopy(ai_skills)
-                continue
-            
-            # 合并AI技能层
-            for ai_skill, params in ai_skills.items():
-                # 创建AI技能节点
-                if ai_skill not in merged_plan[b_skill]:
-                    merged_plan[b_skill][ai_skill] = deepcopy(params)
-                    continue
-                
-                # 合并参数层
-                merge_dict(merged_plan[b_skill][ai_skill], params)
-    
-    return merged_plan
+guardrails:
+  - text:
+      - data:
+          - requestData.input_text
+        policies: null
+  - file:
+      - data:
+          - requestData.image_path
+        policies:
+          - POLICY0002
+      - data:
+          - requestData.image_path2
+        policies:
+          - POLICY0004
+  - image:
+      - data:
+          - requestData.image_path
+        policies: null
+  - json:
+      - data: '*'
+      - policies: null
+  - numeric:
+      - data:
+          - extracted_values.*.page_data.*.values.*.confidence
+        policies: null
