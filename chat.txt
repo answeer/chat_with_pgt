@@ -23,3 +23,171 @@ guardrails:
       - data:
           - extracted_values.*.page_data.*.values.*.confidence
         policies: null
+
+
+{
+    "header": {
+        "clientRefNumber": "d17d2953-904c-4d38-87c0-ca5a2375e471",
+        "job_id": "JID-15139ecc-4991-11ef-9834-0a586e8203a3",
+        "country": "IN",
+        "project_version": "1.0.0",
+        "project_id": "SRVCB_GBL",
+        "input_type": "Doc",
+        "doc_ids": [
+            "{E070DA90-0000-C217-8F28-2445CE60E901}"
+        ],
+        "doc_count": 1,
+        "total_pagecount": 1,
+        "status": "completed",
+        "ops_agent_id": "SOPSAGNT00001",
+        "error_code": "",
+        "error_description": "",
+        "consumerid": "1002",
+        "swoosh_btask_id": "004"
+    },
+    "extracted_values": [
+        {
+            "doc_file_name": "E070DA90-0000-C217-8F28-2445CE60E901.tiff",
+            "doc_id": "E070DA90-0000-C217-8F28-2445CE60E901",
+            "doc_type": "Instruction",
+            "page_number": "1",
+            "page_data": [
+                {
+                    "transaction_no": "001",
+                    "values": [
+                        {
+                            "entity_name": "Your Reference",
+                            "pred_ref_id": "01896c09-cf34-47cf-b7fa-0ffde794dc10",
+                            "value": "Please Advise",
+                            "confidence": 98.9,
+                            "xmin": 505,
+                            "xmax": 659,
+                            "ymin": 691,
+                            "ymax": 696
+                        },
+                        {
+                            "entity_name": "Letter_Date",
+                            "pred_ref_id": "62dbf3d2-9d75-4379-929c-5159f2e0fed0",
+                            "value": "21 May 2024",
+                            "confidence": 98.46,
+                            "xmin": 505,
+                            "xmax": 735,
+                            "ymin": 683,
+                            "ymax": 772
+                        },
+                        {
+                            "entity_name": "Date_of_Completion",
+                            "pred_ref_id": "3fb05c01-c189-4068-ba1f-5c1d6bbdff5d",
+                            "value": "19 July 2024",
+                            "confidence": 98.37,
+                            "xmin": 718,
+                            "xmax": 1480,
+                            "ymin": 890,
+                            "ymax": 1517
+                        },
+                        {
+                            "entity_name": "Reason_for_Redemption",
+                            "pred_ref_id": "75120dc4-3968-4904-b0e9-8d448b04a535",
+                            "value": "SALE",
+                            "confidence": 99.13,
+                            "xmin": 716,
+                            "xmax": 1400,
+                            "ymin": 795,
+                            "ymax": 1441
+                        },
+                        {
+                            "entity_name": "LawFirm Name",
+                            "pred_ref_id": "9d3d7a21-cfb2-4e87-b0f1-899032f880f1",
+                            "value": "Ms Jeanette Lee",
+                            "confidence": 99.45,
+                            "xmin": 505,
+                            "xmax": 541,
+                            "ymin": 726,
+                            "ymax": 578
+                        },
+                        {
+                            "entity_name": "Attention",
+                            "pred_ref_id": "7f9e071e-8cc6-4fb4-acaf-fb8121016333",
+                            "value": "Ms Angela",
+                            "confidence": 96.61,
+                            "xmin": 175,
+                            "xmax": 1825,
+                            "ymin": 1624,
+                            "ymax": 1875
+                        },
+                        {
+                            "entity_name": "Lawyer Fax No",
+                            "pred_ref_id": "902afee0-5a49-42e7-947d-9a38f6edbc4c",
+                            "value": "6305 1712",
+                            "confidence": 95.0,
+                            "xmin": 1161,
+                            "xmax": 813,
+                            "ymin": 1542,
+                            "ymax": 852
+                        },
+                        {
+                            "entity_name": "Legal Executive",
+                            "pred_ref_id": "fd1b1790-f743-4fbc-95ff-9b2328258e3a",
+                            "value": "Ms Tina",
+                            "confidence": 98.64,
+                            "xmin": 505,
+                            "xmax": 581,
+                            "ymin": 620,
+                            "ymax": 618
+                        },
+                        {
+                            "entity_name": "Our_Reference",
+                            "pred_ref_id": "6e02c058-f26b-4cf4-a056-352c829a22a3",
+                            "value": "P(S)4663.24.SS(TL)",
+                            "confidence": 99.52,
+                            "xmin": 505,
+                            "xmax": 699,
+                            "ymin": 752,
+                            "ymax": 736
+                        },
+                        {
+                            "entity_name": "Redemption_Date",
+                            "pred_ref_id": "b60649bb-a729-4e7b-bb08-405c22fee563",
+                            "value": "19 July 2024",
+                            "confidence": 99.18,
+                            "xmin": 254,
+                            "xmax": 1714,
+                            "ymin": 866,
+                            "ymax": 1757
+                        },
+                        {
+                            "entity_name": "Borrower_Name",
+                            "pred_ref_id": "74406f7e-41dc-404b-9eb7-67dd532f6bb9",
+                            "value": "GOHSOCK PHENG(WU SHUPING)",
+                            "confidence": 96.17,
+                            "xmin": 177,
+                            "xmax": 1168,
+                            "ymin": 860,
+                            "ymax": 1201
+                        },
+                        {
+                            "entity_name": "Lawyer Contact",
+                            "pred_ref_id": "f13dde76-86d8-4c5a-8b39-074d7208f2f1",
+                            "value": "6250 0884",
+                            "confidence": 99.07,
+                            "xmin": 1323,
+                            "xmax": 341,
+                            "ymin": 1578,
+                            "ymax": 378
+                        },
+                        {
+                            "entity_name": "Mortgaged_Address",
+                            "pred_ref_id": "754729ea-983c-44b8-947b-e155a2906b5b",
+                            "value": " ",
+                            "confidence": 96.61,
+                            "xmin": 175,
+                            "xmax": 1825,
+                            "ymin": 1624,
+                            "ymax": 1875
+                        }
+                    ]
+                }
+            ]
+        }
+    ]
+}
