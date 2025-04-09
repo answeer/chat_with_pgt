@@ -1,24 +1,7 @@
-import json
-import os
-import uuid
-from datetime import datetime
+router = routers.DefaultRouter(trailing_slash=False)
 
-import requests
-from django.conf import settings
-from django.http import HttpResponse
-from django.urls import resolve
-from django.utils.deprecation import MiddlewareMixin
-from rest_framework.exceptions import PermissionDenied
-
-
-class ImageSynthHeaderAuthMiddleware(MiddlewareMixin):
-
-    def process_request(self, request):
-        if (str(request.path_info) == "/api/v1/heartbeat"):
-            return None
-        auth_token = request.headers.get('authorization', None) or request.headers.get('Authorization', None)
-
-        if auth_token and auth_token==settings.AUTH_TOKEN:
-            return None
-        else:
-            return HttpResponse('Please provide a Authorization in header with Token', status=401)
+urlpatterns = [
+	path('', include(router.urls)),
+	path('v1/heartbeat',views.HeartBeat().as_view()),
+	path('v1/guardrails/validator',views.Validator.as_view(),name="validator")
+]
