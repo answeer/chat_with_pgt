@@ -1,81 +1,67 @@
 def run_action(self, execution_plans, payload, save_path="."):
-        """Executes the scanning process based on the provided execution plan and scanner type."""
-        # TODO: Reduce cognative complexity
-        try:
-            error_code = ""
-            error_message = ""
-            job_id = self.kwargs["job_id"]
-            task_group = self.determine_task_group()
-            self.kwargs["task_group"] = task_group
+    """Executes the scanning process based on the provided execution plan and scanner type."""
+    try:
+        error_code = error_message = ""
+        job_id = self.kwargs["job_id"]
+        task_group = self.determine_task_group()
+        self.kwargs["task_group"] = task_group
 
-            for exec_plan in execution_plans:
-                # create response
-                exec_plan_response = self.exec_plan_response_tmpl.copy()
+        # 提前验证任务组类型
+        if task_group != "validators":
+            error_code, error_message = self._get_task_group_error(task_group)
+            self._log_error(job_id, error_message)
+            return None, error_code, error_message
 
-                execution_plan = exec_plan["exec_plan"]
-                data_paths = exec_plan["data"]
+        for exec_plan in execution_plans:
+            exec_plan_response = self.exec_plan_response_tmpl.copy()
+            execution_plan = exec_plan["exec_plan"]
+            data_paths = exec_plan["data"]
+            exec_plan_response["data"].extend(data_paths)
 
-                exec_plan_response["data"].extend(data_paths)
+            # 处理数据路径
+            for data_path in data_paths:
+                if self.response.status == "failed":
+                    return self._early_return(job_id)
 
-                for data_path in data_paths:
+                data = get_data(data_path, payload)
+                self.check.check_payload(data)
 
-                    data = get_data(data_path, payload)
+                # 快速失败检查
+                if self._should_early_return():
+                    return self._early_return(job_id)
 
-                    # Pre-validation checks based on scanner type
-                    if task_group == "validators":
-                        self.check.check_payload(data)
-                    else:
-                        error_code = "FRDIOS0006"
-                        error_message = ERROR_CODE_DICT["FRDIOS0006"].format(
-                            str(task_group)
-                        )
-                        LogUtil.log(
-                            LogType.ERROR,
-                            LogLevel.ERROR,
-                            "Running ended with error",
-                            jid=job_id,
-                            error=error_message,
-                        )
-                        return None, error_code, error_message
+                # 处理扫描器执行
+                for plan in execution_plan.values():
+                    for scanner_nm, param in plan.items():
+                        result = self.run_scanner(data, scanner_nm, param, **self.kwargs)
+                        exec_plan_response["guardrails"].append(result)
+                        data = result["sanitized_data"] or data
+                        
+                        if self.response.status == "failed":
+                            return self._early_return(job_id)
 
-                    if self.response.status == "failed":
-                        error_code = self.response.error_code
-                        error_message = self.response.error_message
-                        LogUtil.log(
-                            LogType.ERROR,
-                            LogLevel.ERROR,
-                            "Running ended with error",
-                            jid=job_id,
-                            error=error_message,
-                        )
-                        return None, error_code, error_message
+            self.combined_result.append(exec_plan_response)
 
-                    # Run each scanner in the execution plan
-                    for _, plan in execution_plan.items():
-                        for scanner_nm, param in plan.items():
-                            result = self.run_scanner(
-                                data, scanner_nm, param, **self.kwargs
-                            )
-                            exec_plan_response["guardrails"].append(result)
+        return self.combined_result, error_code, error_message
 
-                            data = (
-                                data
-                                if result["sanitized_data"] is None
-                                else result["sanitized_data"]
-                            )
+    except Exception as e:
+        return self._handle_unexpected_error(job_id, e)
 
-                            if self.response.status == "failed":
-                                error_code = self.response.error_code
-                                error_message = self.response.error_message
-                                LogUtil.log(
-                                    LogType.ERROR,
-                                    LogLevel.ERROR,
-                                    "Running ended with error",
-                                    jid=job_id,
-                                    error=error_message,
-                                )
-                                return None, error_code, error_message
+# 以下是保持在同一类中的辅助方法（但根据要求不拆分到不同函数）
+def _get_task_group_error(self, task_group):
+    return "FRDIOS0006", ERROR_CODE_DICT["FRDIOS0006"].format(str(task_group))
 
-                self.combined_result.append(exec_plan_response)
+def _log_error(self, job_id, message):
+    LogUtil.log(LogType.ERROR, LogLevel.ERROR, "Running ended with error", jid=job_id, error=message)
 
-            return self.combined_result, error_code, error_message
+def _should_early_return(self):
+    return self.response.status == "failed"
+
+def _early_return(self, job_id):
+    self._log_error(job_id, self.response.error_message)
+    return None, self.response.error_code, self.response.error_message
+
+def _handle_unexpected_error(self, job_id, exception):
+    error_message = f"Unexpected error: {str(exception)}"
+    self._log_error(job_id, error_message)
+    return None, "FRUNTIME", error_message
