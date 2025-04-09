@@ -1,40 +1,31 @@
-{
-                        "file_bounding": {
-                            "SoftwareCheck": {"software_blacklist":  ["","Photoshop","Corel","PhotoScape","PhotoPlus","GIMP","Pixelmator","Illustrator","Windows Photo Editor","ilovepdf","pdfTeX"]},
-                            "EncryptionDetector": {}
-                        },
-                        "image_bounding": {
-                            "ImageBlurCheck": {"score_thresh": 0.5},
-                            "ImageDimCheck": {"img_dim_thresh": [256, 256]},
-                            "ImageMemoryCheck": {"max_size": 1024, "min_size": 128}
-                        },
-                        "text_bounding": {
-                            "ExecutableScript": {},
-                            "HarmfulString": {"case_sensitive": False},
-                            "PiiDetector": {"entities":[]}
-                        },
-                        "numeric_bounding":{
-                            "BinTransform": {"catagories":[{"name": "high", "range": [70, 100]},{"name": "medium", "range": [40, 60]},{"name": "low", "range": [0, 39]}],"default":"undefined"}
-                        }
-                        }
+import copy
 
+def merge_scanners(default, custom):
+    """深度合并两个扫描器配置，处理嵌套字典和特定列表合并规则"""
+    
+    def is_string_list(lst):
+        return all(isinstance(item, str) for item in lst) if lst else False
 
-{
-                        "file_bounding": {
-                            "SoftwareCheck": {"software_blacklist":  ["mpb"]},
-                            "EncryptionDetector": {}
-                        },
-                        "image_bounding": {
-                            "ImageBlurCheck": {"score_thresh": 0.5},
-                            "ImageDimCheck": {"img_dim_thresh": [125, 125]},
-                            "ImageMemoryCheck": {"max_size": 1024, "min_size": 128}
-                        },
-                        "text_bounding": {
-                            "ExecutableScript": {},
-                            "HarmfulString": {"case_sensitive": False},
-                            "PiiDetector": {"entities":[]}
-                        },
-                        "numeric_bounding":{
-                            "BinTransform": {"catagories":[{"name": "high", "range": [70, 100]},{"name": "medium", "range": [40, 60]},{"name": "low", "range": [0, 39]}],"default":"undefined"}
-                        }
-                        }
+    merged = copy.deepcopy(default)
+    
+    for key in custom:
+        custom_value = custom[key]
+        merged_value = merged.get(key)
+        
+        # 处理字典类型的嵌套合并
+        if isinstance(custom_value, dict) and isinstance(merged_value, dict):
+            merged[key] = merge_scanners(merged_value, custom_value)
+            continue
+            
+        # 处理列表类型的特殊合并规则
+        if isinstance(custom_value, list):
+            if is_string_list(custom_value) and isinstance(merged_value, list):
+                merged[key] = merged_value + custom_value  # 字符串列表追加
+            else:
+                merged[key] = copy.deepcopy(custom_value)  # 其他列表替换
+            continue
+            
+        # 其他类型直接覆盖
+        merged[key] = copy.deepcopy(custom_value)
+    
+    return merged
