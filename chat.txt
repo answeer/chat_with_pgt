@@ -1,78 +1,55 @@
-def run_action(self, execution_plans, payload, save_path="."):
-    """Executes the scanning process based on the provided execution plan and scanner type."""
-    try:
-        error_code = ""
-        error_message = ""
-        job_id = self.kwargs["job_id"]
-        task_group = self.determine_task_group()
-        self.kwargs["task_group"] = task_group
+def get_plan(self, policies):
+        # TODO: Implement the logic of policy overrides
+        # TODO: Reduce nested loops and conditions, reduce cognative complexity
 
-        # 提前校验任务组类型
-        if task_group != "validators":
-            error_code = "FRDIOS0006"
-            error_message = ERROR_CODE_DICT["FRDIOS0006"].format(str(task_group))
-            self.log_error(j, error_message)
-            return None, error_code, error_message
+        actions = []
+        no_actions = []
+        ai_skills = []
+        b_skills = []
+        execution_plan = {}
 
-        for exec_plan in execution_plans:
-            exec_plan_response = self.process_execution_plan(exec_plan, payload, job_id)
-            if self.response.status == "failed":
-                return None, self.response.error_code, self.response.error_message
-            self.combined_result.append(exec_plan_response)
+        for policy in policies:
+            policy_json = get_policy(policy)
+            stmts = policy_json["Statement"]
 
-        return self.combined_result, error_code, error_message
-    except Exception as e:
-        # 可根据需要添加异常处理
-        raise
+            for stmt in stmts:
+                actions = stmt["Action"]
+                no_actions = stmt["NotAction"]
 
-def process_execution_plan(self, exec_plan, payload, job_id):
-    """处理单个执行计划"""
-    exec_plan_response = self.exec_plan_response_tmpl.copy()
-    execution_plan = exec_plan["exec_plan"]
-    data_paths = exec_plan["data"]
-    exec_plan_response["data"].extend(data_paths)
+                skills = defaultdict(lambda: [])
 
-    for data_path in data_paths:
-        data = get_data(data_path, payload)
-        self.check.check_payload(data)
-        if self.has_validation_failed():
-            return exec_plan_response
+                # Process Actions
+                for action in actions:
+                    b_skill, ai_skill = action.split(":")
 
-        # 处理扫描器
-        exec_plan_response = self.process_scanners(
-            data, execution_plan, exec_plan_response, job_id
-        )
-        if self.response.status == "failed":
-            break
+                    if ai_skill == "*":
+                        skills[b_skill].extend(self.scanner_default[b_skill])
+                    else:
+                        skills[b_skill].append(ai_skill)
 
-    return exec_plan_response
+                # Process NotActions
+                for no_action in no_actions:
+                    b_skill, ai_skill = no_action.split(":")
+                    try:
+                        if ai_skill == "*":
+                            skills[b_skill].remove(self.scanner_default[b_skill])
+                        else:
+                            skills[b_skill].remove(ai_skill)
+                    except ValueError:
+                        pass
 
-def process_scanners(self, data, execution_plan, exec_plan_response, job_id):
-    """处理扫描器执行流程"""
-    for _, plan in execution_plan.items():
-        for scanner_nm, param in plan.items():
-            result = self.run_scanner(data, scanner_nm, param, ​**self.kwargs)
-            exec_plan_response["guardrails"].append(result)
-            data = result["sanitized_data"] or data
-            if self.has_operation_failed():
-                self.log_error(job_id, self.response.error_message)
-                break
-    return exec_plan_response
+                # Add conditions to the execution plan
+                skills = dict(skills)
+                b_skills = skills.keys()
+                for b_skill in b_skills:
+                    ai_skills = skills[b_skill]
+                    for ai_skill in ai_skills:
+                        if b_skill not in execution_plan:
+                            execution_plan[b_skill] = {}
+                        execution_plan[b_skill][ai_skill] = stmt["Condition"].get(
+                            ai_skill, {}
+                        )
 
-def has_validation_failed(self):
-    """检查预验证结果"""
-    return self.response.status == "failed"
-
-def has_operation_failed(self):
-    """检查操作失败状态"""
-    return self.response.status == "failed"
-
-def log_error(self, job_id, error_message):
-    """统一错误日志记录"""
-    LogUtil.log(
-        LogType.ERROR,
-        LogLevel.ERROR,
-        "Running ended with error",
-        jid=job_id,
-        error=error_message,
-    )
+        # Print and return the reordered execution plan
+        pprint(self.reorder_plan(execution_plan))
+        return self.reorder_plan(execution_plan)
