@@ -1,55 +1,37 @@
 def get_plan(self, policies):
-        # TODO: Implement the logic of policy overrides
-        # TODO: Reduce nested loops and conditions, reduce cognative complexity
+    def process_statement(stmt, scanner_default):
+        skills = defaultdict(list)
+        # Process Actions
+        for action in stmt["Action"]:
+            b_skill, ai_skill = action.split(":")
+            default_skills = scanner_default.get(b_skill, [])
+            if ai_skill == "*":
+                skills[b_skill].extend(default_skills)
+            else:
+                skills[b_skill].ai_skill)
+        # Process NotActions
+        for no_action in stmt["NotAction"]:
+            b_skill, ai_skill = no_action.split(":")
+            current_skills = skills[b_skill]
+            default_skills = scanner_default.get(b_skill, [])
+            if ai_skill == "*":
+                skills[b_skill] = [s for s in current_skills if s not in default_skills]
+            else:
+                if ai_skill in current_skills:
+                    skills[b_skill].remove(ai_skill)
+        return skills
 
-        actions = []
-        no_actions = []
-        ai_skills = []
-        b_skills = []
-        execution_plan = {}
+    def update_execution_plan(plan, stmt_skills, conditions):
+        for b_skill, ai_skills in stmt_skills.items():
+            for ai_skill in ai_skills:
+                plan.setdefault(b_skill, {})[ai_skill] = conditions.get(ai_skill, {})
 
-        for policy in policies:
-            policy_json = get_policy(policy)
-            stmts = policy_json["Statement"]
-
-            for stmt in stmts:
-                actions = stmt["Action"]
-                no_actions = stmt["NotAction"]
-
-                skills = defaultdict(lambda: [])
-
-                # Process Actions
-                for action in actions:
-                    b_skill, ai_skill = action.split(":")
-
-                    if ai_skill == "*":
-                        skills[b_skill].extend(self.scanner_default[b_skill])
-                    else:
-                        skills[b_skill].append(ai_skill)
-
-                # Process NotActions
-                for no_action in no_actions:
-                    b_skill, ai_skill = no_action.split(":")
-                    try:
-                        if ai_skill == "*":
-                            skills[b_skill].remove(self.scanner_default[b_skill])
-                        else:
-                            skills[b_skill].remove(ai_skill)
-                    except ValueError:
-                        pass
-
-                # Add conditions to the execution plan
-                skills = dict(skills)
-                b_skills = skills.keys()
-                for b_skill in b_skills:
-                    ai_skills = skills[b_skill]
-                    for ai_skill in ai_skills:
-                        if b_skill not in execution_plan:
-                            execution_plan[b_skill] = {}
-                        execution_plan[b_skill][ai_skill] = stmt["Condition"].get(
-                            ai_skill, {}
-                        )
-
-        # Print and return the reordered execution plan
-        pprint(self.reorder_plan(execution_plan))
-        return self.reorder_plan(execution_plan)
+    execution_plan = for policy in policies:
+        policy_json = get_policy(policy)
+        for stmt in policy_json["Statement"]:
+            stmt_skills = process_statement(stmt, self.scanner_default)
+            update_execution_plan(execution_plan, stmt_skills, stmt.get("Condition", {}))
+    
+    ordered_plan = self_plan(execution_plan)
+    pprint(ordered_plan)
+    return ordered_plan
