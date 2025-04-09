@@ -1,7 +1,81 @@
-router = routers.DefaultRouter(trailing_slash=False)
+def run_action(self, execution_plans, payload, save_path="."):
+        """Executes the scanning process based on the provided execution plan and scanner type."""
+        # TODO: Reduce cognative complexity
+        try:
+            error_code = ""
+            error_message = ""
+            job_id = self.kwargs["job_id"]
+            task_group = self.determine_task_group()
+            self.kwargs["task_group"] = task_group
 
-urlpatterns = [
-	path('', include(router.urls)),
-	path('v1/heartbeat',views.HeartBeat().as_view()),
-	path('v1/guardrails/validator',views.Validator.as_view(),name="validator")
-]
+            for exec_plan in execution_plans:
+                # create response
+                exec_plan_response = self.exec_plan_response_tmpl.copy()
+
+                execution_plan = exec_plan["exec_plan"]
+                data_paths = exec_plan["data"]
+
+                exec_plan_response["data"].extend(data_paths)
+
+                for data_path in data_paths:
+
+                    data = get_data(data_path, payload)
+
+                    # Pre-validation checks based on scanner type
+                    if task_group == "validators":
+                        self.check.check_payload(data)
+                    else:
+                        error_code = "FRDIOS0006"
+                        error_message = ERROR_CODE_DICT["FRDIOS0006"].format(
+                            str(task_group)
+                        )
+                        LogUtil.log(
+                            LogType.ERROR,
+                            LogLevel.ERROR,
+                            "Running ended with error",
+                            jid=job_id,
+                            error=error_message,
+                        )
+                        return None, error_code, error_message
+
+                    if self.response.status == "failed":
+                        error_code = self.response.error_code
+                        error_message = self.response.error_message
+                        LogUtil.log(
+                            LogType.ERROR,
+                            LogLevel.ERROR,
+                            "Running ended with error",
+                            jid=job_id,
+                            error=error_message,
+                        )
+                        return None, error_code, error_message
+
+                    # Run each scanner in the execution plan
+                    for _, plan in execution_plan.items():
+                        for scanner_nm, param in plan.items():
+                            result = self.run_scanner(
+                                data, scanner_nm, param, **self.kwargs
+                            )
+                            exec_plan_response["guardrails"].append(result)
+
+                            data = (
+                                data
+                                if result["sanitized_data"] is None
+                                else result["sanitized_data"]
+                            )
+
+                            if self.response.status == "failed":
+                                error_code = self.response.error_code
+                                error_message = self.response.error_message
+                                LogUtil.log(
+                                    LogType.ERROR,
+                                    LogLevel.ERROR,
+                                    "Running ended with error",
+                                    jid=job_id,
+                                    error=error_message,
+                                )
+                                return None, error_code, error_message
+
+                self.combined_result.append(exec_plan_response)
+
+            return self.combined_result, error_code, error_message
