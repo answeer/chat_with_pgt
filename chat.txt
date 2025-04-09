@@ -1,37 +1,47 @@
 def get_plan(self, policies):
-    def process_statement(stmt, scanner_default):
-        skills = defaultdict(list)
-        # Process Actions
-        for action in stmt["Action"]:
-            b_skill, ai_skill = action.split(":")
-            default_skills = scanner_default.get(b_skill, [])
-            if ai_skill == "*":
-                skills[b_skill].extend(default_skills)
-            else:
-                skills[b_skill].ai_skill)
-        # Process NotActions
-        for no_action in stmt["NotAction"]:
-            b_skill, ai_skill = no_action.split(":")
-            current_skills = skills[b_skill]
-            default_skills = scanner_default.get(b_skill, [])
-            if ai_skill == "*":
-                skills[b_skill] = [s for s in current_skills if s not in default_skills]
-            else:
-                if ai_skill in current_skills:
-                    skills[b_skill].remove(ai_skill)
-        return skills
+    execution_plan = {}
 
-    def update_execution_plan(plan, stmt_skills, conditions):
-        for b_skill, ai_skills in stmt_skills.items():
-            for ai_skill in ai_skills:
-                plan.setdefault(b_skill, {})[ai_skill] = conditions.get(ai_skill, {})
-
-    execution_plan = for policy in policies:
+    for policy in policies:
         policy_json = get_policy(policy)
         for stmt in policy_json["Statement"]:
-            stmt_skills = process_statement(stmt, self.scanner_default)
-            update_execution_plan(execution_plan, stmt_skills, stmt.get("Condition", {}))
-    
-    ordered_plan = self_plan(execution_plan)
-    pprint(ordered_plan)
-    return ordered_plan
+            skills = self.process_statement(stmt)
+            self.update_execution_plan(execution_plan, skills, stmt)
+
+    return self.reorder_plan(execution_plan)
+
+def process_statement(self, stmt):
+    actions = stmt.get("Action", [])
+    no_actions = stmt.get("NotAction", [])
+    skills = defaultdict(set)
+
+    # Process allowed actions
+    for action in actions:
+        self.process_action(action, skills)
+
+    # Process denied actions
+    for no_action in no_actions:
+        self.process_no_action(no_action, skills)
+
+    return {b_skill: skills[b_skill] for b_skill in skills}
+
+def process_action(self, action, skills):
+    b_skill, ai_skill = action.split(":", 1)
+    if ai_skill == "*":
+        default_skills = self.scanner_default.get(b_skill, [])
+        skills[b_skill].update(default_skills)
+    else:
+        skills[b_skill].add(ai_skill)
+
+def process_no_action(self, no_action, skills):
+    b_skill, ai_skill = no_action.split(":", 1)
+    if ai_skill == "*":
+        default_skills = self.scanner_default.get(b_skill, [])
+        skills[b_skill].difference_update(default_skills)
+    else:
+        skills[b_skill].discard(ai_skill)
+
+def update_execution_plan(self, execution_plan, skills, stmt):
+    conditions = stmt.get("Condition", {})
+    for b_skill, ai_skills in skills.items():
+        for ai_skill in ai_skills:
+            execution_plan.setdefault(b_skill, {})[ai_skill] = conditions.get(ai_skill, {})
