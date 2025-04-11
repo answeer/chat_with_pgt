@@ -1,31 +1,21 @@
-import copy
-
-def merge_scanners(default, custom):
-    """深度合并两个扫描器配置，处理嵌套字典和特定列表合并规则"""
-    
-    def is_string_list(lst):
-        return all(isinstance(item, str) for item in lst) if lst else False
-
-    merged = copy.deepcopy(default)
-    
-    for key in custom:
-        custom_value = custom[key]
-        merged_value = merged.get(key)
-        
-        # 处理字典类型的嵌套合并
-        if isinstance(custom_value, dict) and isinstance(merged_value, dict):
-            merged[key] = merge_scanners(merged_value, custom_value)
-            continue
-            
-        # 处理列表类型的特殊合并规则
-        if isinstance(custom_value, list):
-            if is_string_list(custom_value) and isinstance(merged_value, list):
-                merged[key] = merged_value + custom_value  # 字符串列表追加
-            else:
-                merged[key] = copy.deepcopy(custom_value)  # 其他列表替换
-            continue
-            
-        # 其他类型直接覆盖
-        merged[key] = copy.deepcopy(custom_value)
-    
-    return merged
+ {
+    "job_params": {
+        "jobid": "JID-1234"
+    },
+    "service_params": {
+        "data_policies": {
+            "file": [
+                {
+                    "data": ['data.file1','data.file2'],
+                    "policies": [
+                        "POLICY0002"
+                    ]
+                }
+            ]
+        },
+        "data": {
+            "file1":r"C:\Users\1657820\Desktop\test_imgs\006.jpg",
+            "file2":r"C:\Users\1657820\Desktop\test_imgs\006.bmp"
+        }
+    }
+}
