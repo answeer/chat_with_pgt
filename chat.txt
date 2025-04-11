@@ -1,4 +1,39 @@
- {
+def determine_task_group(payload):
+    # 定义策略类型到任务组的映射关系
+    policy_mapping = {
+        'file': 'file_bounding',
+        'image': 'image_bounding',
+        'text': 'text_bounding',
+        'numeric': 'numeric_bounding'
+    }
+
+    try:
+        # 获取data_policies字典
+        data_policies = payload['service_params']['data_policies']
+        
+        # 获取所有策略键
+        policy_keys = data_policies.keys()
+        
+        # 验证存在且只有一个策略类型
+        if not policy_keys:
+            raise ValueError("No policy type found in data_policies")
+        if len(policy_keys) > 1:
+            raise ValueError("Multiple policy types found in data_policies")
+            
+        # 获取唯一的策略类型
+        policy_type = next(iter(policy_keys))
+        
+        # 查找对应的任务组
+        if policy_type in policy_mapping:
+            return policy_mapping[policy_type]
+        else:
+            raise ValueError(f"Unsupported policy type: {policy_type}")
+
+    except KeyError as e:
+        raise KeyError(f"Invalid payload structure: {str(e)} not found") from e
+
+# 测试示例
+payload = {
     "job_params": {
         "jobid": "JID-1234"
     },
@@ -7,15 +42,19 @@
             "file": [
                 {
                     "data": ['data.file1','data.file2'],
-                    "policies": [
-                        "POLICY0002"
-                    ]
+                    "policies": ["POLICY0002"]
                 }
             ]
         },
         "data": {
-            "file1":r"C:\Users\1657820\Desktop\test_imgs\006.jpg",
-            "file2":r"C:\Users\1657820\Desktop\test_imgs\006.bmp"
+            "file1": r"C:\Users\1657820\Desktop\test_imgs\006.jpg",
+            "file2": r"C:\Users\1657820\Desktop\test_imgs\006.bmp"
         }
     }
 }
+
+try:
+    task_group = determine_task_group(payload)
+    print(f"Task Group: {task_group}")  # 输出: Task Group: file_bounding
+except Exception as e:
+    print(f"Error: {str(e)}")
