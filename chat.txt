@@ -1,4 +1,24 @@
-{'clientData': {'clientRefNumber': '2787875', 'country': 'TH', 'consumerId': 'CN00001', 'processId': 'FM_Netting'}, 'requestData': {'properties': {'filenet_download_params': {'documentids': [{'documentid': '{A0F42A8A-0000-C618-BDFF-7564C99D44E1}'}]}, 'request_timestamp': '25082023122955'}}}
+{
+            "clientData": {
+                "clientRefNumber": "2787875",
+                "country": "TH",
+                "consumerId": "CN00001",
+                "processId": "FM_Netting",
+                "stream_file": "stream_file"
+            },
+            "requestData": {
+                "properties": {
+                    "filenet_download_params": {
+                        "documentids": [
+                            {
+                                "documentid": "{A0F42A8A-0000-C618-BDFF-7564C99D44E1}"
+                            }
+                        ]
+                    },
+                    "request_timestamp": "25082023122955"
+                }
+            }
+        }
 
 
 {'payload_validator': {'SchemaValidator': {'schema': {'type': 'object', 'properties': {'clientData': {'type': 'object', 'properties': {'clientRefNumber': {'type': 'string'}, 'country': {'type': 'string'}, 'consumerid': {'type': 'string'}, 'swoosh_btask_id': {'type': 'string'}, 'ai_ops_agent': {'type': 'string'}}, 'required': ['clientRefNumber', 'country', 'consumerid', 'swoosh_btask_id', 'ai_ops_agent']}, 'requestData': {'type': 'object', 'properties': {'properties': {'type': 'object', 'properties': {'filenet_download_params': {'type': 'object', 'properties': {'documentids': {'type': 'array', 'items': {'type': 'object', 'properties': {'documentid': {'type': 'string'}, 'file_name': {'type': 'string'}}, 'required': ['documentid', 'file_name']}}}, 'required': ['documentids']}, 'request_timestamp': {'type': 'string', 'pattern': '^\\d{2}\\d{2}\\d{4}\\d{2}\\d{2}\\d{2}$'}}, 'required': ['filenet_download_params', 'request_timestamp']}}, 'required': ['properties']}}, 'required': ['clientData', 'requestData']}}}}
