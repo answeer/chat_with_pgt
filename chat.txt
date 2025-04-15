@@ -21,4 +21,90 @@
         }
 
 
-{'payload_validator': {'SchemaValidator': {'schema': {'type': 'object', 'properties': {'clientData': {'type': 'object', 'properties': {'clientRefNumber': {'type': 'string'}, 'country': {'type': 'string'}, 'consumerid': {'type': 'string'}, 'swoosh_btask_id': {'type': 'string'}, 'ai_ops_agent': {'type': 'string'}}, 'required': ['clientRefNumber', 'country', 'consumerid', 'swoosh_btask_id', 'ai_ops_agent']}, 'requestData': {'type': 'object', 'properties': {'properties': {'type': 'object', 'properties': {'filenet_download_params': {'type': 'object', 'properties': {'documentids': {'type': 'array', 'items': {'type': 'object', 'properties': {'documentid': {'type': 'string'}, 'file_name': {'type': 'string'}}, 'required': ['documentid', 'file_name']}}}, 'required': ['documentids']}, 'request_timestamp': {'type': 'string', 'pattern': '^\\d{2}\\d{2}\\d{4}\\d{2}\\d{2}\\d{2}$'}}, 'required': ['filenet_download_params', 'request_timestamp']}}, 'required': ['properties']}}, 'required': ['clientData', 'requestData']}}}}
+"payload_validator": {
+                    "SchemaValidator": {
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "clientData": {
+                                "type": "object",
+                                "properties": {
+                                    "clientRefNumber": {
+                                        "type": "string"
+                                    },
+                                    "country": {
+                                        "type": "string"
+                                    },
+                                    "consumerId": {
+                                        "type": "string"
+                                    },
+                                    "processId": {
+                                        "type": "string"
+                                    },
+                                    "stream_file": {
+                                        "type": "string"
+                                    }
+                                },
+                                "required": [
+                                    "clientRefNumber",
+                                    "country",
+                                    "consumerId",
+                                    "processId",
+                                    "stream_file"
+                                ],
+                                "additionalProperties": False
+                            },
+                            "requestData": {
+                                "type": "object",
+                                "properties": {
+                                    "properties": {
+                                        "type": "object",
+                                        "properties": {
+                                            "filenet_download_params": {
+                                                "type": "object",
+                                                "properties": {
+                                                    "documentids": {
+                                                        "type": "array",
+                                                        "items": {
+                                                            "type": "object",
+                                                            "properties": {
+                                                                "documentid": {
+                                                                    "type": "string"
+                                                                }
+                                                            },
+                                                            "required": [
+                                                                "documentid"
+                                                            ]
+                                                        }
+                                                    }
+                                                },
+                                                "required": [
+                                                    "documentids"
+                                                ],
+                                                "additionalProperties": False
+                                            },
+                                            "request_timestamp": {
+                                                "type": "string"
+                                            }
+                                        },
+                                        "required": [
+                                            "filenet_download_params",
+                                            "request_timestamp"
+                                        ],
+                                        "additionalProperties": False
+                                    }
+                                },
+                                "required": [
+                                    "properties"
+                                ],
+                                "additionalProperties": False
+                            }
+                        },
+                        "required": [
+                            "clientData",
+                            "requestData"
+                        ],
+                        "additionalProperties": False
+                    }
+                }
+                }
