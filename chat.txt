@@ -1,151 +1,95 @@
-def validate_schema_structure(data, schema):
+def validate_schema_structure(data: dict, schema: dict) -> tuple[bool, str]:
     """
-    预处理逻辑：
-    1. 检查data的所有key是否都存在于schema的required列表，不存在则添加
-    2. 检查这些key是否在schema的properties中有定义
+    Validate and auto-update schema structure based on input data.
+    
+    Ensures:
+    1. All keys in data exist in schema's required list (auto-add missing)
+    2. All data keys have corresponding property definitions in schema
+    
+    Args:
+        data: Input data structure to validate against schema
+        schema: Schema definition to validate/update (modified in-place)
+    
+    Returns:
+        tuple: (success_status, error_message)
+        - success_status: True if validation passes, False otherwise
+        - error_message: Description of validation failure (None if success)
+    
+    Raises:
+        ValueError: If schema structure is invalid for nested validation
     """
-    def check_node(data_node, schema_node, path=""):
-        # 处理对象类型
+    
+    def check_node(data_node: any, schema_node: dict, path: str = "") -> tuple[bool, str]:
+        """
+        Recursive validation for nested structures
+        
+        Args:
+            data_node: Current node in data structure
+            schema_node: Corresponding schema node definition
+            path: Dot-path notation for error tracking (e.g., 'parent.child')
+        
+        Returns:
+            tuple: (success_status, error_message)
+        """
+        # Handle object/dictionary nodes
         if isinstance(data_node, dict):
-            # 检查schema是否允许对象类型
+            # Validate schema node is configured for object type
             if schema_node.get("type") != "object":
-                return False, f"Path {path}: Expected object type in schema"
-
-            # 获取schema的required和properties
-            required = schema_node.get("required", [])
-            properties = schema_node.get("properties", {})
-
-            # 遍历data的所有key
+                return False, f"Path '{path}': Schema expects non-object type"
+            
+            # Get schema requirements and properties
+            required = schema_node.setdefault("required", [])
+            properties = schema_node.setdefault("properties", {})
+            
             for key, value in data_node.items():
+                # Build path notation for error reporting
                 current_path = f"{path}.{key}" if path else key
-
-                # 检查key是否在required列表中
+                
+                # Auto-add missing keys to required list
                 if key not in required:
-                    required.append(key)  # 自动添加缺失的required字段
-                    schema_node["required"] = required
-
-                # 检查key是否在properties中定义
+                    required.append(key)
+                
+                # Validate property definition exists
                 if key not in properties:
-                    return False, f"Key '{current_path}' not defined in schema properties"
-
-                # 递归检查子节点
-                success, msg = check_node(value, properties[key], current_path)
+                    return False, f"Undefined property '{current_path}' in schema"
+                
+                # Recursive check for nested properties
+                success, msg = check_node(
+                    value, 
+                    properties[key], 
+                    current_path
+                )
                 if not success:
                     return False, msg
-
+                
             return True, None
-
-        # 处理数组类型
+        
+        # Handle array/list nodes
         elif isinstance(data_node, list):
-            # 检查schema是否允许数组类型
+            # Validate schema node is configured for array type
             if schema_node.get("type") != "array":
-                return False, f"Path {path}: Expected array type in schema"
-
-            # 获取数组元素定义
+                return False, f"Path '{path}': Schema expects non-array type"
+            
+            # Verify array item definition exists
             items_schema = schema_node.get("items")
             if not items_schema:
-                return False, f"Path {path}: Missing array items definition"
-
-            # 递归检查每个元素
-            for i, item in enumerate(data_node):
-                success, msg = check_node(item, items_schema, f"{path}[{i}]")
+                return False, f"Path '{path}': Missing array item definition"
+            
+            # Validate all array elements
+            for idx, item in enumerate(data_node):
+                element_path = f"{path}[{idx}]"
+                success, msg = check_node(item, items_schema, element_path)
                 if not success:
                     return False, msg
+                
             return True, None
-
-        # 基本类型直接通过检查
+        
+        # Primitive types (string/number/boolean) require no further validation
         else:
             return True, None
-
-    # 从根节点开始检查
-    return check_node(data, schema)
-
-# 使用示例
-if __name__ == "__main__":
-    data = {
-        "clientData": {
-            "clientRefNumber": "2787875",
-            "country": "TH",
-            "consumerId": "CN00001",
-            "processId": "FM_Netting",
-            "stream_file": "stream_file"
-        },
-        "requestData": {
-            "properties": {
-                "filenet_download_params": {
-                    "documentids": [
-                        {
-                            "documentid": "{A0F42A8A-0000-C618-BDFF-7564C99D44E1}"
-                        }
-                    ]
-                },
-                "request_timestamp": "25082023122955"
-            }
-        }
-    }
-
-    execution_plan = {
-        "payload_validator": {
-            "SchemaValidator": {
-                "schema": {
-                    "type": "object",
-                    "properties": {
-                        "clientData": {
-                            "type": "object",
-                            "properties": {
-                                "clientRefNumber": {"type": "string"},
-                                "country": {"type": "string"},
-                                "consumerId": {"type": "string"},
-                                "processId": {"type": "string"},
-                                "stream_file": {"type": "string"}
-                            },
-                            "required": ["clientRefNumber", "country", "consumerId", "processId", "stream_file"]
-                        },
-                        "requestData": {
-                            "type": "object",
-                            "properties": {
-                                "properties": {
-                                    "type": "object",
-                                    "properties": {
-                                        "filenet_download_params": {
-                                            "type": "object",
-                                            "properties": {
-                                                "documentids": {
-                                                    "type": "array",
-                                                    "items": {
-                                                        "type": "object",
-                                                        "properties": {
-                                                            "documentid": {"type": "string"}
-                                                        },
-                                                        "required": ["documentid"]
-                                                    }
-                                                }
-                                            },
-                                            "required": ["documentids"]
-                                        },
-                                        "request_timestamp": {"type": "string"}
-                                    },
-                                    "required": ["filenet_download_params", "request_timestamp"]
-                                }
-                            },
-                            "required": ["properties"]
-                        }
-                    },
-                    "required": ["clientData", "requestData"]
-                }
-            }
-        }
-    }
-
-    # 提取schema结构
-    schema = execution_plan["payload_validator"]["SchemaValidator"]["schema"]
     
-    # 执行校验
-    success, message = validate_schema_structure(data, schema)
-    
-    if success:
-        print("Schema结构校验通过，更新后的schema：")
-        import json
-        print(json.dumps(schema, indent=2))
-    else:
-        print("校验失败:", message)
+    # --- Main validation execution ---
+    try:
+        return check_node(data, schema)
+    except Exception as e:
+        raise ValueError(f"Schema validation failed: {str(e)}") from e
