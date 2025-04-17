@@ -1,95 +1,345 @@
-def validate_schema_structure(data: dict, schema: dict) -> tuple[bool, str]:
-    """
-    Validate and auto-update schema structure based on input data.
-    
-    Ensures:
-    1. All keys in data exist in schema's required list (auto-add missing)
-    2. All data keys have corresponding property definitions in schema
-    
-    Args:
-        data: Input data structure to validate against schema
-        schema: Schema definition to validate/update (modified in-place)
-    
-    Returns:
-        tuple: (success_status, error_message)
-        - success_status: True if validation passes, False otherwise
-        - error_message: Description of validation failure (None if success)
-    
-    Raises:
-        ValueError: If schema structure is invalid for nested validation
-    """
-    
-    def check_node(data_node: any, schema_node: dict, path: str = "") -> tuple[bool, str]:
-        """
-        Recursive validation for nested structures
-        
-        Args:
-            data_node: Current node in data structure
-            schema_node: Corresponding schema node definition
-            path: Dot-path notation for error tracking (e.g., 'parent.child')
-        
-        Returns:
-            tuple: (success_status, error_message)
-        """
-        # Handle object/dictionary nodes
-        if isinstance(data_node, dict):
-            # Validate schema node is configured for object type
-            if schema_node.get("type") != "object":
-                return False, f"Path '{path}': Schema expects non-object type"
-            
-            # Get schema requirements and properties
-            required = schema_node.setdefault("required", [])
-            properties = schema_node.setdefault("properties", {})
-            
-            for key, value in data_node.items():
-                # Build path notation for error reporting
-                current_path = f"{path}.{key}" if path else key
-                
-                # Auto-add missing keys to required list
-                if key not in required:
-                    required.append(key)
-                
-                # Validate property definition exists
-                if key not in properties:
-                    return False, f"Undefined property '{current_path}' in schema"
-                
-                # Recursive check for nested properties
-                success, msg = check_node(
-                    value, 
-                    properties[key], 
-                    current_path
-                )
-                if not success:
-                    return False, msg
-                
-            return True, None
-        
-        # Handle array/list nodes
-        elif isinstance(data_node, list):
-            # Validate schema node is configured for array type
-            if schema_node.get("type") != "array":
-                return False, f"Path '{path}': Schema expects non-array type"
-            
-            # Verify array item definition exists
-            items_schema = schema_node.get("items")
-            if not items_schema:
-                return False, f"Path '{path}': Missing array item definition"
-            
-            # Validate all array elements
-            for idx, item in enumerate(data_node):
-                element_path = f"{path}[{idx}]"
-                success, msg = check_node(item, items_schema, element_path)
-                if not success:
-                    return False, msg
-                
-            return True, None
-        
-        # Primitive types (string/number/boolean) require no further validation
+import os
+import traceback
+import sys
+sys.path.append('.')
+from llm_sanitation.utils.callback import Callback
+from llm_sanitation.utils.checks import Checks
+from llm_sanitation.agent.utils.connectors import get_data
+from llm_sanitation.utils.error_codes import ERROR_CODE_DICT
+from llm_sanitation.standard_log.logging_setup import LogUtil, LogType, LogLevel
+
+
+class Action:
+    def __init__(
+        self,
+        **kwargs,
+    ):
+        LogUtil.log(LogType.TRANSACTION, LogLevel.INFO, "Running Initialized")
+        self.response = Callback(**kwargs)
+        self.check = Checks(self.response)
+        self.kwargs = kwargs
+        self.combined_result = []
+        self.nstp_result = []
+        self.failed_response = []
+        self.exec_plan_response_tmpl = {
+            "data": [],
+            "guardrails": [],
+        }
+
+    def check_data_type(self,data):
+        if self.kwargs['task_group'] == "file_bounding":
+            self.check.file_exists(data)
+        elif self.kwargs['task_group'] == "image_bounding":
+            self.check.file_exists(data)
+            self.check.check_image(data)
+        elif self.kwargs['task_group'] == "text_bounding":
+            self.check.check_text(data)
+        elif self.kwargs['task_group'] == "numeric_bounding":
+            self.check.check_numeric(data)
         else:
-            return True, None
-    
-    # --- Main validation execution ---
-    try:
-        return check_node(data, schema)
-    except Exception as e:
-        raise ValueError(f"Schema validation failed: {str(e)}") from e
+            error_code = "SWHIOSERR0006"
+            error_message = ERROR_CODE_DICT[error_code].format(str(self.kwargs['task_group']))
+            self.log_error(self.kwargs['job_id'],error_message=error_message)
+
+    def determine_task_group(self, exec_plan):
+        execution_plan = exec_plan['exec_plan']
+        task_group_key = execution_plan.keys()
+        task_group = next(iter(task_group_key))
+        return task_group
+
+    def run_scanner(self, data, scanner_nm, param, **kwargs):
+        """Dynamically imports and runs the specified scanner with provided parameters."""
+
+        scanners = __import__("llm_sanitation.scanners", fromlist=[scanner_nm])
+        scanner = getattr(scanners, scanner_nm)
+        scanner_obj = scanner(**param)
+        result = scanner_obj.validate(data, **self.kwargs)
+
+        self.nstp_result.append(result.get("NSTP"))
+
+        # collect error response
+        if result.get("NSTP"):
+            self.failed_response.append(str(result.get("response","")))
+
+        return result
+
+    def get_result(self):
+        """Returns all combined results from the scanners."""
+        return self.combined_result
+
+    def get_nstp_result(self):
+        """Returns NSTP results from each scanner."""
+        return self.nstp_result
+
+    def get_errorcode(self):
+        error_code = ""
+        error_message = ""
+
+        if any(self.get_nstp_result()):
+            err_code = "SWHIOSERR0040"
+            error_code = err_code
+            error_message = ERROR_CODE_DICT[err_code].format(self.failed_response)
+
+        return error_code, error_message
+
+    def run_action(self, request, save_path="."):
+        """Executes the scanning process based on the provided execution plan and scanner type."""
+
+        error_code = ""
+        error_message = ""
+        job_id = self.kwargs["job_id"]
+        execution_plans = request.get('service_params',{}).get('job_object',{}).get('plan',{})
+        payload = request.get('service_params',{}).get('job_object',{}).get('payload',{}) 
+
+        for exec_plan in execution_plans:
+            # Get the task group from the execution plan
+            self.kwargs['task_group'] = self.determine_task_group(exec_plan)
+
+            exec_plan_response = self.exec_plan_response_tmpl.copy()
+            execution_plan = exec_plan["exec_plan"]
+            data_paths = exec_plan["data"]
+
+            for data_path in data_paths:
+                data = get_data(data_path, payload)
+                # Run pre-check based on task group
+                for data in data:
+                    self.check_data_type(data)
+                    # Check if the data is valid
+                    if self.has_validation_failed():
+                        self.log_error(job_id, self.response.error_message)
+                        return None, self.response.error_code, self.response.error_message
+                    exec_plan_response["data"].append(data)
+                    exec_plan_response['guardrails'].append(self.process_scanners(data, execution_plan, job_id))
+
+            if self.response.status == "failed":
+                return None, self.response.error_code, self.response.error_message
+            self.combined_result.append(exec_plan_response)
+
+        # get error codes
+        error_code, error_message = self.get_errorcode()
+
+        # Save response
+        if save_path:
+            response_json_path = os.path.join(
+                save_path, job_id + "_response.json"
+            )
+            self.response.save_results(combined_result=self.combined_result)
+            self.response.return_response(
+                response_json_path, error_code, error_message
+            )
+
+        print(self.combined_result)
+        return self.combined_result, error_code, error_message
+
+    def process_scanners(self, data, execution_plan, job_id):
+
+        for _, plan in execution_plan.items():
+            results = []
+            for scanner_nm, param in plan.items():
+                result = self.run_scanner(data, scanner_nm, param, **self.kwargs)
+                results.append(result)
+                data = result["sanitized_data"] or data
+                if self.has_operation_failed():
+                    self.log_error(job_id, self.response.error_message)
+                    break
+        return results
+
+    def has_validation_failed(self):
+
+        return self.response.status == "failed"
+
+    def has_operation_failed(self):
+        return self.response.status == "failed"
+
+    def log_error(self, job_id, error_message):
+        LogUtil.log(
+            LogType.ERROR,
+            LogLevel.ERROR,
+            "Running ended with error",
+            jid=job_id,
+            error=error_message,
+        )
+
+if __name__ == "__main__":
+
+    request = {
+    "job_params": {
+        "jobid": "JID-5b5d1962-1687-11f0-846e-0a586e800c0c"
+    },
+    "service_params": {
+        "job_object": {
+            "callback_url": "http://service-swoosh-orchestrator.swoosh-dev.svc.cluster.local:8889/api/v1/callback",
+            "plan": [
+                {
+                    "data": [
+                        "$.file"
+                    ],
+                    "exec_plan": {
+                        "file_bounding": {
+                            "EncryptionDetector": {},
+                            "FormatCheck": {
+                                "format_list": [
+                                    "jpg",
+                                    "png",
+                                    "PNG",
+                                    "jpeg",
+                                    "tif",
+                                    "tiff",
+                                    "gif",
+                                    "bmp"
+                                ]
+                            },
+                            "SoftwareCheck": {
+                                "software_blacklist": [
+                                    "",
+                                    "Photoshop",
+                                    "Corel",
+                                    "PhotoScape",
+                                    "PhotoPlus",
+                                    "GIMP",
+                                    "Pixelmator",
+                                    "Illustrator",
+                                    "Windows Photo Editor",
+                                    "ilovepdf"
+                                ]
+                            }
+                        }
+                    }
+                },
+                {
+                    "data": [
+                        "$.file"
+                    ],
+                    "exec_plan": {
+                        "image_bounding": {
+                            "ImageDPICheck": {
+                                "x_dpi_thresh": 20,
+                                "y_dpi_thresh": 20,
+                                "save_folder": "save_folder"
+                            },
+                            "ImageBlurCheck": {
+                                "score_thresh": 0.3,
+                                "save_folder": "save_folder"
+                            },
+                            "ImageMemoryCheck": {
+                                "max_size": 4096,
+                                "min_size": 2048
+                            },
+                            "ImageDimCheck": {
+                                "img_dim_thresh": [
+                                    1024,
+                                    1024
+                                ]
+                            }
+                        }
+                    }
+                },
+                {
+                    "data": [
+                        "$.text"
+                    ],
+                    "exec_plan": {
+                        "text_bounding": {
+                            "ExecutableScript": {},
+                            "ProfanityCheck": {},
+                            "HarmfulString": {
+                                "case_sensitive": False
+                            },
+                            "TokenLimit": {
+                                "token_limit": 100,
+                                "token_method": "nltk"
+                            }
+                        }
+                    }
+                }
+            ],
+            "payload": {
+                "clientData": {
+                    "country": "IN",
+                    "consumerid": "1008",
+                    "input_channel": "historical",
+                    "appName": "RTOB_IN_AADHAR",
+                    "clientRefNumber": "IN20240131700010",
+                    "input_type": "doc_id",
+                    "tracking_id": "c1a29b8c-7d7b-44c6-a338-4f825f453515"
+                },
+                "requestData": {
+                    "properties": {
+                        "filenet_download_params": {
+                            "documentids": [
+                                {
+                                    "document_cat": "R0001",
+                                    "documentid": "{B0F22296-0000-C51E-B2E9-746363A00FA9}",
+                                    "document_type": "T0002"
+                                }
+                            ]
+                        },
+                        "osname_key": "RBOS_GDCE"
+                    }
+                },
+                "guardrails": {
+                    "input": {
+                        "data_policies": {
+                            "file": [
+                                {
+                                    "data": [
+                                        "$.file"
+                                    ],
+                                    "policies": [
+                                        "POLICY0002"
+                                    ]
+                                }
+                            ],
+                            "image": [
+                                {
+                                    "data": [
+                                        "$.file"
+                                    ],
+                                    "policies": [
+                                        "POLICY0003"
+                                    ]
+                                }
+                            ],
+                            "text": [
+                                {
+                                    "data": [
+                                        "$.data.text"
+                                    ],
+                                    "policies": []
+                                }
+                            ]
+                        }
+                    },
+                    "output": {
+                        "data_policies": {
+                            "file": [
+                                {
+                                    "data": [
+                                        ""
+                                    ],
+                                    "policies": []
+                                }
+                            ]
+                        }
+                    }
+                },
+                "file": [
+                    r"C:\Users\1657820\Desktop\test_imgs\006.jpg",
+                    r"C:\Users\1657820\Desktop\test_imgs\hkid.jpg",
+                ],
+                "text":["what are you doing"]
+            }
+        }
+    }
+}
+
+    kwargs = {
+        "job_id": "NA",
+        "task_id": "NA",
+        "use_case": "use_case",
+        "io": "io",
+        "policy_id": "policy_id",
+        "event": "event",
+    }
+    action_obj = Action(**kwargs)
+    action_obj.run_action(request)
