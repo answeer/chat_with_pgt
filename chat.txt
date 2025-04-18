@@ -1,11 +1,13 @@
 import os
 import traceback
+import copy
 import sys
 sys.path.append('.')
 from llm_sanitation.utils.callback import Callback
 from llm_sanitation.utils.checks import Checks
-from llm_sanitation.agent.utils.connectors import get_data
+from llm_sanitation.utils.connectors.connectors import get_data
 from llm_sanitation.utils.error_codes import ERROR_CODE_DICT
+from llm_sanitation.utils.exception import GuardrailsError
 from llm_sanitation.standard_log.logging_setup import LogUtil, LogType, LogLevel
 
 
@@ -26,7 +28,7 @@ class Action:
             "guardrails": [],
         }
 
-    def check_data_type(self,data):
+    def check_task_group(self,data):
         if self.kwargs['task_group'] == "file_bounding":
             self.check.file_exists(data)
         elif self.kwargs['task_group'] == "image_bounding":
@@ -37,9 +39,11 @@ class Action:
         elif self.kwargs['task_group'] == "numeric_bounding":
             self.check.check_numeric(data)
         else:
-            error_code = "SWHIOSERR0006"
-            error_message = ERROR_CODE_DICT[error_code].format(str(self.kwargs['task_group']))
-            self.log_error(self.kwargs['job_id'],error_message=error_message)
+            raise GuardrailsError("SWHIOSERR0006",str(self.kwargs['task_group']))
+        if self.response.status == "failed":
+            err_code = self.response.error_code
+            err_mesg = self.response.error_message
+            raise GuardrailsError(err_code,err_mesg)
 
     def determine_task_group(self, exec_plan):
         execution_plan = exec_plan['exec_plan']
@@ -84,54 +88,61 @@ class Action:
 
     def run_action(self, request, save_path="."):
         """Executes the scanning process based on the provided execution plan and scanner type."""
+        try:
+            error_code = ""
+            error_message = ""
+            job_id = self.kwargs["job_id"]
+            execution_plans = request.get('service_params',{}).get('job_object',{}).get('plan',{})
+            payload = request.get('service_params',{}).get('job_object',{}).get('payload',{}) 
 
-        error_code = ""
-        error_message = ""
-        job_id = self.kwargs["job_id"]
-        execution_plans = request.get('service_params',{}).get('job_object',{}).get('plan',{})
-        payload = request.get('service_params',{}).get('job_object',{}).get('payload',{}) 
+            for exec_plan in execution_plans:
+                # Get the task group from the execution plan
+                self.kwargs['task_group'] = self.determine_task_group(exec_plan)
 
-        for exec_plan in execution_plans:
-            # Get the task group from the execution plan
-            self.kwargs['task_group'] = self.determine_task_group(exec_plan)
+                exec_plan_response = copy.deepcopy(self.exec_plan_response_tmpl)
+                execution_plan = exec_plan["exec_plan"]
+                data_paths = exec_plan["data"]
 
-            exec_plan_response = self.exec_plan_response_tmpl.copy()
-            execution_plan = exec_plan["exec_plan"]
-            data_paths = exec_plan["data"]
+                for data_path in data_paths:
+                    data_items = get_data(data_path, payload)
+                    # Run pre-check based on task group
+                    for data in data_items:
+                        self.check_task_group(data)
+                        exec_plan_response["data"].append(data)
+                        exec_plan_response['guardrails'].append(self.process_scanners(data, execution_plan))
 
-            for data_path in data_paths:
-                data = get_data(data_path, payload)
-                # Run pre-check based on task group
-                for data in data:
-                    self.check_data_type(data)
-                    # Check if the data is valid
-                    if self.has_validation_failed():
-                        self.log_error(job_id, self.response.error_message)
-                        return None, self.response.error_code, self.response.error_message
-                    exec_plan_response["data"].append(data)
-                    exec_plan_response['guardrails'].append(self.process_scanners(data, execution_plan, job_id))
+                self.combined_result.append(exec_plan_response)
 
-            if self.response.status == "failed":
-                return None, self.response.error_code, self.response.error_message
-            self.combined_result.append(exec_plan_response)
+            # get error codes
+            error_code, error_message = self.get_errorcode()
 
-        # get error codes
-        error_code, error_message = self.get_errorcode()
+            return self.combined_result, error_code, error_message
 
-        # Save response
-        if save_path:
-            response_json_path = os.path.join(
-                save_path, job_id + "_response.json"
-            )
-            self.response.save_results(combined_result=self.combined_result)
-            self.response.return_response(
-                response_json_path, error_code, error_message
-            )
+        except GuardrailsError as e:
+            LogUtil.log(LogType.ERROR, LogLevel.ERROR, "", jid=job_id, error=str(e.message))
+            error_code = e.error_code
+            error_message = e.message
+            return None, error_code, error_message
+        
+        except Exception as e:
+            LogUtil.log(LogType.ERROR, LogLevel.ERROR,"", jid=job_id, error=str(e))
+            error_code = "SWHIOSERR9000"
+            error_message = ERROR_CODE_DICT[error_code].format(str(e))
+            return None, error_code, error_message
+        
+        finally:
+            # Save response
+            if save_path:
+                response_json_path = os.path.join(
+                    save_path, job_id + "_response.json"
+                )
+                self.response.save_results(combined_result=self.combined_result)
+                self.response.return_response(
+                    response_json_path, error_code, error_message
+                )
 
-        print(self.combined_result)
-        return self.combined_result, error_code, error_message
 
-    def process_scanners(self, data, execution_plan, job_id):
+    def process_scanners(self, data, execution_plan):
 
         for _, plan in execution_plan.items():
             results = []
@@ -139,26 +150,7 @@ class Action:
                 result = self.run_scanner(data, scanner_nm, param, **self.kwargs)
                 results.append(result)
                 data = result["sanitized_data"] or data
-                if self.has_operation_failed():
-                    self.log_error(job_id, self.response.error_message)
-                    break
         return results
-
-    def has_validation_failed(self):
-
-        return self.response.status == "failed"
-
-    def has_operation_failed(self):
-        return self.response.status == "failed"
-
-    def log_error(self, job_id, error_message):
-        LogUtil.log(
-            LogType.ERROR,
-            LogLevel.ERROR,
-            "Running ended with error",
-            jid=job_id,
-            error=error_message,
-        )
 
 if __name__ == "__main__":
 
@@ -177,7 +169,7 @@ if __name__ == "__main__":
                     "exec_plan": {
                         "file_bounding": {
                             "EncryptionDetector": {},
-                            "FormatCheck": {
+                            "Formatheck": {
                                 "format_list": [
                                     "jpg",
                                     "png",
