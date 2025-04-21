@@ -1,92 +1,72 @@
-from jsonpath_ng import parse
-    
-def get_data(data_path, payload):
-    data = payload
-    if data_path == "*":
-        return data
-    else:
-        jsonpath_expr = data_path
-    expr = parse(jsonpath_expr)
-    matches = [match.value for match in expr.find(data)]
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
+import os
+import json
+from llm_sanitation.utils.db_operations import DBoperation
+from llm_sanitation.standard_log.logging_setup import LogUtil, LogType, LogLevel
+from llm_sanitation.utils.time_keeper import WatchTime
 
-    return matches
+watch_obj = WatchTime()
 
+@dataclass
+class Scanner(ABC):
+    score_thresh = 1
+    scanner_nm = None
+    coll_response = []
 
-data_path = "$.file"
-payload = {
-                "clientData": {
-                    "country": "IN",
-                    "consumerid": "1008",
-                    "input_channel": "historical",
-                    "appName": "RTOB_IN_AADHAR",
-                    "clientRefNumber": "IN20240131700010",
-                    "input_type": "doc_id",
-                    "tracking_id": "c1a29b8c-7d7b-44c6-a338-4f825f453515"
-                },
-                "requestData": {
-                    "properties": {
-                        "filenet_download_params": {
-                            "documentids": [
-                                {
-                                    "document_cat": "R0001",
-                                    "documentid": "{B0F22296-0000-C51E-B2E9-746363A00FA9}",
-                                    "document_type": "T0002"
-                                }
-                            ]
-                        },
-                        "osname_key": "RBOS_GDCE"
-                    }
-                },
-                "guardrails": {
-                    "input": {
-                        "data_policies": {
-                            "file": [
-                                {
-                                    "data": [
-                                        "$.file"
-                                    ],
-                                    "policies": [
-                                        "POLICY0002"
-                                    ]
-                                }
-                            ],
-                            "image": [
-                                {
-                                    "data": [
-                                        "$.file"
-                                    ],
-                                    "policies": [
-                                        "POLICY0003"
-                                    ]
-                                }
-                            ],
-                            "text": [
-                                {
-                                    "data": [
-                                        "$.data.text"
-                                    ],
-                                    "policies": []
-                                }
-                            ]
-                        }
-                    },
-                    "output": {
-                        "data_policies": {
-                            "file": [
-                                {
-                                    "data": [
-                                        ""
-                                    ],
-                                    "policies": []
-                                }
-                            ]
-                        }
-                    }
-                },
-                "file": [
-                    r"C:\Users\1657820\Desktop\test_imgs\006.jpg",
-                    r"C:\Users\1657820\Desktop\test_imgs\hkid.jpg",
-                ],
-                "text":"what are you doing",
-                "numeric":12
-            }
+    def __init__(self, *args, **kwargs):
+        self._kwargs = kwargs
+        # Create response template
+        self.response_template()
+
+        scanner_nm, threshold = args
+        self.scanner_nm = scanner_nm
+        self.score_thresh = threshold
+        self.response["scanner_nm"] = self.scanner_nm
+
+    def response_template(self):
+        self.response = {
+        "scanner_nm" : None,
+        "sanitized_data" : None,
+        "response" : {},
+        "score" : None,
+        "NSTP" : None,
+    }
+
+    def collect_response(self):
+        self.coll_response.append(self.response)
+
+    def score(self):
+        if self.response["score"] is not None and self.response["score"] < self.score_thresh:
+            self.response["NSTP"] = True
+        else:
+            self.response["NSTP"] = False
+
+    def format_response(self):
+        raise NotImplementedError("Format Response Not implemented in the scanner")
+
+    def get_args(self):
+        return self._kwargs
+
+    def predict(self, data):
+        raise NotImplementedError("Predict function Not implemented in the scanner")
+
+    @watch_obj.time_function(function_name=scanner_nm)
+    def validate(self, data,**kwargs):
+        db_oprations = DBoperation(**kwargs)
+        LogUtil.log(LogType.TRANSACTION, LogLevel.INFO," Scanner execution started for {}".format(self.scanner_nm))
+        LogUtil.log(LogType.TRANSACTION, LogLevel.INFO," Running predction")
+        file_name = os.path.split(data)[-1] if kwargs['task_group'] in ('file_bounding', 'image_bounding') else ""
+        self.audit_id = db_oprations.audit_id(job_id=kwargs['job_id'],file_name=file_name,event=kwargs['event'],policy_id=kwargs['policy_id'],task_group=kwargs['task_group'],scanner_nm=self.scanner_nm)
+        
+        self.pred = self.predict(data)
+        
+        LogUtil.log(LogType.TRANSACTION, LogLevel.INFO," Running format response")
+        self.format_response()
+        LogUtil.log(LogType.TRANSACTION, LogLevel.INFO," Running score caculation")
+        self.score()
+        LogUtil.log(LogType.TRANSACTION, LogLevel.INFO," Collecting response")
+        self.collect_response()
+        LogUtil.log(LogType.TRANSACTION, LogLevel.INFO," Scanner execution completed for {}".format(self.scanner_nm))
+        db_oprations.update_audit_id(self.audit_id,result=json.dumps(self.response['response']),score=self.response['score'],NSTP=self.response['NSTP'])
+        return self.response
