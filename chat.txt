@@ -1,72 +1,8 @@
-from abc import ABC, abstractmethod
-from dataclasses import dataclass
-import os
-import json
-from llm_sanitation.utils.db_operations import DBoperation
-from llm_sanitation.standard_log.logging_setup import LogUtil, LogType, LogLevel
-from llm_sanitation.utils.time_keeper import WatchTime
+                    if not isinstance(data_items,list):
+                        data_items = [data_items]
 
-watch_obj = WatchTime()
-
-@dataclass
-class Scanner(ABC):
-    score_thresh = 1
-    scanner_nm = None
-    coll_response = []
-
-    def __init__(self, *args, **kwargs):
-        self._kwargs = kwargs
-        # Create response template
-        self.response_template()
-
-        scanner_nm, threshold = args
-        self.scanner_nm = scanner_nm
-        self.score_thresh = threshold
-        self.response["scanner_nm"] = self.scanner_nm
-
-    def response_template(self):
-        self.response = {
-        "scanner_nm" : None,
-        "sanitized_data" : None,
-        "response" : {},
-        "score" : None,
-        "NSTP" : None,
-    }
-
-    def collect_response(self):
-        self.coll_response.append(self.response)
-
-    def score(self):
-        if self.response["score"] is not None and self.response["score"] < self.score_thresh:
-            self.response["NSTP"] = True
-        else:
-            self.response["NSTP"] = False
-
-    def format_response(self):
-        raise NotImplementedError("Format Response Not implemented in the scanner")
-
-    def get_args(self):
-        return self._kwargs
-
-    def predict(self, data):
-        raise NotImplementedError("Predict function Not implemented in the scanner")
-
-    @watch_obj.time_function(function_name=scanner_nm)
-    def validate(self, data,**kwargs):
-        db_oprations = DBoperation(**kwargs)
-        LogUtil.log(LogType.TRANSACTION, LogLevel.INFO," Scanner execution started for {}".format(self.scanner_nm))
-        LogUtil.log(LogType.TRANSACTION, LogLevel.INFO," Running predction")
-        file_name = os.path.split(data)[-1] if kwargs['task_group'] in ('file_bounding', 'image_bounding') else ""
-        self.audit_id = db_oprations.audit_id(job_id=kwargs['job_id'],file_name=file_name,event=kwargs['event'],policy_id=kwargs['policy_id'],task_group=kwargs['task_group'],scanner_nm=self.scanner_nm)
-        
-        self.pred = self.predict(data)
-        
-        LogUtil.log(LogType.TRANSACTION, LogLevel.INFO," Running format response")
-        self.format_response()
-        LogUtil.log(LogType.TRANSACTION, LogLevel.INFO," Running score caculation")
-        self.score()
-        LogUtil.log(LogType.TRANSACTION, LogLevel.INFO," Collecting response")
-        self.collect_response()
-        LogUtil.log(LogType.TRANSACTION, LogLevel.INFO," Scanner execution completed for {}".format(self.scanner_nm))
-        db_oprations.update_audit_id(self.audit_id,result=json.dumps(self.response['response']),score=self.response['score'],NSTP=self.response['NSTP'])
-        return self.response
+                    for data in data_items:
+                        # Run pre-check based on task group
+                        self.check_task_group(data)
+                        exec_plan_response["data"].append(data)
+                        exec_plan_response['guardrails'].append(self.process_scanners(data, execution_plan))
