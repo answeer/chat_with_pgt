@@ -1,16 +1,29 @@
-    def process_scanners(self, data, execution_plan):
-        exec_plan = copy.deepcopy(execution_plan)
-        for _, plan in exec_plan.items():
-            results = []
-            if "EncryptionDetector" in plan:
-                result = self.run_scanner(data, "EncryptionDetector", plan["EncryptionDetector"], **self.kwargs)
-                results.append(result)
-                plan.pop("EncryptionDetector")
-                if result["response"]["is_protected"]:
-                    LogUtil.log(LogType.TRANSACTION, LogLevel.INFO, "File is encrypted, skipping further execute for scanners: {}.".format(", ".join(plan.keys())))
-                    return results
-            for scanner_nm, param in plan.items():
-                result = self.run_scanner(data, scanner_nm, param, **self.kwargs)
-                results.append(result)
-                data = result["sanitized_data"] or data
-        return results
+def process_scanners(self, data, execution_plan):
+    exec_plan = copy.deepcopy(execution_plan)
+    results = []
+
+    # 直接提取 EncryptionDetector 参数（无需处理分组）
+    encryption_param = exec_plan.get("EncryptionDetector")
+
+    # 如果存在 EncryptionDetector，优先运行它
+    if encryption_param:
+        result = self.run_scanner(data, "EncryptionDetector", encryption_param, **self.kwargs)
+        results.append(result)
+        # 检测到加密则直接返回
+        if result["response"]["is_protected"]:
+            LogUtil.log(
+                LogType.TRANSACTION, 
+                LogLevel.INFO, 
+                "File is encrypted, no further scanners to process."
+            )
+            return results
+        # 移除已处理的 EncryptionDetector
+        del exec_plan["EncryptionDetector"]
+
+    # 处理剩余扫描器（如果有的话）
+    for scanner_nm, param in exec_plan.items():
+        result = self.run_scanner(data, scanner_nm, param, **self.kwargs)
+        results.append(result)
+        data = result.get("sanitized_data", data)  # 使用 get 避免 KeyError
+
+    return results
