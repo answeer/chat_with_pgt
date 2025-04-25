@@ -1,8 +1,16 @@
-                    if not isinstance(data_items,list):
-                        data_items = [data_items]
-
-                    for data in data_items:
-                        # Run pre-check based on task group
-                        self.check_task_group(data)
-                        exec_plan_response["data"].append(data)
-                        exec_plan_response['guardrails'].append(self.process_scanners(data, execution_plan))
+    def process_scanners(self, data, execution_plan):
+        exec_plan = copy.deepcopy(execution_plan)
+        for _, plan in exec_plan.items():
+            results = []
+            if "EncryptionDetector" in plan:
+                result = self.run_scanner(data, "EncryptionDetector", plan["EncryptionDetector"], **self.kwargs)
+                results.append(result)
+                plan.pop("EncryptionDetector")
+                if result["response"]["is_protected"]:
+                    LogUtil.log(LogType.TRANSACTION, LogLevel.INFO, "File is encrypted, skipping further execute for scanners: {}.".format(", ".join(plan.keys())))
+                    return results
+            for scanner_nm, param in plan.items():
+                result = self.run_scanner(data, scanner_nm, param, **self.kwargs)
+                results.append(result)
+                data = result["sanitized_data"] or data
+        return results
