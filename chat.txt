@@ -1,29 +1,423 @@
-def process_scanners(self, data, execution_plan):
-    exec_plan = copy.deepcopy(execution_plan)
-    results = []
+import os
+import copy
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from guardrails.utils import checks
+from guardrails.utils.connectors.connectors import get_data
+from guardrails.utils.error_codes import ERROR_CODE_DICT
+from guardrails.utils.exception import GuardrailsError
+from guardrails.standard_log.logging_setup import LogUtil, LogType, LogLevel
+from guardrails.utils.time_keeper import WatchTime
+from pprint import pprint
+import json
 
-    # 直接提取 EncryptionDetector 参数（无需处理分组）
-    encryption_param = exec_plan.get("EncryptionDetector")
+watch_obj = WatchTime()
 
-    # 如果存在 EncryptionDetector，优先运行它
-    if encryption_param:
-        result = self.run_scanner(data, "EncryptionDetector", encryption_param, **self.kwargs)
-        results.append(result)
-        # 检测到加密则直接返回
-        if result["response"]["is_protected"]:
-            LogUtil.log(
-                LogType.TRANSACTION, 
-                LogLevel.INFO, 
-                "File is encrypted, no further scanners to process."
-            )
-            return results
-        # 移除已处理的 EncryptionDetector
-        del exec_plan["EncryptionDetector"]
+class Action:
+    def __init__(
+        self,
+        **kwargs,
+    ):
+        LogUtil.log(LogType.TRANSACTION, LogLevel.INFO, "Action Initialized")
+        self.kwargs = kwargs
+        self.async_mode = True
+        self.combined_result = []
+        self.nstp_result = []
+        self.failed_response = []
+        self.final_response = {
+            "error_code": "",
+            "error_messages": "",
+            "result":[]
+            }
+        self.exec_plan_response_tmpl = {
+            "data": [],
+            "guardrails": [],
+        }
 
-    # 处理剩余扫描器（如果有的话）
-    for scanner_nm, param in exec_plan.items():
-        result = self.run_scanner(data, scanner_nm, param, **self.kwargs)
-        results.append(result)
-        data = result.get("sanitized_data", data)  # 使用 get 避免 KeyError
+    def check_task_group(self,data):
+        if self.kwargs['task_group'] == "file_bounding":
+            checks.file_exists(data)
+        elif self.kwargs['task_group'] == "image_bounding":
+            checks.file_exists(data)
+            checks.check_image(data)
+        elif self.kwargs['task_group'] == "text_bounding":
+            checks.check_text(data)
+        elif self.kwargs['task_group'] == "numeric_bounding":
+            checks.check_numeric(data)
+        else:
+            raise GuardrailsError("SWHIOSERR0006",str(self.kwargs['task_group']))
 
-    return results
+    def determine_task_group(self, exec_plan):
+        execution_plan = exec_plan['exec_plan']
+        task_group_key = execution_plan.keys()
+        task_group = next(iter(task_group_key))
+        return task_group
+
+    def run_scanner(self, data, scanner_nm, param, **kwargs):
+        """Dynamically imports and runs the specified scanner with provided parameters."""
+
+        scanners = __import__("guardrails.scanners", fromlist=[scanner_nm])
+
+        if not hasattr(scanners, scanner_nm):
+            raise GuardrailsError("SWHIOSERR0041",scanner_nm)
+
+        scanner = getattr(scanners, scanner_nm)
+        scanner_obj = scanner(**param)
+        result = scanner_obj.validate(data, **self.kwargs)
+
+        if not isinstance(result, dict) or 'NSTP' not in result:
+            raise GuardrailsError("SWHIOSERR0042",scanner_nm)
+
+        self.nstp_result.append(result.get("NSTP"))
+
+        # collect error response
+        if result.get("NSTP"):
+            self.failed_response.append(str(result.get("response","")))
+
+        return result
+
+    def get_result(self):
+        """Returns all combined results from the scanners."""
+        return self.combined_result
+
+    def get_nstp_result(self):
+        """Returns NSTP results from each scanner."""
+        return self.nstp_result
+
+    def get_errorcode(self):
+        error_code = ""
+        error_message = ""
+
+        if any(self.get_nstp_result()):
+            err_code = "SWHIOSERR0040"
+            error_code = err_code
+            error_message = ERROR_CODE_DICT[err_code].format(self.failed_response)
+
+        return error_code, error_message
+
+    def run_action(self, request, save_path="."):
+        """Executes the scanning process based on the provided execution plan and scanner type."""
+        try:
+            LogUtil.log(LogType.TRANSACTION, LogLevel.INFO, "Running action started")
+            response = copy.deepcopy(self.final_response)
+            error_code = ""
+            error_message = ""
+            job_id = self.kwargs["job_id"]
+            execution_plans = request.get('service_params',{}).get('job_object',{}).get('plan',{})
+            payload = request.get('service_params',{}).get('job_object',{}).get('payload',{})
+
+            if execution_plans is None:
+                raise GuardrailsError("SWHIOSERR0044")
+            if payload is None:
+                raise GuardrailsError("SWHIOSERR0045")
+
+            for ix, exec_plan in enumerate(execution_plans):
+                LogUtil.log(LogType.TRANSACTION, LogLevel.INFO, "Stated Executing plan {}/{}".format(ix+1, len(execution_plans)))
+                # Get the task group from the execution plan
+                self.kwargs['task_group'] = self.determine_task_group(exec_plan)
+                LogUtil.log(LogType.TRANSACTION, LogLevel.INFO, "Running task {}".format(self.kwargs['task_group']))
+
+                exec_plan_response = copy.deepcopy(self.exec_plan_response_tmpl)
+                execution_plan = exec_plan["exec_plan"].get(self.kwargs['task_group'],{})
+                data_paths = exec_plan["data"]
+
+                for data_path in data_paths:
+
+                    data_items = get_data(data_path, payload)
+                    if not data_items:
+                        raise GuardrailsError("SWHIOSERR0043", data_path)
+
+                    if not isinstance(data_items,list):
+                        data_items = [data_items]
+
+                    for data in data_items:
+                        # Run pre-check based on task group
+                        self.check_task_group(data)
+                        exec_plan_response["data"].append(data)
+                        exec_plan_response['guardrails'].append(self.process_scanners(data, execution_plan))
+
+                self.combined_result.append(exec_plan_response)
+                LogUtil.log(LogType.TRANSACTION, LogLevel.INFO, "Completed Executing plan {}/{}".format(ix+1, len(execution_plans)))
+
+            # Write time logs
+            timelog_path = os.path.join(
+                    save_path, "time_log.json"
+                )
+            watch_obj.save_logs(timelog_path)
+            LogUtil.log(LogType.TRANSACTION, LogLevel.INFO, "Timelogs Saved in path : {}".format(timelog_path))
+
+            # Build final response
+            error_code, error_message = self.get_errorcode()
+            response["error_code"] = error_code
+            response["error_message"] = error_message
+            response["result"] = self.combined_result
+
+            # # Write error code and message to file
+            # with open(response_json_path, "w") as file:
+            #     json.dump(response, file, indent=4)
+            # LogUtil.log(LogType.TRANSACTION, LogLevel.INFO, "Response Saved in path : {}".format(response_json_path))
+
+            # Write the stp file
+            stp_path = os.path.join(
+                    save_path, ".stp"
+                )
+            with open(stp_path, "w") as file:
+                file.write("")
+            LogUtil.log(LogType.TRANSACTION, LogLevel.INFO, ".stp Saved in path : {}".format(stp_path))
+
+            LogUtil.log(LogType.TRANSACTION, LogLevel.INFO, "Running action completed")
+            return response, error_code, error_message
+
+        # Catch all Validation errors
+        except GuardrailsError as e:
+            LogUtil.log(LogType.ERROR, LogLevel.ERROR, "Guardrails custom exception encountered", jid=job_id, error=str(e.message))
+
+            error_code = e.error_code
+            error_message = e.message
+
+            response["error_code"] = error_code
+            response["error_message"] = error_message
+            response["result"] = {}
+            return None, error_code, error_message
+
+        # Catch all technical errors
+        except Exception as e:
+            LogUtil.log(LogType.ERROR, LogLevel.ERROR,"Technical error Occured", jid=job_id, error=str(e))
+
+            error_code = "SWHIOSERR9000"
+            error_message = ERROR_CODE_DICT[error_code].format(str(e))
+
+            response["error_code"] = error_code
+            response["error_message"] = error_message
+            response["result"] = {}
+            return None, error_code, error_message
+
+        finally:
+            # Write scanner response
+            response_json_path = os.path.join(
+                    save_path, "scanner_result.json"
+                )
+
+            # Write error code and message to file
+            with open(response_json_path, "w") as file:
+                json.dump(response, file, indent=4)
+            LogUtil.log(LogType.TRANSACTION, LogLevel.INFO, "Response Saved in path : {}".format(response_json_path))
+
+    def process_scanners(self, data, execution_plan):
+        exec_plan = copy.deepcopy(execution_plan)
+        results = []
+        # execute the EncryptionDetector first
+        if "EncryptionDetector" in exec_plan:
+            result = self.run_scanner(data, "EncryptionDetector", exec_plan['EncryptionDetector'], **self.kwargs)
+            results.append(result)
+            del exec_plan["EncryptionDetector"]
+            # check if the file is encrypted
+            if result["response"]["is_protected"]:
+                LogUtil.log(LogType.TRANSACTION, LogLevel.INFO, "File is encrypted, skipping the scanners:{}.".format(", ".join(exec_plan)))
+                return results
+            
+        # execute the remianing scanners
+        for scanner_nm, param in exec_plan.items():
+            result = self.run_scanner(data, scanner_nm, param, **self.kwargs)
+            results.append(result)
+        return results
+
+if __name__ == "__main__":
+
+    request = {
+    "job_params": {
+        "jobid": "JID-24e21cae-1e69-11f0-846e-0a586e800c0c"
+    },
+    "service_params": {
+        "job_object": {
+            "save_path": r"C:\Users\1657820\Desktop\51433-swoosh-io-bounding\save_paths",
+            "callback_url": "http://service-swoosh-orchestrator.swoosh-dev.svc.cluster.local:8889/api/v1/callback",
+            "properties": {
+                "process_id": "11233",
+                "event": "input",
+                "default_policy_id": "2024-12-12"
+            },
+            "plan": [
+                {
+                    "data": [
+                        "$.file"
+                    ],
+                    "exec_plan": {
+                        "file_bounding": {
+                            "EncryptionDetector":{},
+                            "FormatCheck": {
+                                "format_list": [
+                                    "jpg",
+                                    "png",
+                                    "PNG",
+                                    "jpeg",
+                                    "tif",
+                                    "tiff",
+                                    "gif",
+                                    "bmp"
+                                ]
+                            },
+                            "SoftwareCheck": {
+                                "software_blacklist": [
+                                    "",
+                                    "Photoshop",
+                                    "Corel",
+                                    "PhotoScape",
+                                    "PhotoPlus",
+                                    "GIMP",
+                                    "Pixelmator",
+                                    "Illustrator",
+                                    "Windows Photo Editor",
+                                    "ilovepdf"
+                                ]
+                            }
+                        }
+                    }
+                },
+                {
+                    "data": [
+                        "$.image"
+                    ],
+                    "exec_plan": {
+                        "image_bounding": {
+                            "ImageDPICheck": {
+                                "x_dpi_thresh": 20,
+                                "y_dpi_thresh": 20,
+                                "save_folder": "save_folder"
+                            },
+                            "ImageBlurCheck": {
+                                "score_thresh": 0.3,
+                                "save_folder": "save_folder"
+                            },
+                            "ImageMemoryCheck": {
+                                "max_size": 4096,
+                                "min_size": 2048
+                            },
+                            "ImageDimCheck": {
+                                "img_dim_thresh": [
+                                    1024,
+                                    1024
+                                ]
+                            }
+                        }
+                    }
+                },
+                {
+                    "data": [
+                        "$.text"
+                    ],
+                    "exec_plan": {
+                        "text_bounding": {
+                            "ExecutableScript": {},
+                            "ProfanityCheck": {},
+                            "HarmfulString": {
+                                "case_sensitive": False
+                            },
+                            "TokenLimit": {
+                                "token_limit": 100,
+                                "token_method": "nltk"
+                            },
+                            "PiiDetector":{}
+                        }
+                    }
+                },
+                {
+                    "data": [
+                        "$.numeric"
+                    ],
+                    "exec_plan": {
+                        "numeric_bounding": {
+                            "BinTransform": {"catagories":[{"name": "high", "range": [70, 100]},{"name": "medium", "range": [40, 60]},{"name": "low", "range": [0, 39]}],
+                                    "default":"undefined"}
+                        }
+                    }
+                }
+            ],
+            "payload": {
+                "clientData": {
+                    "country": "IN",
+                    "consumerid": "1008",
+                    "input_channel": "historical",
+                    "appName": "RTOB_IN_AADHAR",
+                    "clientRefNumber": "IN20240131700010",
+                    "input_type": "doc_id",
+                    "tracking_id": "c1a29b8c-7d7b-44c6-a338-4f825f453515"
+                },
+                "requestData": {
+                    "properties": {
+                        "filenet_download_params": {
+                            "documentids": [
+                                {
+                                    "document_cat": "R0001",
+                                    "documentid": "{B0F22296-0000-C51E-B2E9-746363A00FA9}",
+                                    "document_type": "T0002"
+                                }
+                            ]
+                        },
+                        "osname_key": "RBOS_GDCE"
+                    }
+                },
+                "guardrails": {
+                    "input": {
+                        "data_policies": {
+                            "file": [
+                                {
+                                    "data": [
+                                        "$.file"
+                                    ],
+                                    "policies": [
+                                        "POLICY0002"
+                                    ]
+                                }
+                            ],
+                            "image": [
+                                {
+                                    "data": [
+                                        "$.file"
+                                    ],
+                                    "policies": [
+                                        "POLICY0003"
+                                    ]
+                                }
+                            ],
+                            "text": [
+                                {
+                                    "data": [
+                                        "$.data.text"
+                                    ],
+                                    "policies": []
+                                }
+                            ]
+                        }
+                    }
+                },
+                "file": [
+                    r"C:\Users\1657820\Desktop\51433-swoosh-io-bounding\guardrails\scanners\file_bounding\file_format_check\tests\file_format_test.jpg",
+                    r"C:\Users\1657820\Desktop\51433-swoosh-io-bounding\guardrails\scanners\file_bounding\encryption_detector\test_files\protected.pdf",
+                ],
+                 "image":[
+                      r"C:\Users\1657820\Desktop\51433-swoosh-io-bounding\guardrails\scanners\image_bounding\image_dpi_check\tests\dpi_check_test.jpg" ],
+                "text": "Addhaar card number: 679884387235",
+                "numeric": 12
+            }
+        }
+    }
+}
+
+    job_id = request.get("job_params").get("jobid")
+    use_case = request.get('service_params').get('job_object').get('properties').get('process_id')
+    event = request.get('service_params').get('job_object').get('properties').get('event')
+    policy_id = request.get('service_params').get('job_object').get('properties').get('default_policy_id')
+
+    kwargs = {
+        "job_id": job_id,
+        "use_case": use_case,
+        "policy_id": policy_id,
+        "event": event,
+        "db_insert":True
+    }
+    action_obj = Action(**kwargs)
+    result, err_code, err_message = action_obj.run_action(request)
+
+    pprint(result)
+    pprint(err_code)
+    pprint(err_message)
