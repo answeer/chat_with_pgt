@@ -1,240 +1,130 @@
-import os
-import copy
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from guardrails.utils import checks
-from guardrails.utils.connectors.connectors import get_data
-from guardrails.utils.error_codes import ERROR_CODE_DICT
-from guardrails.utils.exception import GuardrailsError
-from guardrails.standard_log.logging_setup import LogUtil, LogType, LogLevel
-from guardrails.utils.time_keeper import WatchTime
-from pprint import pprint
-import json
-import threading
-
-watch_obj = WatchTime()
-
-class Action:
-    def __init__(
-        self,
-        **kwargs,
-    ):
-        LogUtil.log(LogType.TRANSACTION, LogLevel.INFO, "Action Initialized")
-        self.kwargs = kwargs
-        self.async_mode = True
-        self.combined_result = []
-        self.nstp_result = []
-        self.failed_response = []
-        self.final_response = {
-            "error_code": "",
-            "error_messages": "",
-            "result":[]
-            }
-        self.exec_plan_response_tmpl = {
-            "data": [],
-            "guardrails": [],
-        }
-        # 线程安全锁
-        self.result_lock = threading.Lock()
-        self.nstp_lock = threading.Lock()
-        self.failed_lock = threading.Lock()
-
-    def check_task_group(self, data):
-        if self.kwargs['task_group'] == "file_bounding":
-            checks.file_exists(data)
-        elif self.kwargs['task_group'] == "image_bounding":
-            checks.file_exists(data)
-            checks.check_image(data)
-        elif self.kwargs['task_group'] == "text_bounding":
-            checks.check_text(data)
-        elif self.kwargs['task_group'] == "numeric_bounding":
-            checks.check_numeric(data)
-        else:
-            raise GuardrailsError("SWHIOSERR0006", str(self.kwargs['task_group']))
-
-    def determine_task_group(self, exec_plan):
-        execution_plan = exec_plan['exec_plan']
-        task_group_key = execution_plan.keys()
-        task_group = next(iter(task_group_key))
-        return task_group
-
-    def run_scanner(self, data, scanner_nm, param, **kwargs):
-        """运行单个扫描器"""
-        scanners = __import__("guardrails.scanners", fromlist=[scanner_nm])
-        if not hasattr(scanners, scanner_nm):
-            raise GuardrailsError("SWHIOSERR0041", scanner_nm)
-        scanner = getattr(scanners, scanner_nm)
-        scanner_obj = scanner(**param)
-        result = scanner_obj.validate(data, **self.kwargs)
-        if not isinstance(result, dict) or 'NSTP' not in result:
-            raise GuardrailsError("SWHIOSERR0042", scanner_nm)
-        
-        # 线程安全地更新结果
-        with self.nstp_lock:
-            self.nstp_result.append(result.get("NSTP"))
-        
-        if result.get("NSTP"):
-            with self.failed_lock:
-                self.failed_response.append(str(result.get("response", "")))
-        
-        return result
-
-    def process_data_item(self, data, execution_plan, exec_plan_response):
-        """处理单个数据项"""
-        self.check_task_group(data)
-        
-        # 创建数据项特定的响应结构
-        data_response = {
-            "data": data,
-            "guardrails": []
-        }
-        
-        # 先执行EncryptionDetector
-        if "EncryptionDetector" in execution_plan:
-            result = self.run_scanner(data, "EncryptionDetector", execution_plan['EncryptionDetector'], **self.kwargs)
-            data_response["guardrails"].append(result)
-            if result["response"]["is_protected"]:
-                LogUtil.log(LogType.TRANSACTION, LogLevel.INFO, 
-                           f"File is encrypted, skipping other scanners")
-                return data_response
-        
-        # 并行执行其他扫描器
-        scanners_to_run = {k: v for k, v in execution_plan.items() if k != "EncryptionDetector"}
-        with ThreadPoolExecutor() as executor:
-            futures = {
-                executor.submit(self.run_scanner, data, scanner_nm, param): scanner_nm
-                for scanner_nm, param in scanners_to_run.items()
-            }
-            for future in as_completed(futures):
-                try:
-                    result = future.result()
-                    data_response["guardrails"].append(result)
-                except Exception as e:
-                    LogUtil.log(LogType.ERROR, LogLevel.ERROR, 
-                               f"Scanner {futures[future]} failed: {str(e)}")
-        
-        return data_response
-
-    def process_exec_plan(self, exec_plan, payload):
-        """处理单个执行计划"""
-        self.kwargs['task_group'] = self.determine_task_group(exec_plan)
-        LogUtil.log(LogType.TRANSACTION, LogLevel.INFO, 
-                   f"Running task {self.kwargs['task_group']}")
-        
-        exec_plan_response = copy.deepcopy(self.exec_plan_response_tmpl)
-        execution_plan = exec_plan["exec_plan"].get(self.kwargs['task_group'], {})
+def process_exec_plan(self, exec_plan, payload):
+    """处理单个执行计划（修复数据隔离问题）"""
+    try:
+        # 解析执行计划参数（使用局部变量存储）
+        task_group = self.determine_task_group(exec_plan)
+        execution_plan = exec_plan["exec_plan"][task_group]
         data_paths = exec_plan["data"]
         
+        LogUtil.log(LogType.TRANSACTION, LogLevel.INFO, 
+                  f"Processing task group: {task_group}")
+
+        # 创建独立的响应对象
+        exec_plan_response = {
+            "task_group": task_group,
+            "data": [],
+            "guardrails": []
+        }
+
+        # 处理所有数据路径
         for data_path in data_paths:
+            # 获取当前执行计划的数据
             data_items = get_data(data_path, payload)
             if not data_items:
                 raise GuardrailsError("SWHIOSERR0043", data_path)
             if not isinstance(data_items, list):
                 data_items = [data_items]
-            
-            # 并行处理每个数据项
-            with ThreadPoolExecutor() as executor:
-                futures = [
-                    executor.submit(self.process_data_item, data, execution_plan, exec_plan_response)
-                    for data in data_items
-                ]
+
+            # 并行处理当前执行计划的数据项
+            with ThreadPoolExecutor(max_workers=4) as executor:
+                futures = []
+                for data in data_items:
+                    # 传递当前执行计划的上下文参数
+                    future = executor.submit(
+                        self.process_data_item, 
+                        data=data,
+                        execution_plan=execution_plan,
+                        task_group=task_group  # 显式传递任务组
+                    )
+                    futures.append(future)
+
+                # 收集结果
                 for future in as_completed(futures):
                     try:
-                        data_response = future.result()
+                        data_item_result = future.result()
                         with self.result_lock:
-                            exec_plan_response["data"].append(data_response["data"])
-                            exec_plan_response["guardrails"].append(data_response["guardrails"])
+                            exec_plan_response["data"].append(data_item_result["data"])
+                            exec_plan_response["guardrails"].extend(data_item_result["guardrails"])
                     except Exception as e:
                         LogUtil.log(LogType.ERROR, LogLevel.ERROR,
-                                   f"Failed to process data item: {str(e)}")
-        
+                                  f"Data processing failed: {str(e)}")
+
         return exec_plan_response
 
-    def run_action(self, request, save_path="."):
-        """主执行方法"""
-        try:
-            LogUtil.log(LogType.TRANSACTION, LogLevel.INFO, "Running action started")
-            response = copy.deepcopy(self.final_response)
-            job_id = self.kwargs["job_id"]
-            execution_plans = request.get('service_params', {}).get('job_object', {}).get('plan', {})
-            payload = request.get('service_params', {}).get('job_object', {}).get('payload', {})
-            
-            if execution_plans is None:
-                raise GuardrailsError("SWHIOSERR0044")
-            if payload is None:
-                raise GuardrailsError("SWHIOSERR0045")
-            
-            # 并行执行各个执行计划
-            with ThreadPoolExecutor() as executor:
-                futures = {
-                    executor.submit(self.process_exec_plan, exec_plan, payload): ix
-                    for ix, exec_plan in enumerate(execution_plans)
-                }
-                
-                for future in as_completed(futures):
-                    ix = futures[future]
-                    try:
-                        exec_plan_response = future.result()
-                        with self.result_lock:
-                            self.combined_result.append(exec_plan_response)
-                        LogUtil.log(LogType.TRANSACTION, LogLevel.INFO,
-                                   f"Completed Executing plan {ix+1}/{len(execution_plans)}")
-                    except Exception as e:
-                        LogUtil.log(LogType.ERROR, LogLevel.ERROR,
-                                   f"Failed to execute plan {ix+1}: {str(e)}")
-            
-            # 保存时间日志
-            timelog_path = os.path.join(save_path, "time_log.json")
-            watch_obj.save_logs(timelog_path)
-            LogUtil.log(LogType.TRANSACTION, LogLevel.INFO, 
-                       f"Timelogs Saved in path: {timelog_path}")
-            
-            # 构建最终响应
-            error_code, error_message = self.get_errorcode()
-            response["error_code"] = error_code
-            response["error_messages"] = error_message
-            response["result"] = self.combined_result
-            
-            # 保存.stp文件
-            stp_path = os.path.join(save_path, ".stp")
-            with open(stp_path, "w") as file:
-                file.write("")
-            LogUtil.log(LogType.TRANSACTION, LogLevel.INFO,
-                       f".stp Saved in path: {stp_path}")
-            
-            LogUtil.log(LogType.TRANSACTION, LogLevel.INFO, "Running action completed")
-            return response, error_code, error_message
-        
-        except GuardrailsError as e:
-            LogUtil.log(LogType.ERROR, LogLevel.ERROR,
-                       "Guardrails custom exception encountered", jid=job_id, error=str(e.message))
-            response["error_code"] = e.error_code
-            response["error_messages"] = e.message
-            response["result"] = []
-            return None, e.error_code, e.message
-        
-        except Exception as e:
-            LogUtil.log(LogType.ERROR, LogLevel.ERROR,
-                       "Technical error Occurred", jid=job_id, error=str(e))
-            error_code = "SWHIOSERR9000"
-            error_message = ERROR_CODE_DICT[error_code].format(str(e))
-            response["error_code"] = error_code
-            response["error_messages"] = error_message
-            response["result"] = []
-            return None, error_code, error_message
-        
-        finally:
-            response_json_path = os.path.join(save_path, "scanner_result.json")
-            with open(response_json_path, "w") as file:
-                json.dump(response, file, indent=4)
-            LogUtil.log(LogType.TRANSACTION, LogLevel.INFO,
-                       f"Response Saved in path: {response_json_path}")
+    except Exception as e:
+        LogUtil.log(LogType.ERROR, LogLevel.ERROR,
+                  f"Failed to process execution plan: {str(e)}")
+        raise
 
-    def get_errorcode(self):
-        """获取错误码和错误信息"""
-        error_code = ""
-        error_message = ""
-        if any(self.nstp_result):
-            err_code = "SWHIOSERR0040"
-            error_code = err_code
-            error_message = ERROR_CODE_DICT[err_code].format(", ".join(self.failed_response))
-        return error_code, error_message
+def process_data_item(self, data, execution_plan, task_group):
+    """处理单个数据项（修复上下文传递问题）"""
+    try:
+        # 使用显式传递的task_group进行检查
+        self.check_task_group(data, task_group)
+        
+        data_response = {
+            "data": data,
+            "guardrails": [],
+            "task_group": task_group  # 记录数据所属的任务组
+        }
+
+        # 强制先执行EncryptionDetector
+        if "EncryptionDetector" in execution_plan:
+            result = self.run_scanner(
+                data=data,
+                scanner_nm="EncryptionDetector",
+                param=execution_plan["EncryptionDetector"],
+                task_group=task_group  # 传递当前上下文
+            )
+            data_response["guardrails"].append(result)
+            if result.get("response", {}).get("is_protected", False):
+                LogUtil.log(LogType.TRANSACTION, LogLevel.INFO,
+                          f"[{task_group}] Encrypted file detected, skipping other scanners")
+                return data_response
+
+        # 并行执行其他扫描器（保持任务组上下文）
+        scanners = [s for s in execution_plan.keys() if s != "EncryptionDetector"]
+        with ThreadPoolExecutor(max_workers=4) as scanner_executor:
+            scanner_futures = {}
+            for scanner_nm in scanners:
+                future = scanner_executor.submit(
+                    self.run_scanner,
+                    data=data,
+                    scanner_nm=scanner_nm,
+                    param=execution_plan[scanner_nm],
+                    task_group=task_group  # 传递当前上下文
+                )
+                scanner_futures[future] = scanner_nm
+
+            # 收集扫描结果
+            for future in as_completed(scanner_futures):
+                try:
+                    result = future.result()
+                    data_response["guardrails"].append(result)
+                except Exception as e:
+                    LogUtil.log(LogType.ERROR, LogLevel.ERROR,
+                              f"[{task_group}] Scanner {scanner_futures[future]} failed: {str(e)}")
+
+        return data_response
+
+    except Exception as e:
+        LogUtil.log(LogType.ERROR, LogLevel.ERROR,
+                  f"[{task_group}] Data item processing failed: {str(e)}")
+        raise
+
+def run_scanner(self, data, scanner_nm, param, task_group=None):
+    """运行扫描器（增加上下文跟踪）"""
+    try:
+        # 记录扫描器上下文
+        LogUtil.log(LogType.TRANSACTION, LogLevel.DEBUG,
+                  f"[{task_group}] Running {scanner_nm} on {data[:20]}...")
+        
+        # 原有扫描逻辑不变...
+        # 添加task_group到日志上下文
+        
+        return result
+
+    except Exception as e:
+        LogUtil.log(LogType.ERROR, LogLevel.ERROR,
+                  f"[{task_group}] Scanner {scanner_nm} error: {str(e)}")
+        raise
