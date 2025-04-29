@@ -1,8 +1,56 @@
-002_file_bounding_policy
-003_image_bounding_policy
-000_default_input_schema_validation
-000_default_output_schema_validation
-004_numeric_bounding_policy
-001_free_text_bounding_policy
+import os
 
-999_usecase
+# 定义映射规则（优先级：前缀 > 关键词）
+# 1. 前缀编号到文件夹的映射
+PREFIX_TO_FOLDER = {
+    "000": "json",
+    "001": "text",
+    "002": "file",
+    "003": "image",
+    "004": "numeric"
+}
+
+# 2. 关键词到文件夹的映射（如文件名包含关键词则匹配）
+KEYWORD_TO_FOLDER = {
+    "usecase": "usecase_rules",  # 文件名含 "usecase" 则映射到 usecase_rules
+    "schema": "json"             # 示例：关键词可覆盖其他规则
+}
+
+# 父目录路径（根据实际情况修改）
+BASE_DIR = "/path/to/parent/folder"
+
+def get_file_path(filename):
+    """
+    根据文件名返回正确路径，支持前缀编号和关键词双重匹配
+    """
+    # 规则1：检查前缀编号
+    prefix = filename.split('_')[0]
+    if prefix in PREFIX_TO_FOLDER:
+        folder = PREFIX_TO_FOLDER[prefix]
+        return os.path.join(BASE_DIR, folder, filename)
+    
+    # 规则2：检查关键词
+    for keyword, folder in KEYWORD_TO_FOLDER.items():
+        if keyword in filename.lower():  # 不区分大小写匹配
+            return os.path.join(BASE_DIR, folder, filename)
+    
+    # 未匹配时的处理（可选：返回默认路径或抛出异常）
+    # return os.path.join(BASE_DIR, "default_folder", filename)  # 默认文件夹
+    raise ValueError(f"无法确定文件 '{filename}' 的路径：无匹配规则")
+
+# 示例测试
+if __name__ == "__main__":
+    test_files = [
+        "000_default_input_schema_validation.json",  # 前缀000 → json
+        "001_free_text_bounding_policy.txt",         # 前缀001 → text
+        "usecase_scenario.yaml",                     # 含 "usecase" → usecase_rules
+        "004_data_report.csv",                       # 前缀004 → numeric
+        "unknown_file.txt"                           # 无匹配 → 报错
+    ]
+    
+    for file in test_files:
+        try:
+            path = get_file_path(file)
+            print(f"文件 '{file}' 的路径为: {path}")
+        except ValueError as e:
+            print(f"错误处理文件 '{file}': {e}")
