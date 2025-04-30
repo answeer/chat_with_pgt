@@ -1,56 +1,222 @@
 import os
+import copy
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from guardrails.utils import checks
+from guardrails.utils.connectors.connectors import get_data
+from guardrails.utils.error_codes import ERROR_CODE_DICT
+from guardrails.utils.exception import GuardrailsError
+from guardrails.standard_log.logging_setup import LogUtil, LogType, LogLevel
+from guardrails.utils.time_keeper import WatchTime
+from pprint import pprint
+import json
 
-# 定义映射规则（优先级：前缀 > 关键词）
-# 1. 前缀编号到文件夹的映射
-PREFIX_TO_FOLDER = {
-    "000": "json",
-    "001": "text",
-    "002": "file",
-    "003": "image",
-    "004": "numeric"
-}
+watch_obj = WatchTime()
 
-# 2. 关键词到文件夹的映射（如文件名包含关键词则匹配）
-KEYWORD_TO_FOLDER = {
-    "usecase": "usecase_rules",  # 文件名含 "usecase" 则映射到 usecase_rules
-    "schema": "json"             # 示例：关键词可覆盖其他规则
-}
+# 线程本地存储（解决上下文传递问题）
+thread_local = threading.local()
 
-# 父目录路径（根据实际情况修改）
-BASE_DIR = "/path/to/parent/folder"
+class Action:
+    def __init__(self, **kwargs):
+        LogUtil.log(LogType.TRANSACTION, LogLevel.INFO, "Action Initialized")
+        self.kwargs = kwargs
+        self.combined_result = []
+        self.nstp_result = []
+        self.failed_response = []
+        self.final_response = {
+            "error_code": "",
+            "error_messages": "",
+            "result": []
+        }
+        # 线程安全锁
+        self.result_lock = threading.Lock()
+        self.nstp_lock = threading.Lock()
+        self.failed_lock = threading.Lock()
 
-def get_file_path(filename):
-    """
-    根据文件名返回正确路径，支持前缀编号和关键词双重匹配
-    """
-    # 规则1：检查前缀编号
-    prefix = filename.split('_')[0]
-    if prefix in PREFIX_TO_FOLDER:
-        folder = PREFIX_TO_FOLDER[prefix]
-        return os.path.join(BASE_DIR, folder, filename)
-    
-    # 规则2：检查关键词
-    for keyword, folder in KEYWORD_TO_FOLDER.items():
-        if keyword in filename.lower():  # 不区分大小写匹配
-            return os.path.join(BASE_DIR, folder, filename)
-    
-    # 未匹配时的处理（可选：返回默认路径或抛出异常）
-    # return os.path.join(BASE_DIR, "default_folder", filename)  # 默认文件夹
-    raise ValueError(f"无法确定文件 '{filename}' 的路径：无匹配规则")
+    # ----------------- 核心修复点 -----------------
+    def _get_thread_context(self):
+        """获取线程本地上下文"""
+        if not hasattr(thread_local, 'context_stack'):
+            thread_local.context_stack = []
+        return thread_local.context_stack
 
-# 示例测试
-if __name__ == "__main__":
-    test_files = [
-        "000_default_input_schema_validation.json",  # 前缀000 → json
-        "001_free_text_bounding_policy.txt",         # 前缀001 → text
-        "usecase_scenario.yaml",                     # 含 "usecase" → usecase_rules
-        "004_data_report.csv",                       # 前缀004 → numeric
-        "unknown_file.txt"                           # 无匹配 → 报错
-    ]
-    
-    for file in test_files:
+    def _push_context(self, task_group):
+        """压入执行上下文"""
+        context = {
+            'task_group': task_group,
+            'exec_plan': None
+        }
+        self._get_thread_context().append(context)
+
+    def _pop_context(self):
+        """弹出执行上下文"""
+        if self._get_thread_context():
+            self._get_thread_context().pop()
+
+    def _current_context(self):
+        """获取当前上下文"""
+        if self._get_thread_context():
+            return self._get_thread_context()[-1]
+        return None
+    # -------------------------------------------
+
+    def check_task_group(self, data, expected_task_group):
+        """带上下文验证的任务检查"""
+        current_ctx = self._current_context()
+        if not current_ctx or current_ctx['task_group'] != expected_task_group:
+            raise GuardrailsError("SWHIOSERR0051", 
+                                f"上下文不一致: {current_ctx} vs {expected_task_group}")
+
+        # 原有检查逻辑
+        if expected_task_group == "file_bounding":
+            checks.file_exists(data)
+        elif expected_task_group == "image_bounding":
+            checks.file_exists(data)
+            checks.check_image(data)
+        elif expected_task_group == "text_bounding":
+            checks.check_text(data)
+        elif expected_task_group == "numeric_bounding":
+            checks.check_numeric(data)
+        else:
+            raise GuardrailsError("SWHIOSERR0006", str(expected_task_group))
+
+    def process_exec_plan(self, exec_plan, payload):
+        """处理执行计划（完全隔离版本）"""
         try:
-            path = get_file_path(file)
-            print(f"文件 '{file}' 的路径为: {path}")
-        except ValueError as e:
-            print(f"错误处理文件 '{file}': {e}")
+            # 解析执行计划参数（局部变量存储）
+            task_group = self.determine_task_group(exec_plan)
+            execution_plan = exec_plan["exec_plan"][task_group]
+            data_paths = exec_plan["data"]
+
+            # 压入线程上下文
+            self._push_context(task_group)
+
+            exec_plan_response = {
+                "task_group": task_group,
+                "data": [],
+                "guardrails": []
+            }
+
+            # 处理数据路径
+            for data_path in data_paths:
+                data_items = get_data(data_path, payload)
+                if not data_items:
+                    raise GuardrailsError("SWHIOSERR0043", data_path)
+                if not isinstance(data_items, list):
+                    data_items = [data_items]
+
+                # 并行处理数据项（带上下文传递）
+                with ThreadPoolExecutor(max_workers=4) as executor:
+                    futures = []
+                    for data in data_items:
+                        future = executor.submit(
+                            self._wrap_process_data_item,
+                            data=data,
+                            execution_plan=execution_plan,
+                            task_group=task_group  # 显式传递
+                        )
+                        futures.append(future)
+
+                    for future in as_completed(futures):
+                        try:
+                            data_item_result = future.result()
+                            with self.result_lock:
+                                exec_plan_response["data"].append(data_item_result["data"])
+                                exec_plan_response["guardrails"].extend(data_item_result["guardrails"])
+                        except Exception as e:
+                            LogUtil.log(LogType.ERROR, LogLevel.ERROR,
+                                      f"[{task_group}] 数据处理失败: {str(e)}")
+
+            return exec_plan_response
+        finally:
+            # 弹出上下文
+            self._pop_context()
+
+    def _wrap_process_data_item(self, *args, **kwargs):
+        """包装方法（传递线程上下文）"""
+        try:
+            # 继承父线程上下文
+            if self._get_thread_context():
+                thread_local.context_stack = copy.deepcopy(self._get_thread_context())
+            return self.process_data_item(*args, **kwargs)
+        except Exception as e:
+            LogUtil.log(LogType.ERROR, LogLevel.ERROR, f"包装方法异常: {str(e)}")
+            raise
+
+    def process_data_item(self, data, execution_plan, task_group):
+        """处理数据项（线程安全版本）"""
+        try:
+            # 压入数据项上下文
+            self._push_context(task_group)
+
+            # 上下文验证
+            self.check_task_group(data, task_group)
+
+            data_response = {
+                "data": data,
+                "guardrails": [],
+                "task_group": task_group
+            }
+
+            # 处理加密检测
+            if "EncryptionDetector" in execution_plan:
+                result = self.run_scanner(
+                    data=data,
+                    scanner_nm="EncryptionDetector",
+                    param=execution_plan["EncryptionDetector"],
+                    task_group=task_group
+                )
+                data_response["guardrails"].append(result)
+                if result.get("response", {}).get("is_protected", False):
+                    LogUtil.log(LogType.TRANSACTION, LogLevel.INFO,
+                              f"[{task_group}] 检测到加密文件，跳过其他检查")
+                    return data_response
+
+            # 并行执行其他扫描器
+            scanners = [s for s in execution_plan.keys() if s != "EncryptionDetector"]
+            with ThreadPoolExecutor(max_workers=4) as scanner_executor:
+                futures = {
+                    scanner_executor.submit(
+                        self.run_scanner,
+                        data=data,
+                        scanner_nm=scanner_nm,
+                        param=execution_plan[scanner_nm],
+                        task_group=task_group
+                    ): scanner_nm for scanner_nm in scanners
+                }
+
+                for future in as_completed(futures):
+                    try:
+                        result = future.result()
+                        data_response["guardrails"].append(result)
+                    except Exception as e:
+                        LogUtil.log(LogType.ERROR, LogLevel.ERROR,
+                                  f"[{task_group}] 扫描器{futures[future]}失败: {str(e)}")
+
+            return data_response
+        finally:
+            self._pop_context()
+
+    def run_scanner(self, data, scanner_nm, param, task_group=None):
+        """运行扫描器（带完整上下文跟踪）"""
+        try:
+            # 上下文验证
+            current_ctx = self._current_context()
+            if not current_ctx or current_ctx['task_group'] != task_group:
+                raise GuardrailsError("SWHIOSERR0052", 
+                                     f"扫描器上下文异常: {current_ctx} vs {task_group}")
+
+            # 原有扫描逻辑...
+            # 添加调试日志
+            LogUtil.log(LogType.DEBUG, LogLevel.DEBUG,
+                      f"[{task_group}] 正在执行 {scanner_nm} 检查: {data[:15]}...")
+
+            # ...（执行实际扫描操作）
+
+            return result
+        except Exception as e:
+            LogUtil.log(LogType.ERROR, LogLevel.ERROR,
+                      f"[{task_group}] 扫描器 {scanner_nm} 错误: {str(e)}")
+            raise
+
+# 其余方法保持不变...
