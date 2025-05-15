@@ -9,7 +9,7 @@ from augraphy import *
 import albumentations as A
 import random
 
-def gussis_noise(image,cfg):
+def gussis_noise(image):
     try:
         gussis_noise = A.GaussNoise(std_range=(0.1, 0.2), p=1.0)
         image = gussis_noise(image=image)["image"]
@@ -18,7 +18,7 @@ def gussis_noise(image,cfg):
         print(e)
         return image
 
-def vertical_lines(image, cfg):
+def vertical_lines(image):
     try:
         quality = 5
         interval= 7 - quality
@@ -37,7 +37,7 @@ def vertical_lines(image, cfg):
         print(e)
         return image
 
-def img_badphotocopy(image,cfg):
+def img_badphotocopy(image):
     try:
         quality = [0.3,0.3]
         bad_photo_copy = BadPhotoCopy(noise_type=5,
@@ -55,7 +55,7 @@ def img_badphotocopy(image,cfg):
         print(e)
         return image
 
-def img_bleedthrough(image,cfg):
+def img_bleedthrough(image):
     try:
         bleedthrough = BleedThrough(intensity_range=(0.1, 0.9),
                                 color_range=(0, 224),
@@ -71,7 +71,7 @@ def img_bleedthrough(image,cfg):
         print(e)
         return image
 
-def img_brightness_texturize(image,cfg):
+def img_brightness_texturize(image):
     try:
         brightness_texturize = BrightnessTexturize(texturize_range=(0.8,0.99),
                                             deviation=0.1)
@@ -82,7 +82,7 @@ def img_brightness_texturize(image,cfg):
         print(e)
         return image
 
-def img_dirty_drum(image,cfg):
+def img_dirty_drum(image):
     try:
         dirtydrum3 = DirtyDrum(line_width_range=(2, 5),
                         line_concentration=0.3,
@@ -99,7 +99,7 @@ def img_dirty_drum(image,cfg):
         print(e)
         return image
 
-def img_faxify(image,cfg):
+def img_faxify(image):
     try:
         faxify = Faxify(scale_range = (1.0, 1.25),
                     monochrome = 1,
@@ -117,7 +117,7 @@ def img_faxify(image,cfg):
         print(e)
         return image
 
-def img_hollow(image,cfg):
+def img_hollow(image):
     try:
         hollow = Hollow(hollow_median_kernel_value_range = (101, 101),
                     hollow_min_width_range=(1, 1),
@@ -135,7 +135,7 @@ def img_hollow(image,cfg):
         print(e)
         return image
     
-def img_lighting_gradient(image,cfg):
+def img_lighting_gradient(image):
     try:
         lighting_gradient_gaussian = LightingGradient(light_position=None,
                                                 direction=90,
@@ -151,7 +151,7 @@ def img_lighting_gradient(image,cfg):
         print(e)
         return image
 
-def img_low_light_noise(image,cfg):
+def img_low_light_noise(image):
     try:
         lowlightnoise_obj = LowLightNoise(
                                         num_photons_range = (50, 50),
@@ -166,7 +166,7 @@ def img_low_light_noise(image,cfg):
         print(e)
         return image
 
-def img_markup_underline(image,cfg):
+def img_markup_underline(image):
     try:
         markup_underline = Markup(num_lines_range=(1, 1),
                             markup_length_range=(1, 1),
@@ -184,7 +184,7 @@ def img_markup_underline(image,cfg):
         print(e)
         return image
 
-def img_pattern_generator(image,cfg):
+def img_pattern_generator(image):
     try:
         quasi_pattern = PatternGenerator(
                                     imgx = 512,
@@ -197,7 +197,7 @@ def img_pattern_generator(image,cfg):
         print(e)
         return image
 
-def img_shadow_cast(image,cfg):
+def img_shadow_cast(image):
     try:
         shadowcast = ShadowCast(shadow_side = "random",
                             shadow_vertices_range = (3, 5),
@@ -215,7 +215,7 @@ def img_shadow_cast(image,cfg):
         print(e)
         return image
 
-def img_subtle_noise(image,cfg):
+def img_subtle_noise(image):
     try:
         subtle_noise = SubtleNoise(subtle_range=50)
         img_subtle_noise = subtle_noise(image)
@@ -224,7 +224,7 @@ def img_subtle_noise(image,cfg):
         print(e)
         return image
 
-def img_voronoi_tessellation(image,cfg):
+def img_voronoi_tessellation(image):
     try:
         voronoi_pattern = VoronoiTessellation(
                             mult_range = (80,80),
@@ -240,7 +240,7 @@ def img_voronoi_tessellation(image,cfg):
         print(e)
         return image
 
-def img_water_mark(image,cfg):
+def img_water_mark(image):
     try:
         watermark= WaterMark(watermark_word = "random",
                             watermark_font_size = (5,10), 
@@ -258,7 +258,7 @@ def img_water_mark(image,cfg):
         return image
 
 
-def img_squish(image,cfg):
+def img_squish(image):
     try:
         squish = Squish(squish_direction = 1,
                     squish_location = "random",
@@ -274,7 +274,7 @@ def img_squish(image,cfg):
         return image
 
 
-def img_noisy_line(image,cfg):
+def img_noisy_line(image):
     try:
         noisylines = NoisyLines(noisy_lines_direction = 1,
                             noisy_lines_number_range = (1,1),
@@ -291,7 +291,7 @@ def img_noisy_line(image,cfg):
         print(e)
         return image
 
-def img_scribbles(image,cfg,n_points=3):
+def img_scribbles(image,n_points=3):
     try:
         np.random.seed()
         line_thickness = 3
@@ -343,7 +343,7 @@ def img_scribbles(image,cfg,n_points=3):
         return image
 
 
-def img_sharpen(image,cfg):
+def img_sharpen(image):
     try:
         sharpen = A.Sharpen(always_apply=False, p=1.0, alpha=(0.2, 0.5), lightness=(5.0, 5.0))
         image = sharpen(image=image)["image"]
@@ -352,7 +352,7 @@ def img_sharpen(image,cfg):
         print(e)
         return image
 
-def img_pixeldropout(image,cfg):
+def img_pixeldropout(image):
     try:
         pixeldrop = A.PixelDropout(always_apply=False, p=1.0, dropout_prob=0.1, per_channel=0, drop_value=(255, 255, 255), mask_drop_value=None)
         image = pixeldrop(image=image)["image"]
@@ -362,7 +362,7 @@ def img_pixeldropout(image,cfg):
         return image
 
 
-def img_erode(image,cfg):
+def img_erode(image):
     try:
         kernel_size = 3
         kernel = np.ones((kernel_size, kernel_size), np.uint8)
@@ -373,7 +373,7 @@ def img_erode(image,cfg):
         return image
 
 
-def img_dilate(image,cfg):
+def img_dilate(image):
     try:
         kernel_size = 3
         kernel = np.ones((kernel_size, kernel_size), np.uint8)
@@ -384,7 +384,7 @@ def img_dilate(image,cfg):
         return image
 
 
-def img_downscale(image,cfg):
+def img_downscale(image):
     try:
         downscale = A.Downscale(always_apply=False, p=1.0, scale_range=(0.5, 0.75))
         image = downscale(image=image)["image"]
@@ -394,7 +394,7 @@ def img_downscale(image,cfg):
         return image
 
 
-def img_blur(image,cfg):
+def img_blur(image):
     try:
         img_blur = A.Blur(always_apply=False, p=1.0, blur_limit=(3, 10))
         image = img_blur(image=image)["image"]
@@ -403,19 +403,7 @@ def img_blur(image,cfg):
         print(e)
         return image
 
-
-def img_jpeg(image,cfg):
-    try:
-        quality = cfg.img_fg.fg_path.opacity
-        jpeg_5 = Jpeg(quality_range=(100 - quality[1]*100,100 - quality[0]*100))
-        img_jpeg_5 = jpeg_5(image)
-        return img_jpeg_5
-    except Exception as e:
-        print(e)
-        return image
-
-
-def img_inkbleed(image,cfg):
+def img_inkbleed(image):
     try:
         quality = (0.4, 0.7)
         inkbleed = InkBleed(intensity_range=quality,
@@ -429,7 +417,7 @@ def img_inkbleed(image,cfg):
         return image
 
 
-def img_letterpress(image,cfg):
+def img_letterpress(image):
     try:
         letterpress = Letterpress(n_samples=(200,500),
                             n_clusters=(300,800),
@@ -445,7 +433,7 @@ def img_letterpress(image,cfg):
         return image
 
 
-def img_white_dash(image,cfg):
+def img_white_dash(image):
     try:
         np.random.seed()
         height, width = image.shape[:2]
@@ -458,57 +446,6 @@ def img_white_dash(image,cfg):
             line_color = (255, 255, 255)
             cv2.line(image, (0, y), (length, y), line_color, thickness)
         return image
-    except Exception as e:
-        print(e)
-        return image
-
-def custom_foreground(img_path,image):
-    try:
-        fg_image = cv2.imread(img_path,cv2.IMREAD_UNCHANGED)
-        if fg_image.shape[2] == 4:
-            image_with_alpha = fg_image
-        else:
-            image_with_alpha = np.ones((fg_image.shape[0], fg_image.shape[1], 4), dtype=np.uint8) * 255
-            threshold = 200
-            fg_channels = fg_image.shape[2]
-            mask = np.ones((fg_image.shape[0], fg_image.shape[1]), dtype=np.uint8)
-            if fg_channels == 1:
-                mask = np.where(fg_image[:, :, 0] >= threshold, 0, 255)
-                image_with_alpha[:, :, 3] = mask
-                image_with_alpha[:, :, :3] = np.repeat(fg_image, 3, axis=2)
-            else:
-                mask = np.all(fg_image >= threshold, axis=2)
-                image_with_alpha[:, :, 3] = np.where(mask, 0, 255)
-                image_with_alpha[:, :, :3] = fg_image
-
-        image = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
-        noise_image = Image.fromarray(cv2.cvtColor(image_with_alpha, cv2.COLOR_BGRA2RGBA))
-        image_width, image_height = image.size
-        noise_width, noise_height = noise_image.size
-        if image_width > noise_width or image_height > noise_height:
-            ratio = max(image_width / noise_width, image_height / noise_height)
-            new_width = int(noise_width * ratio)
-            new_height = int(noise_height * ratio)
-            noise_image = noise_image.resize((new_width, new_height), Image.ANTIALIAS)
-            noise_width, noise_height = noise_image.size
-
-        random_width = image_width
-        random_height = image_height
-        max_left = max(0, noise_width - random_width)
-        max_top = max(0, noise_height - random_height)
-        np.random.seed()
-        left = np.random.randint(0, max_left + 1)
-        top = np.random.randint(0, max_top + 1)
-        crop_right = left + random_width
-        crop_bottom = top + random_height
-        cropped_noise = noise_image.crop((left, top, crop_right, crop_bottom))
-        overlay = Image.new('RGBA', (image_width, image_height), (0, 0, 0, 0))
-        overlay.paste(cropped_noise, (0, 0))
-        opacity = 0.5
-        overlay_with_opacity = overlay.point(lambda p: p * opacity)
-        result = Image.alpha_composite(image.convert('RGBA'), overlay_with_opacity)
-        final_img = cv2.cvtColor(np.array(result), cv2.COLOR_RGBA2BGRA)
-        return final_img
     except Exception as e:
         print(e)
         return image
@@ -545,7 +482,7 @@ def add_foreground(fourground, image):
     }
 
     if fourground in foreground_mapping:
-        fg_image = foreground_mapping[fourground](image,fourground)
+        fg_image = foreground_mapping[fourground](image)
     else:
         raise ValueError("Unknown foreground type: {}".format(fourground))
     return fg_image
