@@ -4,113 +4,92 @@ import torch
 import numpy as np
 import argparse
 import pathlib
-from tqdm import tqdm  # 导入进度条库
+from tqdm import tqdm  # 新增进度条库
 
 from utils import util
 import options.options as option
 from models import create_model
 
-import torch
-from PIL import Image
 import torchvision.transforms as transforms
 
-def setup_model(opt_path):
+
+def main():
+    # 配置参数解析
     parser = argparse.ArgumentParser()
-    parser.add_argument('--opt', type=str, default=opt_path)
-    args, _ = parser.parse_known_args()  # 避免干扰主函数参数解析
-    
+    parser.add_argument('--opt', type=str, default='./options/test.yml', help='Path to option YAML file.')
+    parser.add_argument('--input_dir', type=str, required=True, help='Input directory containing images')
+    parser.add_argument('--output_dir', type=str, required=True, help='Output directory for processed images')
+    args = parser.parse_args()
+
+    # 加载配置文件
     opt = option.parse(args.opt, is_train=False)
     opt['dist'] = False
 
-    # 初始化模型
-    model = create_model(opt)
-    
-    # 加载预训练权重
-    print("\n🗜️ 正在加载预训练模型...")
-    state_dict = torch.load(opt['path']['pretrain_model_G'])
-    corrected_dict = {f"module.{k}": v for k, v in state_dict.items()}
-    model.netG.load_state_dict(corrected_dict, strict=True)
-    model.netG.eval()
-    return model, opt
-
-def process_batch(input_dir, output_dir, model):
-    # 准备文件列表
-    valid_ext = ('.png', '.jpg', '.jpeg', '.bmp', '.tiff')
-    file_list = [f for f in os.listdir(input_dir) 
-                if f.lower().endswith(valid_ext)]
-    total_files = len(file_list)
-
-    # 初始化进度条
-    progress_bar = tqdm(
-        total=total_files,
-        unit="张",
-        desc="🚀 正在增强图像",
-        bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]"
-    )
-
-    processed = 0
-    errors = 0
-
-    for filename in file_list:
-        try:
-            # 处理单张图片
-            img_path = os.path.join(input_dir, filename)
-            image = cv2.imread(img_path)
-            
-            if image is None:
-                raise ValueError("无法读取图像文件")
-
-            # 前处理
-            rgb_img = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-            tensor_img = transforms.ToTensor()(rgb_img).unsqueeze(0)
-
-            # 推理
-            with torch.no_grad():
-                enhanced = util.single_forward(model.netG, tensor_img)
-
-            # 后处理
-            output_img = util.tensor2img(enhanced)
-            output_img = cv2.cvtColor(output_img, cv2.COLOR_RGB2BGR)
-
-            # 保存结果
-            output_path = os.path.join(output_dir, filename)
-            cv2.imwrite(output_path, output_img)
-
-            # 更新进度
-            processed += 1
-            progress_bar.set_postfix({
-                "已处理": processed,
-                "失败": errors,
-                "当前文件": filename[:15] + "..." if len(filename) >15 else filename
-            })
-            
-        except Exception as e:
-            errors += 1
-            print(f"\n❌ 处理失败 {filename}: {str(e)}")
-        finally:
-            progress_bar.update(1)
-
-    progress_bar.close()
-    print(f"\n✅ 处理完成！成功 {processed} 张，失败 {errors} 张")
-
-def main():
-    parser = argparse.ArgumentParser(description="🗂️ 图像增强批量处理器")
-    parser.add_argument('--input_dir', required=True, help="输入目录路径")
-    parser.add_argument('--output_dir', required=True, help="输出目录路径")
-    parser.add_argument('--opt', default='./options/test.yml', help="配置文件路径")
-    
-    args = parser.parse_args()
-    
     # 创建输出目录
     os.makedirs(args.output_dir, exist_ok=True)
-    
+
     # 初始化模型
-    model, _ = setup_model(args.opt)
+    model = create_model(opt)
+    # 加载预训练权重
+    para = {}
+    for k, v in torch.load(opt['path']['pretrain_model_G']).items():
+        para['module.'+k] = v
+    model.netG.load_state_dict(para, strict=True)
+    model.netG.eval()
+
+    # 支持的图片格式
+    supported_ext = ['.png', '.jpg', '.jpeg', '.bmp', '.tif', '.tiff']
     
-    # 开始处理
-    print(f"\n📁 输入目录: {args.input_dir}")
-    print(f"📂 输出目录: {args.output_dir}")
-    process_batch(args.input_dir, args.output_dir, model.netG)
+    # 获取文件列表（提前统计总数）
+    input_path = pathlib.Path(args.input_dir)
+    img_files = [f for f in input_path.iterdir() if f.suffix.lower() in supported_ext]
+    total_files = len(img_files)
+
+    # 初始化进度条
+    progress_bar = tqdm(total=total_files, 
+                      desc="Processing Images", 
+                      unit="image",
+                      bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]")
+
+    # 遍历处理文件
+    for img_path in img_files:
+        try:
+            # 更新进度描述
+            progress_bar.set_postfix(file=img_path.name[:15]+"...", refresh=False)
+            
+            # 读取图片
+            image = cv2.imread(str(img_path))
+            if image is None:
+                raise IOError(f"无法读取图像文件: {img_path}")
+
+            # 预处理
+            image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            transform = transforms.ToTensor()
+            tensor_image = transform(image).unsqueeze(0)
+
+            # 模型推理
+            with torch.no_grad():
+                output = util.single_forward(model.netG, tensor_image)
+
+            # 后处理
+            np_image = util.tensor2img(output)
+            np_image = cv2.cvtColor(np_image, cv2.COLOR_RGB2BGR)
+
+            # 保存结果
+            output_path = pathlib.Path(args.output_dir) / img_path.name
+            cv2.imwrite(str(output_path), np_image)
+            
+            # 更新进度条
+            progress_bar.update(1)
+            
+        except Exception as e:
+            tqdm.write(f"Error processing {img_path.name}: {str(e)}")
+            progress_bar.update(1)
+            continue
+
+    progress_bar.close()
+    print("\nProcessing completed!")
+
 
 if __name__ == "__main__":
     main()
