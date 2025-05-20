@@ -133,3 +133,30 @@ if __name__ == '__main__':
     
     # 处理图像
     result = processor.process(args.input, args.output)
+
+
+
+# 基础配置
+name: DocRestoration_Inference
+model: sr
+gpu_ids: [0]
+
+# 网络结构配置（需与test配置一致）
+network_G:
+  which_model_G: SID
+  nf: 16
+  groups: 8
+
+# 路径配置
+path:
+  pretrain_model_G: './pretrain/model.pth'  # 替换为实际模型路径
+
+# 处理参数（从test配置继承）
+datasets:
+  train:
+    IN_size: 256
+    color: RGB
+
+train:
+  input_normalize: true
+  range: '-1_1'
