@@ -2,6 +2,7 @@ import os
 import cv2
 import torch
 import numpy as np
+import yaml
 import options.options as option
 from models import create_model
 from utils import util
@@ -9,66 +10,90 @@ from utils import util
 class DocRestorationInference:
     def __init__(self, opt_path):
         # 初始化配置
-        self.opt = option.parse(opt_path, is_train=False)
-        self.opt = option.dict_to_nonedict(self.opt)
-        
-        # 创建模型
+        self.opt = self._load_config(opt_path)
+        self._process_config()
         self.model = create_model(self.opt)
         self._load_pretrained_weights()
         self.model.netG.eval()
-        
-        # 获取设备信息
         self.device = torch.device('cuda' if self.opt['gpu_ids'] else 'cpu')
 
+    def _load_config(self, opt_path):
+        """加载并处理配置文件"""
+        with open(opt_path, 'r') as f:
+            opt = yaml.safe_load(f)
+        return option.dict_to_nonedict(opt)
+
+    def _process_config(self):
+        """处理关键配置参数"""
+        # 设置输入尺寸
+        self.input_size = self.opt['datasets']['train'].get('IN_size', 256)
+        # 颜色空间配置
+        self.color_mode = self.opt['datasets']['train'].get('color', 'RGB').lower()
+        # 归一化配置
+        self.normalize = self.opt['train'].get('input_normalize', True)
+        self.value_range = self.opt['train'].get('range', '-1_1')
+
     def _load_pretrained_weights(self):
-        """加载预训练权重"""
+        """加载预训练权重（适配多GPU训练权重）"""
         pretrain_path = self.opt['path']['pretrain_model_G']
         print(f'Loading pretrained model from {pretrain_path}')
         
         state_dict = torch.load(pretrain_path, map_location=self.device)
         
-        # 处理多GPU训练保存的权重（如果存在module前缀）
-        if list(state_dict.keys())[0].startswith('module.'):
-            state_dict = {k[7:]: v for k, v in state_dict.items()}  # 去除module前缀
-            
-        self.model.netG.load_state_dict(state_dict, strict=True)
+        # 适配测试代码中的权重加载方式
+        new_state_dict = {}
+        for k, v in state_dict.items():
+            if not k.startswith('module.'):  # 添加module前缀
+                new_state_dict['module.' + k] = v
+            else:
+                new_state_dict[k] = v
+                
+        self.model.netG.load_state_dict(new_state_dict, strict=True)
         print('Successfully loaded pretrained weights')
 
-    def preprocess(self, img):
-        """图像预处理流程"""
-        # 转换颜色空间
-        if self.opt['color'] == 'rgb':
+    def _preprocess_image(self, img):
+        """图像预处理流水线"""
+        # 颜色空间转换
+        if self.color_mode == 'rgb':
             img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         
-        # 归一化
-        if self.opt['input_normalize']:
-            img = img.astype(np.float32) / 255.0  # 归一化到[0,1]
-            if self.opt['range'] == '-1_1':        # 如果配置要求归一化到[-1,1]
-                img = img * 2 - 1
+        # 调整尺寸
+        h, w = img.shape[:2]
+        if h != self.input_size or w != self.input_size:
+            img = cv2.resize(img, (self.input_size, self.input_size), 
+                            interpolation=cv2.INTER_CUBIC)
         
-        # 转换为Tensor并调整维度
-        tensor = torch.from_numpy(img).float().permute(2, 0, 1).unsqueeze(0)  # HWC -> BCHW
+        # 归一化处理
+        if self.normalize:
+            img = img.astype(np.float32)
+            if self.value_range == '-1_1':
+                img = (img - 127.5) / 127.5  # [-1, 1]
+            else:
+                img /= 255.0  # [0, 1]
+        
+        # 转换为Tensor
+        tensor = torch.from_numpy(img).float().permute(2, 0, 1).unsqueeze(0)
         return tensor.to(self.device)
 
-    def postprocess(self, tensor):
+    def _postprocess_image(self, tensor):
         """结果后处理"""
-        # 使用项目中的tensor转图像工具
         img = util.tensor2img(tensor)
         
-        # 转换回BGR格式保存
-        if self.opt['color'] == 'rgb':
+        # 恢复颜色空间
+        if self.color_mode == 'rgb':
             img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+            
         return img
 
-    def inference_single(self, img_path):
-        """单张图像推理"""
+    def process(self, img_path, output_path=None):
+        """处理单张图像"""
         # 读取图像
         assert os.path.exists(img_path), f"Image {img_path} not found"
         img = cv2.imread(img_path)
         original_h, original_w = img.shape[:2]
         
         # 预处理
-        lq_tensor = self.preprocess(img)
+        lq_tensor = self._preprocess_image(img)
         
         # 模型推理
         with torch.no_grad():
@@ -77,49 +102,34 @@ class DocRestorationInference:
             output = self.model.get_current_visuals()['rlt']
         
         # 后处理
-        result = self.postprocess(output)
+        result = self._postprocess_image(output)
         
-        # 保持原始尺寸（如果模型修改了尺寸）
-        result = cv2.resize(result, (original_w, original_h))
-        return result
-
-    def inference_folder(self, input_dir, output_dir):
-        """文件夹批量推理"""
-        os.makedirs(output_dir, exist_ok=True)
-        img_list = [f for f in os.listdir(input_dir) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
+        # 恢复原始尺寸
+        if result.shape[0] != original_h or result.shape[1] != original_w:
+            result = cv2.resize(result, (original_w, original_h), 
+                              interpolation=cv2.INTER_LANCZOS4)
         
-        for filename in img_list:
-            input_path = os.path.join(input_dir, filename)
-            output_path = os.path.join(output_dir, filename)
-            
-            result = self.inference_single(input_path)
+        # 保存结果
+        if output_path:
             cv2.imwrite(output_path, result)
             print(f'Saved result to {output_path}')
+            
+        return result
 
 if __name__ == '__main__':
-    # 使用示例
     import argparse
     
     parser = argparse.ArgumentParser()
     parser.add_argument('--opt', type=str, default='options/test/inference_Enhance_MSEC.yml',
-                       help='Path to option YAML file')
+                      help='Path to config YAML file')
     parser.add_argument('--input', type=str, required=True,
-                       help='Input image/folder path')
+                      help='Input image path')
     parser.add_argument('--output', type=str, required=True,
-                       help='Output folder path')
+                      help='Output image path')
     args = parser.parse_args()
     
-    # 初始化推理器
-    restorer = DocRestorationInference(args.opt)
+    # 初始化处理器
+    processor = DocRestorationInference(args.opt)
     
-    # 判断输入类型
-    if os.path.isfile(args.input):
-        # 单文件推理
-        result = restorer.inference_single(args.input)
-        cv2.imwrite(args.output, result)
-        print(f'Saved result to {args.output}')
-    elif os.path.isdir(args.input):
-        # 文件夹批量推理
-        restorer.inference_folder(args.input, args.output)
-    else:
-        raise ValueError("Invalid input path")
+    # 处理图像
+    result = processor.process(args.input, args.output)
