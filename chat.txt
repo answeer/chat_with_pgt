@@ -1,140 +1,99 @@
+import argparse
+import os
 import cv2
 import numpy as np
-import os
-import random
-from typing import List, Union
+import torch
+import yaml
+from models import create_model
+from PIL import Image
 
-# 保留原有所有噪音处理函数...
-
-def apply_random_effects(
-    image: np.ndarray,
-    num_effects: Union[int, tuple] = (1, 3),
-    effect_list: List[str] = None
-) -> np.ndarray:
-    """完全随机化的噪音效果应用函数
-    :param image: 输入图像(BGR格式)
-    :param num_effects: 接受int或tuple，控制效果数量范围
-    :param effect_list: None表示使用全部效果
-    :return: 处理后的图像 + 使用的效果名称列表
-    """
-    # 效果映射表
-    FOREGROUND_MAPPING = {  # 确保包含所有效果
-        'white-lines': img_white_dash,
-        'vertical-lines': vertical_lines,
-        'inkbleed': img_inkbleed,
-        'letter-press': img_letterpress,
-        'img-blur': img_blur,
-        'downscale': img_downscale,
-        'erode': img_erode,
-        'dilate': img_dilate,
-        'pixel-dropout': img_pixeldropout,
-        'sharpen': img_sharpen,
-        'scribbles': img_scribbles,
-        'noisy-lines': img_noisy_line,
-        'squish': img_squish,
-        'bleedthrough': img_bleedthrough,
-        'BadPhotoCopy': img_badphotocopy,
-        'BrightnessTexturize': img_brightness_texturize,
-        'DirtyDrum': img_dirty_drum,
-        'Faxify': img_faxify,
-        'Hollow': img_hollow,
-        'LightingGradient': img_lighting_gradient,
-        'LowLightNoise': img_low_light_noise,
-        'PatternGenerator': img_pattern_generator,
-        'ShadowCast': img_shadow_cast,
-        'SubtleNoise': img_subtle_noise,
-        'VoronoiTessellation': img_voronoi_tessellation,
-        'WaterMark': img_water_mark,
-        "gussis_noise": gussis_noise
-    }
-
-    # 自动生成可选效果列表
-    available_effects = list(FOREGROUND_MAPPING.keys())
-    if effect_list:  # 过滤无效效果
-        available_effects = [e for e in effect_list if e in FOREGROUND_MAPPING]
-
-    # 设置随机效果数量 (支持范围和固定值)
-    if isinstance(num_effects, tuple):
-        min_eff = max(1, num_effects[0])
-        max_eff = min(len(available_effects), num_effects[1])
-        actual_num = random.randint(min_eff, max_eff)
-    else:
-        actual_num = min(max(1, num_effects), len(available_effects))
-
-    # 随机选择效果（允许重复叠加）
-    selected_effects = random.choices(available_effects, k=actual_num)
-    
-    # 应用效果流程
-    processed_image = image.copy()
-    applied_effects = []
-    
-    random.shuffle(selected_effects)  # 随机打乱应用顺序
-    for effect_name in selected_effects:
-        try:
-            processed_image = FOREGROUND_MAPPING[effect_name](processed_image)
-            applied_effects.append(effect_name)
-        except Exception as e:
-            print(f"⚠️ 效果 {effect_name} 应用失败: {str(e)}")
-    
-    return processed_image, applied_effects
-
-def process_batch_images(
-    input_dir: str,
-    output_dir: str,
-    num_effects_range: tuple = (1, 5),
-    effect_list: List[str] = None
-):
-    """全自动批量处理函数
-    :param input_dir: 输入图片目录
-    :param output_dir: 输出目录(自动创建)
-    :param num_effects_range: 每图应用的效果数量范围
-    :param effect_list: None表示使用全部效果
-    """
-    # 创建输出目录并验证输入
-    os.makedirs(output_dir, exist_ok=True)
-    if not os.path.exists(input_dir):
-        raise FileNotFoundError(f"输入目录不存在: {input_dir}")
-
-    # 遍历处理每张图片
-    for filename in os.listdir(input_dir):
-        # 过滤非图像文件
-        if not filename.lower().endswith(('.png', '.jpg', '.jpeg')):
-            continue
-
-        # 读取图像文件
-        input_path = os.path.join(input_dir, filename)
-        image = cv2.imread(input_path)
-        if image is None:
-            print(f"🚫 无法读取图像: {input_path}")
-            continue
-
-        # 应用随机效果
-        processed_img, applied_effects = apply_random_effects(
-            image,
-            num_effects=num_effects_range,
-            effect_list=effect_list
-        )
-
-        # 生成输出路径
-        base_name = os.path.splitext(filename)[0]
-        effects_str = "+".join(sorted(applied_effects))  # 排序便于对比观察
-        output_path = os.path.join(
-            output_dir,
-            f"{base_name}_FX[{effects_str}].jpg"  # 包含效果标记的文件名
-        )
-
-        # 写入处理后的图像
-        success = cv2.imwrite(output_path, processed_img)
-        if success:
-            print(f"✅ 已保存: {output_path}")
+class ImageEnhancer:
+    def __init__(self, config_path, model_weights):
+        # 加载配置文件
+        with open(config_path, 'r') as f:
+            self.opt = yaml.safe_load(f)
+            
+        # 初始化模型
+        self.model = create_model(self.opt)
+        
+        # 特殊处理权重键名（与测试代码一致）
+        para = {}
+        state_dict = torch.load(model_weights)
+        for k, v in state_dict.items():
+            para['module.'+k] = v
+        self.model.netG.load_state_dict(para, strict=True)
+        self.model.eval()
+        
+        # 获取设备信息
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.model.to(self.device)
+        
+    def preprocess(self, img_path):
+        """处理单张输入图像"""
+        # 读取图像
+        img = Image.open(img_path).convert('RGB')
+        
+        # 应用测试时的数据预处理（根据实际配置调整）
+        if 'datasets' in self.opt and 'val' in self.opt['datasets']:
+            # 从配置中获取验证集参数
+            dataset_opt = self.opt['datasets']['val']
+            img_size = dataset_opt.get('crop_size', 256)
+            
+            # 实现基本的预处理流程
+            img = img.resize((img_size, img_size), Image.BICUBIC)
+            img_tensor = torch.from_numpy(np.array(img)).float() / 255.0
+            img_tensor = img_tensor.permute(2, 0, 1).unsqueeze(0)  # HWC -> BCHW
         else:
-            print(f"❌ 保存失败: {output_path}")
+            # 默认预处理
+            img_tensor = torch.from_numpy(np.array(img)).float() / 255.0
+            img_tensor = img_tensor.permute(2, 0, 1).unsqueeze(0)
+        
+        return img_tensor.to(self.device)
+    
+    def enhance(self, img_tensor):
+        """执行图像增强"""
+        with torch.no_grad():
+            # 模拟测试代码的数据处理
+            data = {'LQ': img_tensor}
+            self.model.feed_data(data)
+            self.model.test()
+            output = self.model.get_current_visuals()['rlt']
+        return output
+    
+    def postprocess(self, tensor):
+        """将输出张量转换为图像"""
+        # 将张量转为numpy数组
+        tensor = tensor.squeeze().float().cpu().clamp_(0, 1).numpy()
+        tensor = tensor.transpose(1, 2, 0)  # CHW -> HWC
+        img = (tensor * 255.0).round().astype(np.uint8)
+        return img
+    
+    def save_result(self, img_array, save_path):
+        """保存增强结果"""
+        cv2.imwrite(save_path, cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR))
 
-if __name__ == "__main__":
-    # 示例用法（完整自动化模式）
-    process_batch_images(
-        input_dir="原始图片",
-        output_dir="增强结果",
-        num_effects_range=(2, 4),  # 每图应用2-4种随机效果
-        effect_list=None  # 使用全部25种效果
-    )
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--input', type=str, required=True, help='输入图像路径')
+    parser.add_argument('--output', type=str, required=True, help='输出保存路径')
+    parser.add_argument('--config', type=str, default='options/train/test_Enhance_MSEC.yml', 
+                       help='配置文件路径')
+    parser.add_argument('--weights', type=str, required=True, help='模型权重路径')
+    
+    args = parser.parse_args()
+    
+    # 初始化增强器
+    enhancer = ImageEnhancer(args.config, args.weights)
+    
+    # 处理图像
+    input_tensor = enhancer.preprocess(args.input)
+    output_tensor = enhancer.enhance(input_tensor)
+    output_img = enhancer.postprocess(output_tensor)
+    
+    # 保存结果
+    os.makedirs(os.path.dirname(args.output), exist_ok=True)
+    enhancer.save_result(output_img, args.output)
+    print(f'增强结果已保存至 {args.output}')
+
+if __name__ == '__main__':
+    main()
