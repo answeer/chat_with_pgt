@@ -4,100 +4,71 @@ import torch
 import numpy as np
 import argparse
 import pathlib
-from tqdm import tqdm
 
 from utils import util
 import options.options as option
 from models import create_model
 
-import torch
-from PIL import Image
 import torchvision.transforms as transforms
 
-def setup_model(opt_path):
-    # 解析配置并创建模型
+
+def main():
+    # 配置参数解析
     parser = argparse.ArgumentParser()
-    parser.add_argument('--opt', type=str, default=opt_path,
-                        help='Path to option YAML file.')
-    parser.add_argument('--launcher', choices=['none', 'pytorch'], default='pytorch')
-    parser.add_argument('--local_rank', type=int, default=0)
+    parser.add_argument('--opt', type=str, default='./options/test.yml', help='Path to option YAML file.')
+    parser.add_argument('--input_dir', type=str, required=True, help='Input directory containing images')
+    parser.add_argument('--output_dir', type=str, required=True, help='Output directory for processed images')
     args = parser.parse_args()
-    
+
+    # 加载配置文件
     opt = option.parse(args.opt, is_train=False)
     opt['dist'] = False
 
-    # 创建模型并加载权重
-    model = create_model(opt)
-    para = {}
-    state_dict = torch.load(opt['path']['pretrain_model_G'])
-    for k, v in state_dict.items():
-        para[f'module.{k}'] = v
-    model.netG.load_state_dict(para, strict=True)
-    model.netG.eval()
-    
-    return model, opt
-
-def process_image(model, image_path, output_dir):
-    # 读取图片
-    image = cv2.imread(image_path)
-    if image is None:
-        print(f"Warning: Could not read image {image_path}")
-        return
-        
-    # 颜色空间转换
-    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-    
-    # 转换为Tensor
-    transform = transforms.ToTensor()
-    tensor_image = transform(image).unsqueeze(0)
-    
-    # 推理
-    with torch.no_grad():
-        output = util.single_forward(model.netG, tensor_image)
-    
-    # 后处理
-    np_image = util.tensor2img(output)
-    np_image = cv2.cvtColor(np_image, cv2.COLOR_RGB2BGR)
-    
-    # 保存结果
-    filename = os.path.basename(image_path)
-    output_path = os.path.join(output_dir, filename)
-    cv2.imwrite(output_path, np_image)
-    return output_path
-
-def main():
-    # 命令行参数
-    parser = argparse.ArgumentParser(description='Batch image processing')
-    parser.add_argument('--input_dir', required=True, help='输入图片目录路径')
-    parser.add_argument('--output_dir', required=True, help='输出目录路径')
-    parser.add_argument('--opt', default='./options/test.yml', help='配置文件路径')
-    args = parser.parse_args()
-    
     # 创建输出目录
     os.makedirs(args.output_dir, exist_ok=True)
-    
+
     # 初始化模型
-    model, opt = setup_model(args.opt)
-    
+    model = create_model(opt)
+    # 加载预训练权重
+    para = {}
+    for k, v in torch.load(opt['path']['pretrain_model_G']).items():
+        para['module.'+k] = v  # 添加module前缀匹配模型参数名称
+    model.netG.load_state_dict(para, strict=True)
+    model.netG.eval()
+
     # 支持的图片格式
-    valid_exts = {'.png', '.jpg', '.jpeg', '.bmp', '.tiff'}
+    supported_ext = ['.png', '.jpg', '.jpeg', '.bmp', '.tif', '.tiff']
     
-    # 遍历处理图片
-    print(f"Processing images in {args.input_dir}")
-    for filename in tqdm(os.listdir(args.input_dir)):
-        # 检查文件格式
-        ext = os.path.splitext(filename)[1].lower()
-        if ext not in valid_exts:
+    # 遍历输入目录
+    input_path = pathlib.Path(args.input_dir)
+    for img_path in input_path.iterdir():
+        if img_path.suffix.lower() not in supported_ext:
             continue
-            
-        input_path = os.path.join(args.input_dir, filename)
-        try:
-            saved_path = process_image(model, input_path, args.output_dir)
-            # print(f"Saved: {saved_path}")
-        except Exception as e:
-            print(f"Error processing {filename}: {str(e)}")
-    
-    print("Processing completed!")
+
+        # 读取图片
+        image = cv2.imread(str(img_path))
+        if image is None:
+            print(f"Error reading image: {img_path}")
+            continue
+
+        # 预处理
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        transform = transforms.ToTensor()
+        tensor_image = transform(image).unsqueeze(0)
+
+        # 模型推理
+        with torch.no_grad():
+            output = util.single_forward(model.netG, tensor_image)
+
+        # 后处理
+        np_image = util.tensor2img(output)
+        np_image = cv2.cvtColor(np_image, cv2.COLOR_RGB2BGR)
+
+        # 保存结果
+        output_path = pathlib.Path(args.output_dir) / img_path.name
+        cv2.imwrite(str(output_path), np_image)
+        print(f"Processed image saved to: {output_path}")
+
 
 if __name__ == "__main__":
     main()
