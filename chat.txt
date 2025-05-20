@@ -2,161 +2,102 @@ import os
 import cv2
 import torch
 import numpy as np
-import yaml
+import argparse
+import pathlib
+from tqdm import tqdm
+
+from utils import util
 import options.options as option
 from models import create_model
-from utils import util
 
-class DocRestorationInference:
-    def __init__(self, opt_path):
-        # 初始化配置
-        self.opt = self._load_config(opt_path)
-        self._process_config()
-        self.model = create_model(self.opt)
-        self._load_pretrained_weights()
-        self.model.netG.eval()
-        self.device = torch.device('cuda' if self.opt['gpu_ids'] else 'cpu')
+import torch
+from PIL import Image
+import torchvision.transforms as transforms
 
-    def _load_config(self, opt_path):
-        """加载并处理配置文件"""
-        with open(opt_path, 'r') as f:
-            opt = yaml.safe_load(f)
-        return option.dict_to_nonedict(opt)
-
-    def _process_config(self):
-        """处理关键配置参数"""
-        # 设置输入尺寸
-        self.input_size = self.opt['datasets']['train'].get('IN_size', 256)
-        # 颜色空间配置
-        self.color_mode = self.opt['datasets']['train'].get('color', 'RGB').lower()
-        # 归一化配置
-        self.normalize = self.opt['train'].get('input_normalize', True)
-        self.value_range = self.opt['train'].get('range', '-1_1')
-
-    def _load_pretrained_weights(self):
-        """加载预训练权重（适配多GPU训练权重）"""
-        pretrain_path = self.opt['path']['pretrain_model_G']
-        print(f'Loading pretrained model from {pretrain_path}')
-        
-        state_dict = torch.load(pretrain_path, map_location=self.device)
-        
-        # 适配测试代码中的权重加载方式
-        new_state_dict = {}
-        for k, v in state_dict.items():
-            if not k.startswith('module.'):  # 添加module前缀
-                new_state_dict['module.' + k] = v
-            else:
-                new_state_dict[k] = v
-                
-        self.model.netG.load_state_dict(new_state_dict, strict=True)
-        print('Successfully loaded pretrained weights')
-
-    def _preprocess_image(self, img):
-        """图像预处理流水线"""
-        # 颜色空间转换
-        if self.color_mode == 'rgb':
-            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        
-        # 调整尺寸
-        h, w = img.shape[:2]
-        if h != self.input_size or w != self.input_size:
-            img = cv2.resize(img, (self.input_size, self.input_size), 
-                            interpolation=cv2.INTER_CUBIC)
-        
-        # 归一化处理
-        if self.normalize:
-            img = img.astype(np.float32)
-            if self.value_range == '-1_1':
-                img = (img - 127.5) / 127.5  # [-1, 1]
-            else:
-                img /= 255.0  # [0, 1]
-        
-        # 转换为Tensor
-        tensor = torch.from_numpy(img).float().permute(2, 0, 1).unsqueeze(0)
-        return tensor.to(self.device)
-
-    def _postprocess_image(self, tensor):
-        """结果后处理"""
-        img = util.tensor2img(tensor)
-        
-        # 恢复颜色空间
-        if self.color_mode == 'rgb':
-            img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
-            
-        return img
-
-    def process(self, img_path, output_path=None):
-        """处理单张图像"""
-        # 读取图像
-        assert os.path.exists(img_path), f"Image {img_path} not found"
-        img = cv2.imread(img_path)
-        original_h, original_w = img.shape[:2]
-        
-        # 预处理
-        lq_tensor = self._preprocess_image(img)
-        
-        # 模型推理
-        with torch.no_grad():
-            self.model.feed_data({'LQ': lq_tensor})
-            self.model.test()
-            output = self.model.get_current_visuals()['rlt']
-        
-        # 后处理
-        result = self._postprocess_image(output)
-        
-        # 恢复原始尺寸
-        if result.shape[0] != original_h or result.shape[1] != original_w:
-            result = cv2.resize(result, (original_w, original_h), 
-                              interpolation=cv2.INTER_LANCZOS4)
-        
-        # 保存结果
-        if output_path:
-            cv2.imwrite(output_path, result)
-            print(f'Saved result to {output_path}')
-            
-        return result
-
-if __name__ == '__main__':
-    import argparse
-    
+def setup_model(opt_path):
+    # 解析配置并创建模型
     parser = argparse.ArgumentParser()
-    parser.add_argument('--opt', type=str, default='options/test/inference_Enhance_MSEC.yml',
-                      help='Path to config YAML file')
-    parser.add_argument('--input', type=str, required=True,
-                      help='Input image path')
-    parser.add_argument('--output', type=str, required=True,
-                      help='Output image path')
+    parser.add_argument('--opt', type=str, default=opt_path,
+                        help='Path to option YAML file.')
+    parser.add_argument('--launcher', choices=['none', 'pytorch'], default='pytorch')
+    parser.add_argument('--local_rank', type=int, default=0)
     args = parser.parse_args()
     
-    # 初始化处理器
-    processor = DocRestorationInference(args.opt)
+    opt = option.parse(args.opt, is_train=False)
+    opt['dist'] = False
+
+    # 创建模型并加载权重
+    model = create_model(opt)
+    para = {}
+    state_dict = torch.load(opt['path']['pretrain_model_G'])
+    for k, v in state_dict.items():
+        para[f'module.{k}'] = v
+    model.netG.load_state_dict(para, strict=True)
+    model.netG.eval()
     
-    # 处理图像
-    result = processor.process(args.input, args.output)
+    return model, opt
 
+def process_image(model, image_path, output_dir):
+    # 读取图片
+    image = cv2.imread(image_path)
+    if image is None:
+        print(f"Warning: Could not read image {image_path}")
+        return
+        
+    # 颜色空间转换
+    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    
+    # 转换为Tensor
+    transform = transforms.ToTensor()
+    tensor_image = transform(image).unsqueeze(0)
+    
+    # 推理
+    with torch.no_grad():
+        output = util.single_forward(model.netG, tensor_image)
+    
+    # 后处理
+    np_image = util.tensor2img(output)
+    np_image = cv2.cvtColor(np_image, cv2.COLOR_RGB2BGR)
+    
+    # 保存结果
+    filename = os.path.basename(image_path)
+    output_path = os.path.join(output_dir, filename)
+    cv2.imwrite(output_path, np_image)
+    return output_path
 
+def main():
+    # 命令行参数
+    parser = argparse.ArgumentParser(description='Batch image processing')
+    parser.add_argument('--input_dir', required=True, help='输入图片目录路径')
+    parser.add_argument('--output_dir', required=True, help='输出目录路径')
+    parser.add_argument('--opt', default='./options/test.yml', help='配置文件路径')
+    args = parser.parse_args()
+    
+    # 创建输出目录
+    os.makedirs(args.output_dir, exist_ok=True)
+    
+    # 初始化模型
+    model, opt = setup_model(args.opt)
+    
+    # 支持的图片格式
+    valid_exts = {'.png', '.jpg', '.jpeg', '.bmp', '.tiff'}
+    
+    # 遍历处理图片
+    print(f"Processing images in {args.input_dir}")
+    for filename in tqdm(os.listdir(args.input_dir)):
+        # 检查文件格式
+        ext = os.path.splitext(filename)[1].lower()
+        if ext not in valid_exts:
+            continue
+            
+        input_path = os.path.join(args.input_dir, filename)
+        try:
+            saved_path = process_image(model, input_path, args.output_dir)
+            # print(f"Saved: {saved_path}")
+        except Exception as e:
+            print(f"Error processing {filename}: {str(e)}")
+    
+    print("Processing completed!")
 
-# 基础配置
-name: DocRestoration_Inference
-model: sr
-gpu_ids: [0]
-
-# 网络结构配置（需与test配置一致）
-network_G:
-  which_model_G: SID
-  nf: 16
-  groups: 8
-
-# 路径配置
-path:
-  pretrain_model_G: './pretrain/model.pth'  # 替换为实际模型路径
-
-# 处理参数（从test配置继承）
-datasets:
-  train:
-    IN_size: 256
-    color: RGB
-
-train:
-  input_normalize: true
-  range: '-1_1'
+if __name__ == "__main__":
+    main()
