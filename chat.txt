@@ -97,3 +97,111 @@ def main():
 
 if __name__ == '__main__':
     main()
+
+
+
+import argparse
+import os
+import cv2
+import numpy as np
+import torch
+import yaml
+from models import create_model
+from PIL import Image
+from tqdm import tqdm
+
+class BatchImageEnhancer:
+    def __init__(self, config_path, model_weights):
+        # 初始化代码与之前相同...
+        
+    # 保留之前的预处理、增强、后处理方法...
+
+    def process_folder(self, input_dir, output_dir, extensions=('.jpg', '.png', '.jpeg', '.bmp'), overwrite=False):
+        """
+        处理整个文件夹的图片
+        :param input_dir: 输入文件夹路径
+        :param output_dir: 输出根目录
+        :param extensions: 支持处理的图片格式
+        :param overwrite: 是否覆盖已存在文件
+        """
+        # 创建进度条
+        file_list = []
+        for root, _, files in os.walk(input_dir):
+            for file in files:
+                if file.lower().endswith(extensions):
+                    input_path = os.path.join(root, file)
+                    # 保持目录结构
+                    rel_path = os.path.relpath(root, input_dir)
+                    output_subdir = os.path.join(output_dir, rel_path)
+                    os.makedirs(output_subdir, exist_ok=True)
+                    output_path = os.path.join(output_subdir, file)
+                    file_list.append((input_path, output_path))
+
+        print(f"发现 {len(file_list)} 张待处理图片")
+        
+        # 使用GPU加速批处理
+        with torch.no_grad():
+            for input_path, output_path in tqdm(file_list, desc="处理进度"):
+                try:
+                    if not overwrite and os.path.exists(output_path):
+                        continue
+
+                    # 预处理
+                    input_tensor = self.preprocess(input_path)
+                    # 增强
+                    output_tensor = self.enhance(input_tensor)
+                    # 后处理
+                    output_img = self.postprocess(output_tensor)
+                    # 保存
+                    self.save_result(output_img, output_path)
+                    
+                except Exception as e:
+                    print(f"\n处理文件 {input_path} 时出错: {str(e)}")
+                    continue
+
+def main():
+    parser = argparse.ArgumentParser(description='批量图像增强工具')
+    parser.add_argument('--input', type=str, required=True, 
+                       help='输入路径（文件或文件夹）')
+    parser.add_argument('--output', type=str, required=True,
+                       help='输出目录路径')
+    parser.add_argument('--config', type=str, default='options/train/test_Enhance_MSEC.yml',
+                       help='配置文件路径')
+    parser.add_argument('--weights', type=str, required=True,
+                       help='模型权重路径')
+    parser.add_argument('--ext', nargs='+', default=['.jpg', '.png'], 
+                       help='支持的文件扩展名列表，例如 .jpg .png')
+    parser.add_argument('--overwrite', action='store_true',
+                       help='覆盖已存在的输出文件')
+    
+    args = parser.parse_args()
+    
+    enhancer = BatchImageEnhancer(args.config, args.weights)
+
+    # 自动判断输入类型
+    if os.path.isfile(args.input):
+        # 单文件处理模式
+        output_path = args.output if args.output.endswith(tuple(args.ext)) \
+            else os.path.join(args.output, os.path.basename(args.input))
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        
+        input_tensor = enhancer.preprocess(args.input)
+        output_tensor = enhancer.enhance(input_tensor)
+        output_img = enhancer.postprocess(output_tensor)
+        enhancer.save_result(output_img, output_path)
+        print(f"已保存结果到 {output_path}")
+        
+    elif os.path.isdir(args.input):
+        # 文件夹批处理模式
+        enhancer.process_folder(
+            input_dir=args.input,
+            output_dir=args.output,
+            extensions=tuple(args.ext),
+            overwrite=args.overwrite
+        )
+        print(f"处理完成！结果保存在 {args.output}")
+    else:
+        raise ValueError("无效的输入路径")
+
+if __name__ == '__main__':
+    main()
