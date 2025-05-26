@@ -1,95 +1,149 @@
 import os
 import cv2
-import torch
+import json
 import numpy as np
-import argparse
-import pathlib
-from tqdm import tqdm  # 新增进度条库
+from paddleocr import PaddleOCR
+from editdistance import eval as edit_distance
 
-from utils import util
-import options.options as option
-from models import create_model
+class PaddleOCREvaluator:
+    def __init__(self, model_type='PP-OCRv4'):
+        # 初始化PaddleOCR模型（端到端模式：检测+识别）
+        self.ocr = PaddleOCR(
+            use_angle_cls=True,  # 启用方向分类
+            lang='en',            # 支持中英文（修改为 'ch' 中文）
+            det_model_dir=None,   # 自动下载预训练模型
+            rec_model_dir=None,
+            cls_model_dir=None,
+            use_gpu=False,        # 根据环境选择
+            show_log=False
+        )
+        self.model_type = model_type
 
-import torchvision.transforms as transforms
+    def load_annotations(self, annotation_path):
+        """加载标注数据（示例：FUNSD格式的JSON标注）"""
+        with open(annotation_path, 'r') as f:
+            data = json.load(f)
+        annotations = {}
+        for item in data['form']:
+            img_name = item['image_path'].split('/')[-1]
+            if img_name not in annotations:
+                annotations[img_name] = []
+            annotations[img_name].append({
+                'points': np.array(item['box'], dtype=np.int32).reshape(4, 2),  # 四边形坐标
+                'text': item['text']
+            })
+        return annotations
 
+    def calculate_iou(self, box1, box2):
+        """计算两个四边形的最小外接矩形IoU"""
+        rect1 = cv2.boundingRect(box1)
+        rect2 = cv2.boundingRect(box2)
+        x1, y1, w1, h1 = rect1
+        x2, y2, w2, h2 = rect2
+        
+        # 计算交集区域
+        x_left = max(x1, x2)
+        y_top = max(y1, y2)
+        x_right = min(x1 + w1, x2 + w2)
+        y_bottom = min(y1 + h1, y2 + h2)
+        
+        if x_right < x_left or y_bottom < y_top:
+            return 0.0
+        
+        intersection_area = (x_right - x_left) * (y_bottom - y_top)
+        union_area = w1 * h1 + w2 * h2 - intersection_area
+        return intersection_area / union_area if union_area != 0 else 0.0
 
-def main():
-    # 配置参数解析
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--opt', type=str, default='./options/test.yml', help='Path to option YAML file.')
-    parser.add_argument('--input_dir', type=str, required=True, help='Input directory containing images')
-    parser.add_argument('--output_dir', type=str, required=True, help='Output directory for processed images')
-    args = parser.parse_args()
+    def evaluate(self, image_dir, annotation_path, iou_threshold=0.5):
+        """端到端评估：检测+识别"""
+        annotations = self.load_annotations(annotation_path)
+        total_tp, total_fp, total_fn = 0, 0, 0
+        total_char_acc = 0.0
+        total_word_acc = 0.0
+        total_samples = 0
 
-    # 加载配置文件
-    opt = option.parse(args.opt, is_train=False)
-    opt['dist'] = False
+        for img_name, gt_boxes in annotations.items():
+            img_path = os.path.join(image_dir, img_name)
+            if not os.path.exists(img_path):
+                print(f"Warning: {img_path} not found. Skipping...")
+                continue
 
-    # 创建输出目录
-    os.makedirs(args.output_dir, exist_ok=True)
+            # PaddleOCR推理
+            result = self.ocr.ocr(img_path, cls=True)
+            pred_boxes = []
+            if result is not None:
+                for line in result:
+                    if line is not None:
+                        points = np.array(line[0], dtype=np.int32).reshape(4, 2)
+                        text = line[1][0]
+                        confidence = line[1][1]
+                        pred_boxes.append({'points': points, 'text': text})
 
-    # 初始化模型
-    model = create_model(opt)
-    # 加载预训练权重
-    para = {}
-    for k, v in torch.load(opt['path']['pretrain_model_G']).items():
-        para['module.'+k] = v
-    model.netG.load_state_dict(para, strict=True)
-    model.netG.eval()
-
-    # 支持的图片格式
-    supported_ext = ['.png', '.jpg', '.jpeg', '.bmp', '.tif', '.tiff']
-    
-    # 获取文件列表（提前统计总数）
-    input_path = pathlib.Path(args.input_dir)
-    img_files = [f for f in input_path.iterdir() if f.suffix.lower() in supported_ext]
-    total_files = len(img_files)
-
-    # 初始化进度条
-    progress_bar = tqdm(total=total_files, 
-                      desc="Processing Images", 
-                      unit="image",
-                      bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]")
-
-    # 遍历处理文件
-    for img_path in img_files:
-        try:
-            # 更新进度描述
-            progress_bar.set_postfix(file=img_path.name[:15]+"...", refresh=False)
+            # 匹配预测与标注
+            matched_gt = set()
+            matched_pred = set()
             
-            # 读取图片
-            image = cv2.imread(str(img_path))
-            if image is None:
-                raise IOError(f"无法读取图像文件: {img_path}")
+            # 检测指标计算
+            for pred_idx, pred in enumerate(pred_boxes):
+                max_iou = 0.0
+                best_gt_idx = -1
+                for gt_idx, gt in enumerate(gt_boxes):
+                    if gt_idx in matched_gt:
+                        continue
+                    iou = self.calculate_iou(pred['points'], gt['points'])
+                    if iou > max_iou and iou >= iou_threshold:
+                        max_iou = iou
+                        best_gt_idx = gt_idx
+                if best_gt_idx != -1:
+                    matched_gt.add(best_gt_idx)
+                    matched_pred.add(pred_idx)
+                    # 识别指标计算
+                    gt_text = gt_boxes[best_gt_idx]['text'].lower().strip()
+                    pred_text = pred['text'].lower().strip()
+                    # 字符级准确率
+                    char_acc = 1 - edit_distance(gt_text, pred_text) / max(len(gt_text), len(pred_text))
+                    total_char_acc += char_acc
+                    # 单词级准确率
+                    if gt_text == pred_text:
+                        total_word_acc += 1
 
-            # 预处理
-            image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-            transform = transforms.ToTensor()
-            tensor_image = transform(image).unsqueeze(0)
+            # 统计TP/FP/FN
+            tp = len(matched_gt)
+            fp = len(pred_boxes) - tp
+            fn = len(gt_boxes) - tp
+            total_tp += tp
+            total_fp += fp
+            total_fn += fn
+            total_samples += len(gt_boxes)
 
-            # 模型推理
-            with torch.no_grad():
-                output = util.single_forward(model.netG, tensor_image)
+        # 计算最终指标
+        precision = total_tp / (total_tp + total_fp + 1e-9)
+        recall = total_tp / (total_tp + total_fn + 1e-9)
+        f1 = 2 * (precision * recall) / (precision + recall + 1e-9)
+        avg_char_acc = total_char_acc / total_samples if total_samples > 0 else 0
+        avg_word_acc = total_word_acc / total_samples if total_samples > 0 else 0
 
-            # 后处理
-            np_image = util.tensor2img(output)
-            np_image = cv2.cvtColor(np_image, cv2.COLOR_RGB2BGR)
-
-            # 保存结果
-            output_path = pathlib.Path(args.output_dir) / img_path.name
-            cv2.imwrite(str(output_path), np_image)
-            
-            # 更新进度条
-            progress_bar.update(1)
-            
-        except Exception as e:
-            tqdm.write(f"Error processing {img_path.name}: {str(e)}")
-            progress_bar.update(1)
-            continue
-
-    progress_bar.close()
-    print("\nProcessing completed!")
-
+        return {
+            "precision": round(precision, 4),
+            "recall": round(recall, 4),
+            "f1": round(f1, 4),
+            "char_accuracy": round(avg_char_acc, 4),
+            "word_accuracy": round(avg_word_acc, 4),
+            "total_samples": total_samples
+        }
 
 if __name__ == "__main__":
-    main()
+    # 示例用法（假设数据按FUNSD格式组织）
+    evaluator = PaddleOCREvaluator(model_type='PP-OCRv4')
+    results = evaluator.evaluate(
+        image_dir="path/to/test_images",       # 测试图片目录
+        annotation_path="path/to/annotations.json"  # 标注文件（FUNSD格式）
+    )
+    
+    print("\n===== 评估结果 =====")
+    print(f"检测精确率 (Precision): {results['precision']}")
+    print(f"检测召回率 (Recall): {results['recall']}")
+    print(f"检测F1分数: {results['f1']}")
+    print(f"字符级准确率: {results['char_accuracy']}")
+    print(f"单词级准确率: {results['word_accuracy']}")
+    print(f"总样本数: {results['total_samples']}")
