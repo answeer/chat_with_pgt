@@ -1,23 +1,25 @@
- payload_validator:
-   - SchemaValidator – Checks the JSON payload with a predefined schema
- file_bounding:
-   - EncryptionDetector
-   - FormatCheck
-   - SofwareCheck
- numeric_bounding:
-   - BinTransform
- text_bounding:
-   - ExecutableScript - This scanner is designed to detect and validate executable scripts in the text.
-   - HarmfulString - Ensure that specific harmful substrings never make it into input and output text.
-   - ProfanityCheck - This scanner ensures that there’s no profanity in any input and output text.
-   - TokenLimit - ensures that prompts do not exceed a predetermined token count, helping prevent resource-intensive operations and potential denial of service attacks on large language models.
- text_data_sanitation:
-   - PiiDetector - detect and anonymize Personally Identifiable Information (PII) in text
-   - RemoveUnicode - detect and remove non-printable, invisible Unicode characters from text.
-   - Secrets - This scanner monitors any text (input or output) and detects secrets present in the text. 
- image_bounding:
-   - BlurnessCheck
-   - ImageDPICheck
-   - ImageMemoryCheck
-   - ImageSizeCheck
+file_bounding
 
+EncryptionDetector – Detects whether files are encrypted to prevent unauthorized access to protected content.
+FormatCheck – Verifies file formats against a whitelist (e.g., allowing only PNG/PDF/DOCX) to block unsupported types.
+SoftwareCheck – Scans files for known malware signatures to block potentially harmful uploads.
+numeric_bounding
+
+BinTransform – Converts numeric inputs to binary format to mitigate risks of floating-point overflow and precision-based attacks.
+text_bounding
+
+ExecutableScript – Detects executable code snippets (e.g., JavaScript/Python) in text inputs to block code injection attempts.
+HarmfulString – Blocks malicious patterns like SQLi/XSS payloads using regex-based deny lists.
+ProfanityCheck – Identifies and filters profane, abusive, or discriminatory language using NLP models.
+TokenLimit – Enforces token count limits (e.g., ≤4096 tokens) via tokenizers to prevent resource exhaustion in LLM processing.
+text_data_sanitation
+
+PiiDetector – Detects and anonymizes Personally Identifiable Information (PII) like phone numbers, IDs, or credit card details using named entity recognition (NER).
+RemoveUnicode – Strips non-printable or invisible Unicode characters (e.g., zero-width spaces, control characters) to prevent encoding-based exploits.
+Secrets – Identifies accidental exposure of secrets (e.g., API keys, passwords) using pattern-matching rules.
+image_bounding
+
+BlurnessCheck – Rejects overly blurred images using image sharpness algorithms to ensure input quality.
+ImageDPICheck – Validates image resolution (e.g., ≥300 DPI) for compliance with quality standards.
+ImageMemoryCheck – Restricts decoded bitmap memory usage (e.g., ≤100MB) to prevent memory exhaustion attacks.
+ImageSizeCheck – Enforces maximum pixel dimensions (e.g., ≤8000x8000) to block oversized image processing.
