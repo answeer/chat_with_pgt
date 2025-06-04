@@ -1,53 +1,77 @@
 import json
 import pandas as pd
+import os
 
-# Load the JSON data
-with open(
-    r"C:\Users\1657820\Documents\datasets\funsd\dataset\testing_data\annotations\82092117.json",
-    "r",
-) as file:
-    data = json.load(file)
+# 设置输入和输出目录
+input_dir = r"C:\Users\1657820\Documents\datasets\funsd\dataset\testing_data\annotations"
+output_dir = r"C:\Users\1657820\Documents\datasets\funsd\dataset\testing_data\csv_outputs"  # 替换为你的实际输出路径
 
-# Extract data for the DataFrame
-rows = []
-for item in data["form"]:
-    box = item["box"]
-    text = item["text"]
-    rows.append(
-        {"x_min": box[0], "y_min": box[1], "x_max": box[2], "y_max": box[3], "text": text}
-    )
+# 确保输出目录存在
+os.makedirs(output_dir, exist_ok=True)
 
-# Create a DataFrame
-df = pd.DataFrame(rows)
-# Display the DataFrame
-df["y_mid"] = df["y_min"] + round((df["y_max"] + df["y_min"]) / 2)
-df["x_mid"] = df["x_min"] + round((df["x_max"] + df["x_min"]) / 2)
+def process_json_file(json_path):
+    """处理单个JSON文件并保存为CSV"""
+    with open(json_path, "r") as file:
+        data = json.load(file)
+    
+    # 提取数据
+    rows = []
+    for item in data["form"]:
+        box = item["box"]
+        text = item["text"]
+        rows.append({
+            "x_min": box[0], 
+            "y_min": box[1], 
+            "x_max": box[2], 
+            "y_max": box[3], 
+            "text": text
+        })
+    
+    df = pd.DataFrame(rows)
+    
+    # 计算中心点 (修正后的正确计算方式)
+    df["y_mid"] = (df["y_min"] + df["y_max"]) / 2
+    df["x_mid"] = (df["x_min"] + df["x_max"]) / 2
+    
+    # 分配行号
+    df["line_no"] = 0
+    line_no = 0
+    y_mids = df["y_mid"].unique()
+    y_mids.sort()
+    
+    for y_ref in y_mids:
+        if df.loc[df["y_mid"] == y_ref, "line_no"].iloc[0] > 0:
+            continue
+            
+        threshold = 0.1 * (df[df["line_no"] == 0]["y_mid"].max() - df[df["line_no"] == 0]["y_mid"].min()) or 10
+        y_min_thresh = y_ref - threshold
+        y_max_thresh = y_ref + threshold
+        
+        unassigned = df["line_no"] == 0
+        in_range = (df["y_mid"] >= y_min_thresh) & (df["y_mid"] <= y_max_thresh)
+        candidates = unassigned & in_range
+        
+        if candidates.any():
+            line_no += 1
+            df.loc[candidates, "line_no"] = line_no
+    
+    # 排序
+    df.sort_values(by=["line_no", "x_min"], inplace=True)
+    
+    # 保存CSV
+    filename = os.path.basename(json_path).replace(".json", ".csv")
+    output_path = os.path.join(output_dir, filename)
+    df.to_csv(output_path, index=False)
+    return output_path
 
-df["line_no"] = 0
+# 批量处理所有JSON文件
+for filename in os.listdir(input_dir):
+    if filename.endswith(".json"):
+        json_path = os.path.join(input_dir, filename)
+        try:
+            output_path = process_json_file(json_path)
+            print(f"成功处理: {filename} -> 保存到 {output_path}")
+        except Exception as e:
+            print(f"处理 {filename} 时出错: {str(e)}")
 
-y_mids = df["y_mid"].unique()
-y_mids.sort()
-visited_y_mid = []
-
-line_no = 0
-
-for y_mid in y_mids:
-    y_mid_min = y_mid * 0.90
-    y_mid_max = y_mid * 1.10
-    candidate = df.loc[
-        (df["y_mid"] >= y_mid_min) & (df["y_mid"] <= y_mid_max) & (df["line_no"] == 0)
-    ]
-
-    if not candidate.empty:
-        line_no += 1
-        df.loc[
-            (df["y_mid"] >= y_mid_min)
-            & (df["y_mid"] <= y_mid_max)
-            & (df["line_no"] == 0),
-            "line_no",
-        ] = line_no
-
-
-df.sort_values(by=["line_no", "x_min"], inplace=True)
-
-df.to_csv("82092117.csv", index=False)
+print("所有文件处理完成！")
