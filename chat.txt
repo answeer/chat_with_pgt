@@ -1,76 +1,22 @@
-import pandas as pd
-import numpy as np
-from itertools import zip_longest
+def char_accuracy(gt, ocr):
+    # 对齐长度（短文本补空格）
+    max_len = max(len(gt), len(ocr))
+    gt_pad = gt.ljust(max_len)
+    ocr_pad = ocr.ljust(max_len)
+    
+    # 逐字符比较
+    correct_chars = sum(1 for g, o in zip(gt_pad, ocr_pad) if g == o)
+    return correct_chars / max_len
 
-def process_gt(gt_df):
-    """处理Ground Truth数据"""
-    lines = {}
-    for _, row in gt_df.iterrows():
-        line_no = int(row['line_no'])
-        if line_no not in lines:
-            lines[line_no] = []
-        lines[line_no].append((row['xmin'], row['text']))
-    
-    # 行内按xmin排序并拼接
-    merged_lines = []
-    for line_no in sorted(lines.keys()):
-        line_texts = [text for _, text in sorted(lines[line_no], key=lambda x: x[0])]
-        merged_lines.append(" ".join(line_texts))
-    
-    return "\n".join(merged_lines)
 
-def process_ocr(ocr_df):
-    """处理OCR结果数据"""
-    # 按坐标排序
-    sorted_df = ocr_df.sort_values(by=['ymin', 'xmin'])
+def word_accuracy(gt, ocr):
+    # 按空白字符分词
+    gt_words = gt.split()
+    ocr_words = ocr.split()
     
-    # 动态行分组（y轴阈值自动计算）
-    y_coords = sorted_df['ymin'].values
-    if len(y_coords) > 1:
-        y_threshold = np.diff(y_coords).mean() * 0.5
-    else:
-        y_threshold = 10  # 默认阈值
+    # 创建词袋（保留顺序）
+    word_pairs = list(zip_longest(gt_words, ocr_words, fillvalue=""))
     
-    # 行分组
-    lines, current_line = [], []
-    last_y = None
-    
-    for _, row in sorted_df.iterrows():
-        if last_y is None or (row['ymin'] - last_y) > y_threshold:
-            if current_line:
-                lines.append(current_line)
-            current_line = []
-        current_line.append(row['text'])
-        last_y = row['ymin']
-    
-    if current_line:
-        lines.append(current_line)
-    
-    # 行内拼接
-    return "\n".join([" ".join(line) for line in lines])
-
-def evaluate_ocr(gt_path, ocr_path):
-    """主评估函数"""
-    # 读取数据
-    gt_df = pd.read_excel(gt_path)
-    ocr_df = pd.read_excel(ocr_path)
-    
-    # 处理文本
-    gt_text = process_gt(gt_df)
-    ocr_text = process_ocr(ocr_df)
-    
-    # 计算准确率
-    char_acc = char_accuracy(gt_text, ocr_text)
-    word_acc = word_accuracy(gt_text, ocr_text)
-    
-    return {
-        "char_accuracy": f"{char_acc:.4%}",
-        "word_accuracy": f"{word_acc:.4%}",
-        "gt_text": gt_text,
-        "ocr_text": ocr_text
-    }
-
-# 使用示例
-results = evaluate_ocr("ground_truth.xlsx", "ocr_results.xlsx")
-print(f"字符准确率: {results['char_accuracy']}")
-print(f"单词准确率: {results['word_accuracy']}")
+    # 统计匹配词
+    correct_words = sum(1 for gt_w, ocr_w in word_pairs if gt_w == ocr_w)
+    return correct_words / len(gt_words)
