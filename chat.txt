@@ -1,36 +1,444 @@
-x_min	y_min	x_max	y_max	conf	text
-741	2337	1108	2378	72.88	An qual Opporuniy Episyer
-792	2305	1053	2349	87.56	wwwag.state.ohus
-465	2274	1377	2310	80.90	State Oce Toner/30 Eant Broad Set/CoiutusOho 43215-3428
-420	2051	568	2081	30.32	oopifasse
-1337	2008	1602	2060	53.78	Thark yogfr.yo
-416	2008	1337	2054	74.78	original sage t at the addre beio vi t U.s.Postal Service
-422	1981	649	2012	58.68	Ftivd
-674	1973	1604	2022	58.15	ictn r,piasetity laggly byeeio ira t
-418	1945	867	1984	65.36	oogyingor ooeveyng ef ais oon
-846	1939	1599	1988	64.07	nictio in y er sricty prohabedIf yeiav
-416	1907	1595	1953	64.14	te esage to innded recipiseyo herety otifed a ay dogninio,eibudo
-420	1878	1599	1915	66.66	ader ofeiage isot i indodcipi or tpiey er aget geeiin fr deliverin
-420	1842	1601	1879	91.88	CONFIDENTIAL,AND EEMFT FROM DISCLOSURE UNDEAJPLICABLE LAW.
-418	1806	1599	1845	93.96	WHOM IT IS ADDRESSED AND MAY CONTAIN DNFORMATION THAT IS PRIVILEGED
-420	1773	1606	1809	93.96	THIS MESSAGE IS INTENDED ONLY FOR THE USE OF THE DNDIVIDUAL OR ENTITY TO
-261	1771	363	1812	83.76	NOTE:
-745	1617	1130	1660	98.18	ASSOONASPOSSIRLE
-702	1575	1168	1618	89.87	PLEASECONIACTSENDER
-448	1537	1418	1574	95.12	IFYOUDO NOTRECEIVEANVOFTHEPAGESPROPERLY
-267	1295	701	1325	93.20	SPECIALINSTRUCTIONS:
-265	1213	1373	1249	81.57	SENDER/PHONENUMBER:-JnFIynfoEds B1446-9
-265	1131	1078	1167	96.43	NUMBER OF PAGESINCLUDINGCOVERSHEET:
-263	964	798	1007	86.56	FAXNUMBER:-336L335-7392
-984	960	1513	1010	82.70	PHONENUMBER:G336L335-7361
-260	880	604	930	76.65	TO:Geergs Baroody
-754	762	1121	805	92.05	FAXNO.(614)466-5057
-674	682	1197	723	96.53	TRANSMISSION COVER SHEET
-704	644	1173	681	96.41	CONFIDENTIALFACSEMILE
-377	436	783	483	98.46	Betty D.Montgomery
-377	385	708	430	96.48	Attorney General
-263	215	901	258	84.77	RTT.GELRDMINLOFFICE FX614-456-5087
-1073	215	1246	260	75.31	Dec10.98
-1277	213	1373	260	98.47	17:45
-1435	213	1513	256	90.37	P.01
-263	1044	604	1087	70.03	DATE :1210/98
+import pandas as pd
+import numpy as np
+import re
+from itertools import zip_longest
+import matplotlib.pyplot as plt
+from collections import defaultdict
+
+def filter_empty_text(df, is_gt=False):
+    """过滤空文本并验证必要字段"""
+    # 复制数据避免修改原始DataFrame
+    df = df.copy()
+    
+    # 验证必要字段存在
+    required_gt_cols = ['line_no', 'text', 'xmin', 'ymin', 'xmax', 'ymax']
+    required_ocr_cols = ['text', 'xmin', 'ymin', 'xmax', 'ymax']
+    
+    if is_gt:
+        missing = [col for col in required_gt_cols if col not in df.columns]
+    else:
+        missing = [col for col in required_ocr_cols if col not in df.columns]
+    
+    if missing:
+        raise ValueError(f"缺少必要列: {', '.join(missing)}")
+    
+    # 过滤空文本
+    initial_count = len(df)
+    df = df[df['text'].notna() & (df['text'].str.strip() != '')]
+    filtered_count = initial_count - len(df)
+    
+    if filtered_count > 0:
+        print(f"已过滤 {filtered_count} 个空文本条目")
+    
+    return df
+
+def calculate_centers(df):
+    """计算bounding box的中心点"""
+    df = df.copy()
+    # 确保坐标是数值类型
+    for col in ['xmin', 'ymin', 'xmax', 'ymax']:
+        df[col] = pd.to_numeric(df[col], errors='coerce')
+    
+    # 计算中心点
+    df['x_center'] = (df['xmin'] + df['xmax']) / 2
+    df['y_center'] = (df['ymin'] + df['ymax']) / 2
+    return df
+
+def adaptive_line_grouping(df, tolerance_factor=0.5, min_line_height=5):
+    """
+    改进的行分组算法，减少多余换行
+    参数:
+        tolerance_factor: 容差系数 (0.4-0.6)
+        min_line_height: 最小行高阈值 (避免微小框单独成行)
+    """
+    if len(df) == 0:
+        return []
+    
+    # 计算每个框的高度
+    df = df.copy()
+    df['height'] = df['ymax'] - df['ymin']
+    
+    # 过滤高度过小的框（可能是噪声）
+    df = df[df['height'] >= min_line_height]
+    
+    if len(df) == 0:
+        return []
+    
+    # 计算平均行高
+    avg_height = df['height'].mean()
+    median_height = df['height'].median()
+    
+    # 使用中位数和平均值的加权值（更鲁棒）
+    ref_height = (avg_height * 0.3 + median_height * 0.7)
+    
+    # 容差阈值 = 参考高度 * 容差系数
+    tolerance = ref_height * tolerance_factor
+    
+    # 按y中心点排序
+    sorted_df = df.sort_values(by='y_center')
+    
+    # 改进的行分组
+    lines = []
+    current_line = []
+    last_y_center = None
+    
+    for _, row in sorted_df.iterrows():
+        current_y = row['y_center']
+        
+        # 首次处理
+        if last_y_center is None:
+            current_line.append(row)
+            last_y_center = current_y
+            continue
+        
+        # 计算与当前行中心的差异
+        y_diff = abs(current_y - last_y_center)
+        
+        # 判断是否属于当前行
+        if y_diff <= tolerance:
+            current_line.append(row)
+            
+            # 更新行中心点（高度加权平均）
+            heights = [r['height'] for r in current_line]
+            y_centers = [r['y_center'] for r in current_line]
+            last_y_center = np.average(y_centers, weights=heights)
+        
+        # 判断是否是相邻行（可能是同一段落）
+        elif y_diff <= tolerance * 2.5:
+            # 检查是否应该合并（如小写字母延伸部分）
+            current_line_max_y = max(r['ymax'] for r in current_line) if current_line else 0
+            next_line_min_y = row['ymin']
+            
+            # 如果当前行底部与下一行顶部有重叠
+            if next_line_min_y <= current_line_max_y + tolerance:
+                current_line.append(row)
+                # 更新行中心点
+                heights = [r['height'] for r in current_line]
+                y_centers = [r['y_center'] for r in current_line]
+                last_y_center = np.average(y_centers, weights=heights)
+            else:
+                # 新行开始
+                lines.append(current_line)
+                current_line = [row]
+                last_y_center = current_y
+        else:
+            # 明显的新行
+            lines.append(current_line)
+            current_line = [row]
+            last_y_center = current_y
+    
+    # 添加最后一行
+    if current_line:
+        lines.append(current_line)
+    
+    return lines
+
+def merge_short_lines(lines, max_gap_ratio=0.8):
+    """
+    合并间隔过小的相邻行
+    参数:
+        max_gap_ratio: 最大允许行间距/行高的比例
+    """
+    if len(lines) < 2:
+        return lines
+    
+    merged_lines = []
+    current_line = lines[0]
+    
+    for i in range(1, len(lines)):
+        # 计算当前行和下一行之间的间隙
+        current_max_y = max(r['ymax'] for r in current_line) if current_line else 0
+        next_min_y = min(r['ymin'] for r in lines[i]) if lines[i] else 0
+        gap = next_min_y - current_max_y
+        
+        # 计算平均行高
+        if current_line and lines[i]:
+            avg_height = (sum(r['height'] for r in current_line)/len(current_line) + \
+                        (sum(r['height'] for r in lines[i])/len(lines[i])) / 2
+        else:
+            avg_height = 10  # 默认值
+        
+        # 检查是否应该合并
+        if gap <= avg_height * max_gap_ratio:
+            # 合并行（保持顺序）
+            current_line.extend(lines[i])
+        else:
+            merged_lines.append(current_line)
+            current_line = lines[i]
+    
+    merged_lines.append(current_line)
+    return merged_lines
+
+def is_chinese(char):
+    """检查字符是否为中文"""
+    return '\u4e00' <= char <= '\u9fff'
+
+def smart_join(texts):
+    """
+    智能连接文本块，减少多余空格
+    处理以下情况：
+     1. 标点符号后不应有空格
+     2. 中文文本不应有空格
+     3. 连续数字/字母应保持连接
+    """
+    if not texts:
+        return ""
+    
+    # 特殊处理：如果整个文本是中文，直接连接
+    all_chinese = all(is_chinese(char) for text in texts for char in text)
+    if all_chinese:
+        return "".join(texts)
+    
+    result = texts[0].strip()
+    
+    for i in range(1, len(texts)):
+        prev_text = texts[i-1].strip()
+        curr_text = texts[i].strip()
+        
+        if not prev_text or not curr_text:
+            result += " " + curr_text
+            continue
+        
+        prev_last = prev_text[-1]
+        curr_first = curr_text[0]
+        
+        # 检查是否需要添加空格
+        add_space = True
+        
+        # 前一个以标点结束
+        if prev_last in ',.;:?!。，、；：？！）】”':
+            add_space = False
+        
+        # 当前以标点开始
+        elif curr_first in '([{（【“':
+            add_space = False
+        
+        # 中文文本（前后都是中文字符）
+        elif is_chinese(prev_last) and is_chinese(curr_first):
+            add_space = False
+        
+        # 数字/字母连续
+        elif prev_last.isalnum() and curr_first.isalnum():
+            add_space = True
+        
+        # 特殊符号处理（如$、#等）
+        elif not prev_last.isalnum() and not curr_first.isalnum():
+            add_space = False
+        
+        result += " " + curr_text if add_space else curr_text
+    
+    return result
+
+def process_gt(gt_df):
+    """处理Ground Truth数据"""
+    # 过滤空文本
+    gt_df = filter_empty_text(gt_df, is_gt=True)
+    
+    # 确保line_no是整数
+    gt_df['line_no'] = gt_df['line_no'].astype(int)
+    
+    # 计算中心点
+    gt_df = calculate_centers(gt_df)
+    
+    # 按行号分组
+    grouped = gt_df.groupby('line_no')
+    
+    merged_lines = []
+    for line_no, group in sorted(grouped, key=lambda x: x[0]):
+        # 按x中心点排序并拼接文本
+        sorted_group = group.sort_values(by='x_center')
+        line_text = smart_join(sorted_group['text'].tolist())
+        merged_lines.append(line_text)
+    
+    return "\n".join(merged_lines)
+
+def process_ocr(ocr_df, tolerance_factor=0.5, min_line_height=5, max_gap_ratio=0.8, visualize=False):
+    """处理OCR结果数据"""
+    # 过滤空文本
+    ocr_df = filter_empty_text(ocr_df)
+    
+    # 计算中心点
+    ocr_df = calculate_centers(ocr_df)
+    
+    # 自适应行分组
+    lines = adaptive_line_grouping(
+        ocr_df, 
+        tolerance_factor=tolerance_factor,
+        min_line_height=min_line_height
+    )
+    
+    # 可视化行分组（可选）
+    if visualize and lines:
+        visualize_line_groups(lines, "行分组结果")
+    
+    # 后处理：合并间隔过小的行
+    if len(lines) > 1:
+        lines = merge_short_lines(lines, max_gap_ratio=max_gap_ratio)
+        if visualize:
+            visualize_line_groups(lines, "合并后的行")
+    
+    # 处理每行内的文本
+    merged_lines = []
+    for line in lines:
+        # 按x中心点排序
+        sorted_line = sorted(line, key=lambda r: r['x_center'])
+        
+        # 拼接文本（智能添加空格）
+        line_text = smart_join([r['text'] for r in sorted_line])
+        merged_lines.append(line_text)
+    
+    return "\n".join(merged_lines)
+
+def visualize_line_groups(lines, title="行分组可视化"):
+    """
+    可视化行分组结果
+    """
+    try:
+        plt.figure(figsize=(15, 10))
+        colors = plt.cm.tab10(np.linspace(0, 1, len(lines)))
+        
+        for i, line in enumerate(lines):
+            xs = [r['x_center'] for r in line]
+            ys = [r['y_center'] for r in line]
+            plt.scatter(xs, ys, color=colors[i], s=50, label=f'行 {i+1}')
+            
+            # 添加文本框
+            for r in line:
+                plt.text(r['x_center'], r['y_center'], r['text'], 
+                        fontsize=8, ha='center', va='center',
+                        bbox=dict(facecolor='white', alpha=0.7, edgecolor='none'))
+        
+        plt.gca().invert_yaxis()  # 反转y轴（图像坐标系）
+        plt.title(title)
+        plt.xlabel('X 中心点')
+        plt.ylabel('Y 中心点')
+        plt.legend()
+        plt.grid(True, linestyle='--', alpha=0.7)
+        plt.tight_layout()
+        plt.show()
+    except Exception as e:
+        print(f"可视化失败: {str(e)}")
+
+def char_accuracy(gt, ocr):
+    """计算字符级准确率"""
+    if not gt and not ocr:
+        return 1.0  # 双方都为空，准确率100%
+    
+    # 对齐长度（短文本补空格）
+    max_len = max(len(gt), len(ocr))
+    gt_pad = gt.ljust(max_len)
+    ocr_pad = ocr.ljust(max_len)
+    
+    # 逐字符比较
+    correct_chars = sum(1 for g, o in zip(gt_pad, ocr_pad) if g == o)
+    return correct_chars / max_len if max_len > 0 else 0.0
+
+def word_accuracy(gt, ocr):
+    """计算单词级准确率"""
+    # 按空白字符分词
+    gt_words = re.findall(r'\S+|\n', gt)  # 保留换行符作为分隔
+    ocr_words = re.findall(r'\S+|\n', ocr)
+    
+    if not gt_words:
+        return 0.0 if ocr_words else 1.0  # 处理空文本情况
+    
+    # 创建词袋（保留顺序）
+    word_pairs = list(zip_longest(gt_words, ocr_words, fillvalue=""))
+    
+    # 统计匹配词
+    correct_words = sum(1 for gt_w, ocr_w in word_pairs if gt_w == ocr_w)
+    return correct_words / len(gt_words)
+
+def evaluate_ocr(gt_path, ocr_path, 
+                tolerance_factor=0.5, 
+                min_line_height=5,
+                max_gap_ratio=0.8,
+                visualize=False):
+    """主评估函数"""
+    try:
+        # 读取数据
+        gt_df = pd.read_excel(gt_path)
+        ocr_df = pd.read_excel(ocr_path)
+        
+        print(f"Ground Truth 原始条目数: {len(gt_df)}")
+        print(f"OCR 结果原始条目数: {len(ocr_df)}")
+        
+        # 处理文本
+        gt_text = process_gt(gt_df)
+        ocr_text = process_ocr(ocr_df, 
+                              tolerance_factor=tolerance_factor,
+                              min_line_height=min_line_height,
+                              max_gap_ratio=max_gap_ratio,
+                              visualize=visualize)
+        
+        # 输出换行符统计
+        gt_newlines = gt_text.count('\n')
+        ocr_newlines = ocr_text.count('\n')
+        print(f"\nGround Truth 换行符数量: {gt_newlines}")
+        print(f"OCR 结果换行符数量: {ocr_newlines}")
+        print(f"换行符差异: {abs(gt_newlines - ocr_newlines)}")
+        
+        print("\n处理后的Ground Truth文本:")
+        print(gt_text[:500] + "..." if len(gt_text) > 500 else gt_text)
+        
+        print("\n处理后的OCR文本:")
+        print(ocr_text[:500] + "..." if len(ocr_text) > 500 else ocr_text)
+        
+        # 计算准确率
+        char_acc = char_accuracy(gt_text, ocr_text)
+        word_acc = word_accuracy(gt_text, ocr_text)
+        
+        return {
+            "char_accuracy": f"{char_acc:.4%}",
+            "word_accuracy": f"{word_acc:.4%}",
+            "gt_text": gt_text,
+            "ocr_text": ocr_text,
+            "gt_length": len(gt_text),
+            "ocr_length": len(ocr_text),
+            "gt_newlines": gt_newlines,
+            "ocr_newlines": ocr_newlines
+        }
+    
+    except Exception as e:
+        import traceback
+        print(f"处理过程中发生错误: {str(e)}")
+        traceback.print_exc()
+        return {
+            "error": str(e),
+            "char_accuracy": "0.00%",
+            "word_accuracy": "0.00%"
+        }
+
+# 使用示例
+if __name__ == "__main__":
+    # 参数说明：
+    # tolerance_factor: 行分组容差系数 (0.4-0.6)
+    # min_line_height: 最小行高 (过滤小框)
+    # max_gap_ratio: 最大行间隙/行高比例 (用于合并行)
+    # visualize: 是否可视化行分组结果
+    
+    results = evaluate_ocr(
+        "ground_truth.xlsx", 
+        "ocr_results.xlsx",
+        tolerance_factor=0.5,
+        min_line_height=5,
+        max_gap_ratio=0.8,
+        visualize=True  # 设为False禁用可视化
+    )
+    
+    if "error" not in results:
+        print("\n===== 评估结果 =====")
+        print(f"字符准确率: {results['char_accuracy']}")
+        print(f"单词准确率: {results['word_accuracy']}")
+        print(f"\n文本长度统计:")
+        print(f"Ground Truth 总字符数: {results['gt_length']} (含 {results['gt_newlines']} 个换行符)")
+        print(f"OCR 结果总字符数: {results['ocr_length']} (含 {results['ocr_newlines']} 个换行符)")
+        
+        # 保存处理后的文本用于人工检查
+        with open("processed_gt.txt", "w", encoding="utf-8") as f:
+            f.write(results["gt_text"])
+        
+        with open("processed_ocr.txt", "w", encoding="utf-8") as f:
+            f.write(results["ocr_text"])
+        
+        print("\n处理后的文本已保存为 processed_gt.txt 和 processed_ocr.txt")
