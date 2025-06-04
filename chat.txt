@@ -1,4 +1,108 @@
+import pandas as pd
+import numpy as np
+from itertools import zip_longest
+
+def filter_empty_text(df, is_gt=False):
+    """过滤空文本并验证必要字段"""
+    # 复制数据避免修改原始DataFrame
+    df = df.copy()
+    
+    # 验证必要字段存在
+    required_gt_cols = ['line_no', 'text', 'xmin']
+    required_ocr_cols = ['text', 'xmin', 'ymin']
+    
+    if is_gt:
+        missing = [col for col in required_gt_cols if col not in df.columns]
+    else:
+        missing = [col for col in required_ocr_cols if col not in df.columns]
+    
+    if missing:
+        raise ValueError(f"缺少必要列: {', '.join(missing)}")
+    
+    # 过滤空文本
+    initial_count = len(df)
+    df = df[df['text'].notna() & (df['text'].str.strip() != '')]
+    filtered_count = initial_count - len(df)
+    
+    if filtered_count > 0:
+        print(f"已过滤 {filtered_count} 个空文本条目")
+    
+    return df
+
+def process_gt(gt_df):
+    """处理Ground Truth数据"""
+    # 过滤空文本
+    gt_df = filter_empty_text(gt_df, is_gt=True)
+    
+    # 确保line_no是整数
+    gt_df['line_no'] = gt_df['line_no'].astype(int)
+    
+    lines = {}
+    for _, row in gt_df.iterrows():
+        line_no = row['line_no']
+        if line_no not in lines:
+            lines[line_no] = []
+        # 存储xmin和文本
+        lines[line_no].append((row['xmin'], row['text']))
+    
+    # 行内按xmin排序并拼接
+    merged_lines = []
+    for line_no in sorted(lines.keys()):
+        # 按xmin排序并提取文本
+        sorted_line = sorted(lines[line_no], key=lambda x: x[0])
+        line_texts = [text for _, text in sorted_line]
+        merged_lines.append(" ".join(line_texts))
+    
+    return "\n".join(merged_lines)
+
+def process_ocr(ocr_df):
+    """处理OCR结果数据"""
+    # 过滤空文本
+    ocr_df = filter_empty_text(ocr_df)
+    
+    # 按坐标排序
+    sorted_df = ocr_df.sort_values(by=['ymin', 'xmin'])
+    
+    # 动态行分组（y轴阈值自动计算）
+    y_coords = sorted_df['ymin'].values
+    
+    if len(y_coords) == 0:
+        return ""  # 处理空DataFrame情况
+    
+    if len(y_coords) > 1:
+        # 计算行高阈值：平均行高的50%
+        y_threshold = np.diff(y_coords).mean() * 0.5
+    else:
+        y_threshold = 10  # 默认阈值
+    
+    # 行分组
+    lines, current_line = [], []
+    last_y = None
+    
+    for _, row in sorted_df.iterrows():
+        current_y = row['ymin']
+        
+        # 检查是否为新行
+        if last_y is None or (current_y - last_y) > y_threshold:
+            if current_line:
+                lines.append(current_line)
+            current_line = []
+        
+        current_line.append(row['text'])
+        last_y = current_y
+    
+    # 添加最后一行
+    if current_line:
+        lines.append(current_line)
+    
+    # 行内拼接
+    return "\n".join([" ".join(line) for line in lines])
+
 def char_accuracy(gt, ocr):
+    """计算字符级准确率"""
+    if not gt and not ocr:
+        return 1.0  # 双方都为空，准确率100%
+    
     # 对齐长度（短文本补空格）
     max_len = max(len(gt), len(ocr))
     gt_pad = gt.ljust(max_len)
@@ -6,13 +110,16 @@ def char_accuracy(gt, ocr):
     
     # 逐字符比较
     correct_chars = sum(1 for g, o in zip(gt_pad, ocr_pad) if g == o)
-    return correct_chars / max_len
-
+    return correct_chars / max_len if max_len > 0 else 0.0
 
 def word_accuracy(gt, ocr):
+    """计算单词级准确率"""
     # 按空白字符分词
     gt_words = gt.split()
     ocr_words = ocr.split()
+    
+    if not gt_words:
+        return 0.0 if ocr_words else 1.0  # 处理空文本情况
     
     # 创建词袋（保留顺序）
     word_pairs = list(zip_longest(gt_words, ocr_words, fillvalue=""))
@@ -20,3 +127,52 @@ def word_accuracy(gt, ocr):
     # 统计匹配词
     correct_words = sum(1 for gt_w, ocr_w in word_pairs if gt_w == ocr_w)
     return correct_words / len(gt_words)
+
+def evaluate_ocr(gt_path, ocr_path):
+    """主评估函数"""
+    try:
+        # 读取数据
+        gt_df = pd.read_excel(gt_path)
+        ocr_df = pd.read_excel(ocr_path)
+        
+        print(f"Ground Truth 原始条目数: {len(gt_df)}")
+        print(f"OCR 结果原始条目数: {len(ocr_df)}")
+        
+        # 处理文本
+        gt_text = process_gt(gt_df)
+        ocr_text = process_ocr(ocr_df)
+        
+        print("\n处理后的Ground Truth文本:")
+        print(gt_text[:500] + "..." if len(gt_text) > 500 else gt_text)
+        
+        print("\n处理后的OCR文本:")
+        print(ocr_text[:500] + "..." if len(ocr_text) > 500 else ocr_text)
+        
+        # 计算准确率
+        char_acc = char_accuracy(gt_text, ocr_text)
+        word_acc = word_accuracy(gt_text, ocr_text)
+        
+        return {
+            "char_accuracy": f"{char_acc:.4%}",
+            "word_accuracy": f"{word_acc:.4%}",
+            "gt_text": gt_text,
+            "ocr_text": ocr_text
+        }
+    
+    except Exception as e:
+        print(f"处理过程中发生错误: {str(e)}")
+        return {
+            "error": str(e),
+            "char_accuracy": "0.00%",
+            "word_accuracy": "0.00%"
+        }
+
+# 使用示例
+if __name__ == "__main__":
+    results = evaluate_ocr("ground_truth.xlsx", "ocr_results.xlsx")
+    if "error" not in results:
+        print("\n评估结果:")
+        print(f"字符准确率: {results['char_accuracy']}")
+        print(f"单词准确率: {results['word_accuracy']}")
+        print(f"Ground Truth 总字符数: {len(results['gt_text'])}")
+        print(f"OCR 结果总字符数: {len(results['ocr_text'])}")
