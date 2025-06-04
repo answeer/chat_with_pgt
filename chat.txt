@@ -1,25 +1,76 @@
-file_bounding
+import pandas as pd
+import numpy as np
+from itertools import zip_longest
 
-EncryptionDetector – Detects whether files are encrypted to prevent unauthorized access to protected content.
-FormatCheck – Verifies file formats against a whitelist (e.g., allowing only PNG/PDF/DOCX) to block unsupported types.
-SoftwareCheck – Scans files for known malware signatures to block potentially harmful uploads.
-numeric_bounding
+def process_gt(gt_df):
+    """处理Ground Truth数据"""
+    lines = {}
+    for _, row in gt_df.iterrows():
+        line_no = int(row['line_no'])
+        if line_no not in lines:
+            lines[line_no] = []
+        lines[line_no].append((row['xmin'], row['text']))
+    
+    # 行内按xmin排序并拼接
+    merged_lines = []
+    for line_no in sorted(lines.keys()):
+        line_texts = [text for _, text in sorted(lines[line_no], key=lambda x: x[0])]
+        merged_lines.append(" ".join(line_texts))
+    
+    return "\n".join(merged_lines)
 
-BinTransform – Converts numeric inputs to binary format to mitigate risks of floating-point overflow and precision-based attacks.
-text_bounding
+def process_ocr(ocr_df):
+    """处理OCR结果数据"""
+    # 按坐标排序
+    sorted_df = ocr_df.sort_values(by=['ymin', 'xmin'])
+    
+    # 动态行分组（y轴阈值自动计算）
+    y_coords = sorted_df['ymin'].values
+    if len(y_coords) > 1:
+        y_threshold = np.diff(y_coords).mean() * 0.5
+    else:
+        y_threshold = 10  # 默认阈值
+    
+    # 行分组
+    lines, current_line = [], []
+    last_y = None
+    
+    for _, row in sorted_df.iterrows():
+        if last_y is None or (row['ymin'] - last_y) > y_threshold:
+            if current_line:
+                lines.append(current_line)
+            current_line = []
+        current_line.append(row['text'])
+        last_y = row['ymin']
+    
+    if current_line:
+        lines.append(current_line)
+    
+    # 行内拼接
+    return "\n".join([" ".join(line) for line in lines])
 
-ExecutableScript – Detects executable code snippets (e.g., JavaScript/Python) in text inputs to block code injection attempts.
-HarmfulString – Blocks malicious patterns like SQLi/XSS payloads using regex-based deny lists.
-ProfanityCheck – Identifies and filters profane, abusive, or discriminatory language using NLP models.
-TokenLimit – Enforces token count limits (e.g., ≤4096 tokens) via tokenizers to prevent resource exhaustion in LLM processing.
-text_data_sanitation
+def evaluate_ocr(gt_path, ocr_path):
+    """主评估函数"""
+    # 读取数据
+    gt_df = pd.read_excel(gt_path)
+    ocr_df = pd.read_excel(ocr_path)
+    
+    # 处理文本
+    gt_text = process_gt(gt_df)
+    ocr_text = process_ocr(ocr_df)
+    
+    # 计算准确率
+    char_acc = char_accuracy(gt_text, ocr_text)
+    word_acc = word_accuracy(gt_text, ocr_text)
+    
+    return {
+        "char_accuracy": f"{char_acc:.4%}",
+        "word_accuracy": f"{word_acc:.4%}",
+        "gt_text": gt_text,
+        "ocr_text": ocr_text
+    }
 
-PiiDetector – Detects and anonymizes Personally Identifiable Information (PII) like phone numbers, IDs, or credit card details using named entity recognition (NER).
-RemoveUnicode – Strips non-printable or invisible Unicode characters (e.g., zero-width spaces, control characters) to prevent encoding-based exploits.
-Secrets – Identifies accidental exposure of secrets (e.g., API keys, passwords) using pattern-matching rules.
-image_bounding
-
-BlurnessCheck – Rejects overly blurred images using image sharpness algorithms to ensure input quality.
-ImageDPICheck – Validates image resolution (e.g., ≥300 DPI) for compliance with quality standards.
-ImageMemoryCheck – Restricts decoded bitmap memory usage (e.g., ≤100MB) to prevent memory exhaustion attacks.
-ImageSizeCheck – Enforces maximum pixel dimensions (e.g., ≤8000x8000) to block oversized image processing.
+# 使用示例
+results = evaluate_ocr("ground_truth.xlsx", "ocr_results.xlsx")
+print(f"字符准确率: {results['char_accuracy']}")
+print(f"单词准确率: {results['word_accuracy']}")
