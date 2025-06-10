@@ -1,656 +1,151 @@
 import pandas as pd
 import numpy as np
-import re
-import os
-import time
-from tqdm import tqdm
-import matplotlib.pyplot as plt
-import json
-from scipy.spatial import distance
-from sklearn.cluster import DBSCAN
-from collections import defaultdict
 
-# 配置参数
-class Config:
-    # 文件路径配置
-    GT_FOLDER = "path/to/ground_truth_folder"  # 包含所有标注Excel文件的文件夹
-    OCR_FOLDER = "path/to/ocr_results_folder"  # 包含所有识别结果Excel文件的文件夹
-    OUTPUT_DIR = "evaluation_results"  # 输出结果目录
+def calculate_overlap(box1, box2, axis='y'):
+    """计算两个框在指定轴上的重叠比例"""
+    if axis == 'y':
+        a_min, a_max = box1['ymin'], box1['ymax']
+        b_min, b_max = box2['ymin'], box2['ymax']
+    else:  # x axis
+        a_min, a_max = box1['xmin'], box1['xmax']
+        b_min, b_max = box2['xmin'], box2['xmax']
     
-    # 区域分割参数
-    REGION_DISTANCE_THRESHOLD = 50  # 区域分割距离阈值(像素)
-    MIN_REGION_SIZE = 3  # 最小区域大小(文本框数量)
-    LINE_DISTANCE_THRESHOLD = 20  # 行内文本距离阈值(像素)
+    # 计算重叠部分
+    overlap_min = max(a_min, b_min)
+    overlap_max = min(a_max, b_max)
+    overlap = max(0, overlap_max - overlap_min)
     
-    # 处理参数
-    TOLERANCE_FACTOR = 0.5  # 行分组容差系数
-    MIN_LINE_HEIGHT = 5     # 最小行高阈值
-    VISUALIZE = False       # 是否可视化处理过程
+    # 计算两个框中较小框的长度
+    min_length = min(a_max - a_min, b_max - b_min)
     
-    # 评估选项
-    DATASET_LEVEL = True    # 是否计算数据集级准确率
-    SAVE_PER_IMAGE_RESULTS = True  # 是否保存每张图片的评估结果
-    
-    # 其他设置
-    EXCLUDE_IMAGES = []     # 要排除的图像ID列表
-    MAX_IMAGES = None       # 最大处理图像数 (None表示无限制)
+    return overlap / min_length if min_length > 0 else 0
 
-# 确保输出目录存在
-os.makedirs(Config.OUTPUT_DIR, exist_ok=True)
-
-def filter_empty_text(df, is_gt=False):
-    """过滤空文本并验证必要字段"""
-    # 复制数据避免修改原始DataFrame
-    df = df.copy()
-    
-    # 验证必要字段存在
-    required_gt_cols = ['line_no', 'text', 'xmin', 'ymin', 'xmax', 'ymax']
-    required_ocr_cols = ['text', 'xmin', 'ymin', 'xmax', 'ymax']
-    
-    if is_gt:
-        missing = [col for col in required_gt_cols if col not in df.columns]
-    else:
-        missing = [col for col in required_ocr_cols if col not in df.columns]
-    
-    if missing:
-        raise ValueError(f"缺少必要列: {', '.join(missing)}")
-    
-    # 过滤空文本
-    initial_count = len(df)
-    df = df[df['text'].notna() & (df['text'].str.strip() != '')]
-    filtered_count = initial_count - len(df)
-    
-    if filtered_count > 0:
-        print(f"已过滤 {filtered_text_count} 个空文本条目")
-    
-    return df
-
-def calculate_centers(df):
-    """计算bounding box的中心点"""
-    df = df.copy()
-    # 确保坐标是数值类型
-    for col in ['xmin', 'ymin', 'xmax', 'ymax']:
-        df[col] = pd.to_numeric(df[col], errors='coerce')
-    
-    # 计算中心点
-    df['x_center'] = (df['xmin'] + df['xmax']) / 2
-    df['y_center'] = (df['ymin'] + df['ymax']) / 2
-    return df
-
-def is_chinese(char):
-    """检查字符是否为中文"""
-    return '\u4e00' <= char <= '\u9fff'
-
-def smart_join(texts):
-    """
-    智能连接文本块，减少多余空格
-    处理以下情况：
-     1. 标点符号后不应有空格
-     2. 中文文本不应有空格
-     3. 连续数字/字母应保持连接
-    """
-    if not texts:
-        return ""
-    
-    # 特殊处理：如果整个文本是中文，直接连接
-    all_chinese = all(is_chinese(char) for text in texts for char in text)
-    if all_chinese:
-        return "".join(texts)
-    
-    result = texts[0].strip()
-    
-    for i in range(1, len(texts)):
-        prev_text = texts[i-1].strip()
-        curr_text = texts[i].strip()
+def group_text_blocks(boxes):
+    """将文本框分组为水平行或垂直列"""
+    # 首先处理水平文本
+    boxes.sort(key=lambda b: (b['ymin'], b['xmin']))
+    horizontal_groups = []
+    while boxes:
+        current = boxes.pop(0)
+        group = [current]
         
-        if not prev_text or not curr_text:
-            result += " " + curr_text
+        # 向右查找水平行
+        i = 0
+        while i < len(boxes):
+            box = boxes[i]
+            y_overlap = calculate_overlap(current, box, 'y')
+            x_proximity = (box['xmin'] - current['xmax']) / (current['xmax'] - current['xmin']) if (current['xmax'] - current['xmin']) > 0 else 0
+            
+            if y_overlap > 0.6 and x_proximity < 0.5:  # 水平行条件
+                group.append(box)
+                current = box
+                boxes.pop(i)
+            else:
+                i += 1
+        
+        # 添加到水平组
+        horizontal_groups.append(group)
+    
+    # 处理竖排文本
+    all_boxes = [box for group in horizontal_groups for box in group]
+    all_boxes.sort(key=lambda b: (b['xmin'], b['ymin']))
+    vertical_groups = []
+    
+    # 寻找垂直列
+    for box in all_boxes:
+        # 检查是否已分组
+        grouped = any(box in group for group in vertical_groups)
+        if grouped:
             continue
+            
+        # 新垂直列
+        col = [box]
+        current = box
         
-        prev_last = prev_text[-1]
-        curr_first = curr_text[0]
+        # 向下查找垂直列
+        for other in all_boxes:
+            if other == box or any(other in group for group in vertical_groups):
+                continue
+                
+            x_overlap = calculate_overlap(current, other, 'x')
+            y_proximity = (other['ymin'] - current['ymax']) / (current['ymax'] - current['ymin']) if (current['ymax'] - current['ymin']) > 0 else 0
+            
+            if x_overlap > 0.6 and y_proximity < 0.5:  # 垂直列条件
+                col.append(other)
+                current = other
         
-        # 检查是否需要添加空格
-        add_space = True
+        vertical_groups.append(col)
+    
+    return horizontal_groups, vertical_groups
+
+def merge_text(blocks, orientation='horizontal'):
+    """合并块内文本并按正确顺序输出"""
+    result = []
+    
+    for block in blocks:
+        # 按阅读顺序排序
+        if orientation == 'horizontal':
+            block.sort(key=lambda b: b['xmin'])
+        else:  # vertical
+            block.sort(key=lambda b: b['ymin'])
         
-        # 前一个以标点结束
-        if prev_last in ',.;:?!。，、；：？！）】”':
-            add_space = False
+        # 合并文本
+        block_text = ''.join(b['text'] for b in block)
         
-        # 当前以标点开始
-        elif curr_first in '([{（【“':
-            add_space = False
+        # 计算整体边界
+        coords = {
+            'xmin': min(b['xmin'] for b in block),
+            'ymin': min(b['ymin'] for b in block),
+            'xmax': max(b['xmax'] for b in block),
+            'ymax': max(b['ymax'] for b in block)
+        }
         
-        # 中文文本（前后都是中文字符）
-        elif is_chinese(prev_last) and is_chinese(curr_first):
-            add_space = False
-        
-        # 数字/字母连续
-        elif prev_last.isalnum() and curr_first.isalnum():
-            add_space = True
-        
-        # 特殊符号处理（如$、#等）
-        elif not prev_last.isalnum() and not curr_first.isalnum():
-            add_space = False
-        
-        result += " " + curr_text if add_space else curr_text
+        result.append((block_text, coords, orientation))
     
     return result
 
-def group_into_regions(df, distance_threshold=50, min_region_size=3, line_distance_threshold=20):
-    """
-    将文本框分组到不同区域
-    参数:
-        df: 包含文本框坐标的DataFrame
-        distance_threshold: 区域分割距离阈值(像素)
-        min_region_size: 最小区域大小(文本框数量)
-        line_distance_threshold: 行内文本距离阈值(像素)
-    """
-    if len(df) == 0:
-        return []
+def process_excel(file_path):
+    """处理Excel文件并返回文本块"""
+    # 读取Excel数据
+    df = pd.read_excel(file_path)
     
-    # 计算每个文本框的中心点
-    df = calculate_centers(df)
-    centers = df[['x_center', 'y_center']].values
+    # 确保列名正确
+    required_columns = ['xmin', 'ymin', 'xmax', 'ymax', 'text']
+    if not set(required_columns).issubset(df.columns):
+        missing = set(required_columns) - set(df.columns)
+        raise ValueError(f"Excel缺少必要列: {missing}")
     
-    # 使用DBSCAN聚类算法分组区域
-    db = DBSCAN(eps=distance_threshold, min_samples=min_region_size).fit(centers)
-    labels = db.labels_
+    # 转换为字典列表
+    boxes = df.to_dict('records')
     
-    # 获取唯一区域标签
-    unique_labels = set(labels)
+    # 分组文本块
+    horizontal_blocks, vertical_blocks = group_text_blocks(boxes)
     
-    # 排除噪声点（标签为-1）
-    if -1 in unique_labels:
-        unique_labels.remove(-1)
+    # 合并文本
+    horizontal_results = merge_text(horizontal_blocks, 'horizontal')
+    vertical_results = merge_text(vertical_blocks, 'vertical')
     
-    regions = []
-    
-    # 处理每个区域
-    for label in unique_labels:
-        # 获取当前区域的所有文本框
-        region_indices = np.where(labels == label)[0]
-        region_boxes = df.iloc[region_indices].copy()
-        
-        # 计算区域中心点
-        region_center_x = region_boxes['x_center'].mean()
-        region_center_y = region_boxes['y_center'].mean()
-        
-        # 将区域内的文本框分组到行
-        lines = group_into_lines(region_boxes, line_distance_threshold)
-        
-        # 处理每行文本
-        region_text_lines = []
-        for line_boxes in lines:
-            # 按x坐标排序行内文本框
-            sorted_line = line_boxes.sort_values(by='x_center')
-            # 拼接文本（智能添加空格）
-            line_text = smart_join(sorted_line['text'].tolist())
-            region_text_lines.append(line_text)
-        
-        # 组合区域内的所有行
-        region_text = " ".join(region_text_lines)
-        
-        regions.append({
-            "text": region_text,
-            "center_x": region_center_x,
-            "center_y": region_center_y,
-            "box_count": len(region_boxes)
-        })
-    
-    # 按位置排序区域（从上到下，从左到右）
-    regions.sort(key=lambda r: (r['center_y'], r['center_x']))
-    
-    return [r['text'] for r in regions]
+    return horizontal_results + vertical_results
 
-def group_into_lines(df, distance_threshold=20):
-    """
-    将区域内的文本框分组到行
-    参数:
-        df: 包含文本框坐标的DataFrame
-        distance_threshold: 行内文本距离阈值(像素)
-    """
-    if len(df) == 0:
-        return []
-    
-    # 计算每个文本框的中心点
-    centers = df[['x_center', 'y_center']].values
-    
-    # 使用DBSCAN聚类算法分组行
-    db = DBSCAN(eps=distance_threshold, min_samples=1).fit(centers)
-    labels = db.labels_
-    
-    # 获取唯一行标签
-    unique_labels = set(labels)
-    
-    lines = []
-    
-    # 处理每行
-    for label in unique_labels:
-        # 获取当前行的所有文本框
-        line_indices = np.where(labels == label)[0]
-        line_boxes = df.iloc[line_indices]
-        lines.append(line_boxes)
-    
-    # 按y坐标排序行（从上到下）
-    lines.sort(key=lambda boxes: boxes['y_center'].mean())
-    
-    return lines
+def generate_output(blocks):
+    """生成格式化的输出结果"""
+    output_lines = []
+    for i, (text, coords, orientation) in enumerate(blocks, 1):
+        orientation_str = "水平行" if orientation == 'horizontal' else "垂直列"
+        output_lines.append(f"块 #{i} ({orientation_str}): {text}")
+        output_lines.append(f"坐标范围: xmin={coords['xmin']}, ymin={coords['ymin']}, "
+                            f"xmax={coords['xmax']}, ymax={coords['ymax']}")
+        output_lines.append("-" * 70)
+    return "\n".join(output_lines)
 
-def process_gt(gt_df):
-    """处理Ground Truth数据 - 分区域组合文本"""
-    # 过滤空文本
-    gt_df = filter_empty_text(gt_df, is_gt=True)
-    
-    # 确保line_no是整数
-    if 'line_no' in gt_df.columns:
-        gt_df['line_no'] = gt_df['line_no'].astype(int)
-    
-    # 分区域组合文本
-    regions = group_into_regions(
-        gt_df,
-        distance_threshold=Config.REGION_DISTANCE_THRESHOLD,
-        min_region_size=Config.MIN_REGION_SIZE,
-        line_distance_threshold=Config.LINE_DISTANCE_THRESHOLD
-    )
-    
-    # 组合所有区域文本
-    return "\n".join(regions)
-
-def process_ocr(ocr_df):
-    """处理OCR结果数据 - 分区域组合文本"""
-    # 过滤空文本
-    ocr_df = filter_empty_text(ocr_df)
-    
-    # 分区域组合文本
-    regions = group_into_regions(
-        ocr_df,
-        distance_threshold=Config.REGION_DISTANCE_THRESHOLD,
-        min_region_size=Config.MIN_REGION_SIZE,
-        line_distance_threshold=Config.LINE_DISTANCE_THRESHOLD
-    )
-    
-    # 组合所有区域文本
-    return "\n".join(regions)
-
-def char_accuracy(gt, ocr):
-    """使用编辑距离计算字符级准确率（优化内存）"""
-    if not gt and not ocr:
-        return 1.0
-    
-    n, m = len(gt), len(ocr)
-    
-    # 特殊情况处理
-    if n == 0:
-        return 0.0
-    if m == 0:
-        return 0.0
-    
-    # 使用两行数组优化内存
-    prev = list(range(m + 1))
-    curr = [0] * (m + 1)
-    
-    for i in range(1, n + 1):
-        curr[0] = i
-        for j in range(1, m + 1):
-            cost = 0 if gt[i - 1] == ocr[j - 1] else 1
-            curr[j] = min(
-                prev[j] + 1,        # 删除
-                curr[j - 1] + 1,    # 插入
-                prev[j - 1] + cost   # 替换
-            )
-        prev, curr = curr, prev  # 交换数组
-    
-    edit_distance = prev[m]
-    max_len = max(n, m)
-    return 1.0 - (edit_distance / max_len)
-
-def word_accuracy(gt, ocr):
-    """使用编辑距离计算单词级准确率（优化内存）"""
-    gt_words = gt.split()
-    ocr_words = ocr.split()
-    
-    if not gt_words and not ocr_words:
-        return 1.0
-    
-    n, m = len(gt_words), len(ocr_words)
-    
-    # 特殊情况处理
-    if n == 0:
-        return 0.0
-    if m == 0:
-        return 0.0
-    
-    # 使用两行数组优化内存
-    prev = list(range(m + 1))
-    curr = [0] * (m + 1)
-    
-    for i in range(1, n + 1):
-        curr[0] = i
-        for j in range(1, m + 1):
-            cost = 0 if gt_words[i - 1] == ocr_words[j - 1] else 1
-            curr[j] = min(
-                prev[j] + 1,        # 删除
-                curr[j - 1] + 1,    # 插入
-                prev[j - 1] + cost   # 替换
-            )
-        prev, curr = curr, prev  # 交换数组
-    
-    edit_distance = prev[m]
-    max_words = max(n, m)
-    return 1.0 - (edit_distance / max_words)
-
-def evaluate_single_image(gt_file, ocr_file, image_id):
-    """评估单个图像"""
-    try:
-        # 读取数据
-        gt_df = pd.read_excel(gt_file)
-        ocr_df = pd.read_excel(ocr_file)
-        
-        # 处理文本（分区域组合）
-        gt_text = process_gt(gt_df)
-        ocr_text = process_ocr(ocr_df)
-        
-        # 计算准确率
-        char_acc = char_accuracy(gt_text, ocr_text)
-        word_acc = word_accuracy(gt_text, ocr_text)
-        
-        # 计算编辑距离
-        def calc_edit_distance(s1, s2):
-            n, m = len(s1), len(s2)
-            if n == 0 or m == 0:
-                return max(n, m)
-            prev = list(range(m + 1))
-            curr = [0] * (m + 1)
-            for i in range(1, n + 1):
-                curr[0] = i
-                for j in range(1, m + 1):
-                    cost = 0 if s1[i - 1] == s2[j - 1] else 1
-                    curr[j] = min(prev[j] + 1, curr[j - 1] + 1, prev[j - 1] + cost)
-                prev, curr = curr, prev
-            return prev[m]
-        
-        char_edit_dist = calc_edit_distance(gt_text, ocr_text)
-        
-        gt_words = gt_text.split()
-        ocr_words = ocr_text.split()
-        word_edit_dist = calc_edit_distance(gt_words, ocr_words) if gt_words or ocr_words else 0
-        
-        return {
-            "image_id": image_id,
-            "char_accuracy": char_acc,
-            "word_accuracy": word_acc,
-            "char_edit_distance": char_edit_dist,
-            "word_edit_distance": word_edit_dist,
-            "gt_length": len(gt_text),
-            "ocr_length": len(ocr_text),
-            "gt_words": len(gt_words),
-            "ocr_words": len(ocr_words),
-            "status": "success"
-        }
-    
-    except Exception as e:
-        import traceback
-        print(f"处理图像 {image_id} 时出错: {str(e)}")
-        traceback.print_exc()
-        return {
-            "image_id": image_id,
-            "status": "error",
-            "error_message": str(e)
-        }
-
-def evaluate_dataset(gt_folder, ocr_folder, output_dir, 
-                    exclude_images=[], max_images=None):
-    """
-    评估整个数据集
-    """
-    start_time = time.time()
-    
-    # 获取所有图像ID
-    gt_files = [f for f in os.listdir(gt_folder) if f.endswith('.xlsx')]
-    image_ids = [os.path.splitext(f)[0] for f in gt_files]
-    
-    # 过滤排除的图像
-    if exclude_images:
-        image_ids = [img_id for img_id in image_ids if img_id not in exclude_images]
-    
-    # 限制最大处理图像数
-    if max_images is not None:
-        image_ids = image_ids[:max_images]
-    
-    print(f"开始评估数据集，共 {len(image_ids)} 张图像...")
-    
-    # 每张图像的评估结果
-    per_image_results = []
-    
-    # 数据集级文本拼接
-    dataset_gt_text = ""
-    dataset_ocr_text = ""
-    
-    # 进度条
-    progress_bar = tqdm(image_ids, desc="处理图像")
-    
-    for img_id in progress_bar:
-        gt_file = os.path.join(gt_folder, f"{img_id}.xlsx")
-        ocr_file = os.path.join(ocr_folder, f"{img_id}.xlsx")
-        
-        # 确保OCR文件存在
-        if not os.path.exists(ocr_file):
-            print(f"警告: OCR文件不存在 - {ocr_file}")
-            result = {
-                "image_id": img_id,
-                "status": "missing",
-                "error_message": "OCR文件不存在"
-            }
-            per_image_results.append(result)
-            continue
-        
-        # 评估单个图像
-        result = evaluate_single_image(gt_file, ocr_file, img_id)
-        
-        per_image_results.append(result)
-        
-        # 更新进度条描述
-        if result['status'] == 'success':
-            char_acc = result['char_accuracy']
-            word_acc = result['word_accuracy']
-            progress_bar.set_description(f"处理图像: {img_id} (字符: {char_acc:.2%}, 单词: {word_acc:.2%})")
-        
-        # 拼接文本用于数据集级评估
-        if Config.DATASET_LEVEL and result['status'] == 'success':
-            dataset_gt_text += result.get('gt_text', '') + " "
-            dataset_ocr_text += result.get('ocr_text', '') + " "
-    
-    # 移除末尾多余空格
-    dataset_gt_text = dataset_gt_text.strip()
-    dataset_ocr_text = dataset_ocr_text.strip()
-    
-    # 计算每张图像的统计数据
-    success_results = [r for r in per_image_results if r['status'] == 'success']
-    num_success = len(success_results)
-    num_errors = len(per_image_results) - num_success
-    
-    # 计算平均值
-    avg_char_acc = np.mean([r['char_accuracy'] for r in success_results]) if num_success > 0 else 0
-    avg_word_acc = np.mean([r['word_accuracy'] for r in success_results]) if num_success > 0 else 0
-    
-    # 加权平均值（按文本长度）
-    total_gt_chars = sum(r['gt_length'] for r in success_results)
-    total_gt_words = sum(r['gt_words'] for r in success_results)
-    
-    weighted_char_acc = 0
-    weighted_word_acc = 0
-    
-    if total_gt_chars > 0:
-        total_char_edit = sum(r['char_edit_distance'] for r in success_results)
-        weighted_char_acc = 1 - (total_char_edit / total_gt_chars)
-    
-    if total_gt_words > 0:
-        total_word_edit = sum(r['word_edit_distance'] for r in success_results)
-        weighted_word_acc = 1 - (total_word_edit / total_gt_words)
-    
-    # 数据集级评估
-    dataset_char_acc = 0
-    dataset_word_acc = 0
-    
-    if Config.DATASET_LEVEL and dataset_gt_text and dataset_ocr_text:
-        dataset_char_acc = char_accuracy(dataset_gt_text, dataset_ocr_text)
-        dataset_word_acc = word_accuracy(dataset_gt_text, dataset_ocr_text)
-    
-    # 准备最终结果
-    dataset_result = {
-        "total_images": len(per_image_results),
-        "successful_images": num_success,
-        "failed_images": num_errors,
-        "average_char_accuracy": avg_char_acc,
-        "average_word_accuracy": avg_word_acc,
-        "weighted_char_accuracy": weighted_char_acc,
-        "weighted_word_accuracy": weighted_word_acc,
-        "dataset_level_char_accuracy": dataset_char_acc,
-        "dataset_level_word_accuracy": dataset_word_acc,
-        "total_gt_characters": total_gt_chars,
-        "total_gt_words": total_gt_words,
-        "processing_time": time.time() - start_time,
-        "per_image_results": per_image_results if Config.SAVE_PER_IMAGE_RESULTS else "未保存"
-    }
-    
-    # 保存结果
-    timestamp = time.strftime("%Y%m%d_%H%M%S")
-    summary_file = os.path.join(output_dir, f"dataset_summary_{timestamp}.json")
-    per_image_file = os.path.join(output_dir, f"per_image_results_{timestamp}.json")
-    
-    # 保存汇总结果
-    with open(summary_file, 'w', encoding='utf-8') as f:
-        json.dump({
-            k: v for k, v in dataset_result.items() 
-            if k != 'per_image_results'
-        }, f, indent=2, ensure_ascii=False)
-    
-    # 保存每张图像结果（如果需要）
-    if Config.SAVE_PER_IMAGE_RESULTS:
-        with open(per_image_file, 'w', encoding='utf-8') as f:
-            json.dump(per_image_results, f, indent=2, ensure_ascii=False)
-    
-    # 生成可视化报告
-    generate_visual_report(dataset_result, output_dir, timestamp)
-    
-    print(f"\n评估完成! 耗时: {dataset_result['processing_time']:.2f} 秒")
-    print(f"汇总结果已保存至: {summary_file}")
-    if Config.SAVE_PER_IMAGE_RESULTS:
-        print(f"每张图像结果已保存至: {per_image_file}")
-    
-    return dataset_result
-
-def generate_visual_report(dataset_result, output_dir, timestamp):
-    """生成可视化报告"""
-    try:
-        # 提取成功结果
-        success_results = [r for r in dataset_result['per_image_results'] 
-                          if r['status'] == 'success'] if isinstance(dataset_result['per_image_results'], list) else []
-        
-        if not success_results:
-            return
-        
-        # 创建图表目录
-        plot_dir = os.path.join(output_dir, "plots")
-        os.makedirs(plot_dir, exist_ok=True)
-        
-        # 1. 准确率分布直方图
-        plt.figure(figsize=(12, 6))
-        
-        # 字符准确率
-        plt.subplot(1, 2, 1)
-        char_accs = [r['char_accuracy'] * 100 for r in success_results]
-        plt.hist(char_accs, bins=20, color='skyblue', edgecolor='black')
-        plt.axvline(np.mean(char_accs), color='red', linestyle='dashed', linewidth=2, 
-                   label=f'平均值: {np.mean(char_accs):.2f}%')
-        plt.xlabel('字符准确率 (%)')
-        plt.ylabel('图像数量')
-        plt.title('字符准确率分布')
-        plt.legend()
-        
-        # 单词准确率
-        plt.subplot(1, 2, 2)
-        word_accs = [r['word_accuracy'] * 100 for r in success_results]
-        plt.hist(word_accs, bins=20, color='lightgreen', edgecolor='black')
-        plt.axvline(np.mean(word_accs), color='red', linestyle='dashed', linewidth=2, 
-                   label=f'平均值: {np.mean(word_accs):.2f}%')
-        plt.xlabel('单词准确率 (%)')
-        plt.ylabel('图像数量')
-        plt.title('单词准确率分布')
-        plt.legend()
-        
-        plt.tight_layout()
-        plt.savefig(os.path.join(plot_dir, f"accuracy_distribution_{timestamp}.png"))
-        plt.close()
-        
-        # 2. 准确率与文本长度关系图
-        plt.figure(figsize=(12, 6))
-        
-        # 字符准确率 vs 文本长度
-        plt.subplot(1, 2, 1)
-        gt_lengths = [r['gt_length'] for r in success_results]
-        plt.scatter(gt_lengths, char_accs, alpha=0.6)
-        plt.xlabel('文本长度 (字符)')
-        plt.ylabel('字符准确率 (%)')
-        plt.title('字符准确率 vs 文本长度')
-        
-        # 添加趋势线
-        if len(gt_lengths) > 1:
-            z = np.polyfit(gt_lengths, char_accs, 1)
-            p = np.poly1d(z)
-            plt.plot(gt_lengths, p(gt_lengths), "r--")
-        
-        # 单词准确率 vs 文本长度
-        plt.subplot(1, 2, 2)
-        plt.scatter(gt_lengths, word_accs, alpha=0.6, color='green')
-        plt.xlabel('文本长度 (字符)')
-        plt.ylabel('单词准确率 (%)')
-        plt.title('单词准确率 vs 文本长度')
-        
-        # 添加趋势线
-        if len(gt_lengths) > 1:
-            z = np.polyfit(gt_lengths, word_accs, 1)
-            p = np.poly1d(z)
-            plt.plot(gt_lengths, p(gt_lengths), "r--")
-        
-        plt.tight_layout()
-        plt.savefig(os.path.join(plot_dir, f"accuracy_vs_length_{timestamp}.png"))
-        plt.close()
-        
-        print(f"可视化报告已保存至: {plot_dir}")
-        
-    except Exception as e:
-        print(f"生成可视化报告时出错: {str(e)}")
-
-def main():
-    """主函数"""
-    # 使用配置参数评估数据集
-    results = evaluate_dataset(
-        gt_folder=Config.GT_FOLDER,
-        ocr_folder=Config.OCR_FOLDER,
-        output_dir=Config.OUTPUT_DIR,
-        exclude_images=Config.EXCLUDE_IMAGES,
-        max_images=Config.MAX_IMAGES
-    )
-    
-    # 打印汇总结果
-    print("\n===== 数据集评估汇总 =====")
-    print(f"总图像数: {results['total_images']}")
-    print(f"成功处理: {results['successful_images']}")
-    print(f"处理失败: {results['failed_images']}")
-    print(f"平均字符准确率: {results['average_char_accuracy']:.4%}")
-    print(f"平均单词准确率: {results['average_word_accuracy']:.4%}")
-    print(f"加权字符准确率: {results['weighted_char_accuracy']:.4%}")
-    print(f"加权单词准确率: {results['weighted_word_accuracy']:.4%}")
-    
-    if Config.DATASET_LEVEL:
-        print(f"数据集级字符准确率: {results['dataset_level_char_accuracy']:.4%}")
-        print(f"数据集级单词准确率: {results['dataset_level_word_accuracy']:.4%}")
-    
-    print(f"总字符数: {results['total_gt_characters']}")
-    print(f"总单词数: {results['total_gt_words']}")
-    print(f"处理时间: {results['processing_time']:.2f} 秒")
-
+# 使用示例
 if __name__ == "__main__":
-    main()
+    excel_path = "your_ocr_results.xlsx"  # 替换为你的Excel文件路径
+    
+    try:
+        blocks = process_excel(excel_path)
+        output = generate_output(blocks)
+        print("文本块识别结果:\n")
+        print(output)
+    except Exception as e:
+        print(f"处理错误: {e}")
