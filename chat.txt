@@ -1,4 +1,15 @@
-the objective is to send a text as input and extract entities out of it 
- 
-and it has to run in CPU, please chec if there are any suitable model for this please 
- 
+from openvino_genai import entity_extractor
+
+# 加载量化后模型
+extractor = entity_extractor(
+    model_path="./minicpm_0.5b_ov",
+    tokenizer_path="openbmb/MiniCPM4-0.5B"
+)
+
+# 输入文本 & 抽取实体
+text = "2025年6月10日，英特尔在北京发布新一代酷睿Ultra处理器。"
+entities = extractor.run(text, entity_types=["DATE", "ORG", "PRODUCT"])
+
+# 输出结果
+print(entities)
+# 示例输出：[{"type": "DATE", "text": "2025年6月10日"}, {"type": "ORG", "text": "英特尔"}, ...]
