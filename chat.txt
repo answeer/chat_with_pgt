@@ -1,151 +1,116 @@
 import pandas as pd
-import numpy as np
+from collections import defaultdict
 
-def calculate_overlap(box1, box2, axis='y'):
-    """计算两个框在指定轴上的重叠比例"""
-    if axis == 'y':
-        a_min, a_max = box1['ymin'], box1['ymax']
-        b_min, b_max = box2['ymin'], box2['ymax']
-    else:  # x axis
-        a_min, a_max = box1['xmin'], box1['xmax']
-        b_min, b_max = box2['xmin'], box2['xmax']
-    
-    # 计算重叠部分
-    overlap_min = max(a_min, b_min)
-    overlap_max = min(a_max, b_max)
-    overlap = max(0, overlap_max - overlap_min)
-    
-    # 计算两个框中较小框的长度
-    min_length = min(a_max - a_min, b_max - b_min)
-    
-    return overlap / min_length if min_length > 0 else 0
+def merge_boxes_to_blocks(df, horizontal_threshold=0.7, vertical_threshold=0.7):
+    """
+    将OCR文本框合并为文本块
+    参数:
+        df: DataFrame包含列['x_min','y_min','x_max','y_max','text']
+        horizontal_threshold: 水平合并的垂直重叠阈值(0-1)
+        vertical_threshold: 垂直合并的水平重叠阈值(0-1)
+    返回:
+        按块合并后的DataFrame(增加'block_id'列)
+    """
+    # 计算几何属性
+    df['width'] = df['x_max'] - df['x_min']
+    df['height'] = df['y_max'] - df['y_min']
+    df['center_x'] = (df['x_min'] + df['x_max']) / 2
+    df['center_y'] = (df['y_min'] + df['y_max']) / 2
 
-def group_text_blocks(boxes):
-    """将文本框分组为水平行或垂直列"""
-    # 首先处理水平文本
-    boxes.sort(key=lambda b: (b['ymin'], b['xmin']))
-    horizontal_groups = []
-    while boxes:
-        current = boxes.pop(0)
-        group = [current]
-        
-        # 向右查找水平行
-        i = 0
-        while i < len(boxes):
-            box = boxes[i]
-            y_overlap = calculate_overlap(current, box, 'y')
-            x_proximity = (box['xmin'] - current['xmax']) / (current['xmax'] - current['xmin']) if (current['xmax'] - current['xmin']) > 0 else 0
+    # 初始化并查集
+    parent = list(range(len(df)))
+    
+    def find(x):
+        if parent[x] != x:
+            parent[x] = find(parent[x])
+        return parent[x]
+    
+    def union(x, y):
+        parent[find(y)] = find(x)
+
+    # 水平合并 (水平相邻的文本框)
+    for i in range(len(df)):
+        for j in range(i + 1, len(df)):
+            # 计算垂直方向重叠率
+            y_overlap = max(0, min(df.iloc[i]['y_max'], df.iloc[j]['y_max']) - 
+                            max(df.iloc[i]['y_min'], df.iloc[j]['y_min']))
+            min_height = min(df.iloc[i]['height'], df.iloc[j]['height'])
             
-            if y_overlap > 0.6 and x_proximity < 0.5:  # 水平行条件
-                group.append(box)
-                current = box
-                boxes.pop(i)
-            else:
-                i += 1
-        
-        # 添加到水平组
-        horizontal_groups.append(group)
-    
-    # 处理竖排文本
-    all_boxes = [box for group in horizontal_groups for box in group]
-    all_boxes.sort(key=lambda b: (b['xmin'], b['ymin']))
-    vertical_groups = []
-    
-    # 寻找垂直列
-    for box in all_boxes:
-        # 检查是否已分组
-        grouped = any(box in group for group in vertical_groups)
-        if grouped:
-            continue
+            if y_overlap / min_height > horizontal_threshold:
+                x_distance = min(
+                    abs(df.iloc[i]['x_min'] - df.iloc[j]['x_max']),
+                    abs(df.iloc[j]['x_min'] - df.iloc[i]['x_max'])
+                )
+                if x_distance < max(df.iloc[i]['width'], df.iloc[j]['width']) * 1.5:
+                    union(i, j)
+
+    # 垂直合并 (垂直相邻的文本框)
+    for i in range(len(df)):
+        for j in range(i + 1, len(df)):
+            # 计算水平方向重叠率
+            x_overlap = max(0, min(df.iloc[i]['x_max'], df.iloc[j]['x_max']) - 
+                            max(df.iloc[i]['x_min'], df.iloc[j]['x_min']))
+            min_width = min(df.iloc[i]['width'], df.iloc[j]['width'])
             
-        # 新垂直列
-        col = [box]
-        current = box
-        
-        # 向下查找垂直列
-        for other in all_boxes:
-            if other == box or any(other in group for group in vertical_groups):
-                continue
-                
-            x_overlap = calculate_overlap(current, other, 'x')
-            y_proximity = (other['ymin'] - current['ymax']) / (current['ymax'] - current['ymin']) if (current['ymax'] - current['ymin']) > 0 else 0
-            
-            if x_overlap > 0.6 and y_proximity < 0.5:  # 垂直列条件
-                col.append(other)
-                current = other
-        
-        vertical_groups.append(col)
-    
-    return horizontal_groups, vertical_groups
+            if x_overlap / min_width > vertical_threshold:
+                y_distance = min(
+                    abs(df.iloc[i]['y_min'] - df.iloc[j]['y_max']),
+                    abs(df.iloc[j]['y_min'] - df.iloc[i]['y_max'])
+                )
+                if y_distance < max(df.iloc[i]['height'], df.iloc[j]['height']) * 1.5:
+                    union(i, j)
 
-def merge_text(blocks, orientation='horizontal'):
-    """合并块内文本并按正确顺序输出"""
-    result = []
+    # 创建文本块
+    blocks = defaultdict(list)
+    for i in range(len(df)):
+        blocks[find(i)].append(i)
     
-    for block in blocks:
-        # 按阅读顺序排序
-        if orientation == 'horizontal':
-            block.sort(key=lambda b: b['xmin'])
-        else:  # vertical
-            block.sort(key=lambda b: b['ymin'])
-        
-        # 合并文本
-        block_text = ''.join(b['text'] for b in block)
-        
-        # 计算整体边界
-        coords = {
-            'xmin': min(b['xmin'] for b in block),
-            'ymin': min(b['ymin'] for b in block),
-            'xmax': max(b['xmax'] for b in block),
-            'ymax': max(b['ymax'] for b in block)
-        }
-        
-        result.append((block_text, coords, orientation))
-    
-    return result
+    # 添加block_id并排序
+    df['block_id'] = -1
+    for block_id, box_indices in enumerate(blocks.values()):
+        for idx in box_indices:
+            df.at[idx, 'block_id'] = block_id
 
-def process_excel(file_path):
-    """处理Excel文件并返回文本块"""
-    # 读取Excel数据
-    df = pd.read_excel(file_path)
-    
-    # 确保列名正确
-    required_columns = ['xmin', 'ymin', 'xmax', 'ymax', 'text']
-    if not set(required_columns).issubset(df.columns):
-        missing = set(required_columns) - set(df.columns)
-        raise ValueError(f"Excel缺少必要列: {missing}")
-    
-    # 转换为字典列表
-    boxes = df.to_dict('records')
-    
-    # 分组文本块
-    horizontal_blocks, vertical_blocks = group_text_blocks(boxes)
-    
-    # 合并文本
-    horizontal_results = merge_text(horizontal_blocks, 'horizontal')
-    vertical_results = merge_text(vertical_blocks, 'vertical')
-    
-    return horizontal_results + vertical_results
+    return df
 
-def generate_output(blocks):
-    """生成格式化的输出结果"""
-    output_lines = []
-    for i, (text, coords, orientation) in enumerate(blocks, 1):
-        orientation_str = "水平行" if orientation == 'horizontal' else "垂直列"
-        output_lines.append(f"块 #{i} ({orientation_str}): {text}")
-        output_lines.append(f"坐标范围: xmin={coords['xmin']}, ymin={coords['ymin']}, "
-                            f"xmax={coords['xmax']}, ymax={coords['ymax']}")
-        output_lines.append("-" * 70)
-    return "\n".join(output_lines)
+def generate_block_text(df):
+    """生成块文本并按阅读顺序排序"""
+    block_texts = []
+    for block_id, group in df.groupby('block_id'):
+        # 计算文本块边界
+        block_x_min = group['x_min'].min()
+        block_y_min = group['y_min'].min()
+        
+        # 按阅读顺序排序 (先Y后X)
+        sorted_group = group.sort_values(['y_min', 'x_min'])
+        
+        # 生成块文本（空格连接）
+        block_text = " ".join(sorted_group['text'].tolist())
+        block_texts.append({
+            'block_id': block_id,
+            'text': block_text,
+            'x_min': block_x_min,
+            'y_min': block_y_min
+        })
+    
+    # 创建块DataFrame并排序（先Y后X）
+    block_df = pd.DataFrame(block_texts)
+    return block_df.sort_values(['y_min', 'x_min'])
 
 # 使用示例
 if __name__ == "__main__":
-    excel_path = "your_ocr_results.xlsx"  # 替换为你的Excel文件路径
+    # 从Excel读取OCR结果
+    ocr_df = pd.read_excel("ocr_results.xlsx")
     
-    try:
-        blocks = process_excel(excel_path)
-        output = generate_output(blocks)
-        print("文本块识别结果:\n")
-        print(output)
-    except Exception as e:
-        print(f"处理错误: {e}")
+    # 合并文本框生成块
+    merged_df = merge_boxes_to_blocks(ocr_df)
+    
+    # 生成块文本并排序
+    block_df = generate_block_text(merged_df)
+    
+    # 输出结果
+    print("文本块结果：")
+    print(block_df[['block_id', 'text']])
+    
+    # 保存结果
+    block_df.to_excel("text_blocks.xlsx", index=False)
