@@ -2,24 +2,24 @@ import pandas as pd
 from scipy.spatial import distance
 
 def merge_text_blocks(df, horizontal_threshold=0.3, vertical_threshold=0.5):
-
+    # Calculate geometry features
     df['x_center'] = (df['x_min'] + df['x_max']) / 2
     df['y_center'] = (df['y_min'] + df['y_max']) / 2
     df['width'] = df['x_max'] - df['x_min']
     df['height'] = df['y_max'] - df['y_min']
     
-
+    # Compute averages
     avg_width = df['width'].mean()
     avg_height = df['height'].mean()
     
-
+    # Cluster blocks
     blocks = []
     visited = set()
     
     for i, row in df.iterrows():
         if i in visited:
             continue
-
+            
         current_block = [i]
         visited.add(i)
         queue = [i]
@@ -27,26 +27,29 @@ def merge_text_blocks(df, horizontal_threshold=0.3, vertical_threshold=0.5):
         while queue:
             current_idx = queue.pop(0)
             current_row = df.loc[current_idx]
-
+            
             for j, other_row in df.iterrows():
                 if j in visited:
                     continue
                 
+                # Calculate Euclidean distance
                 dist = distance.euclidean(
                     (current_row['x_center'], current_row['y_center']),
                     (other_row['x_center'], other_row['y_center'])
                 )
                 
+                # Horizontal proximity check
                 horizontal_close = (
                     abs(current_row['y_center'] - other_row['y_center']) < avg_height * horizontal_threshold and
                     dist < avg_width * (1 + horizontal_threshold)
                 )
                 
+                # Vertical proximity check
                 vertical_close = (
                     abs(current_row['x_center'] - other_row['x_center']) < avg_width * vertical_threshold and
                     dist < avg_height * (1 + vertical_threshold)
                 )
-
+                
                 if horizontal_close or vertical_close:
                     current_block.append(j)
                     visited.add(j)
@@ -57,72 +60,62 @@ def merge_text_blocks(df, horizontal_threshold=0.3, vertical_threshold=0.5):
     return blocks
 
 def sort_text_boxes(block_df):
+    if block_df.empty:
+        return block_df
+        
     avg_height = block_df['height'].mean()
     row_threshold = avg_height * 0.5
-
-    rows = []
     sorted_block = block_df.sort_values('y_min')
     
+    rows = []
     current_row = []
-    last_y_min = None
+    baseline = None  # Baseline y_min for current row
     
     for _, row in sorted_block.iterrows():
-        if last_y_min is None:
+        if baseline is None:
             current_row.append(row)
-            last_y_min = row['y_min']
+            baseline = row['y_min']
         else:
-            if row['y_min'] - last_y_min < row_threshold:
+            # Compare to row's baseline
+            if row['y_min'] <= baseline + row_threshold:
                 current_row.append(row)
             else:
+                # Finalize current row
                 current_row_sorted = sorted(current_row, key=lambda r: r['x_min'])
                 rows.append(current_row_sorted)
                 current_row = [row]
-            last_y_min = row['y_min']
-
+                baseline = row['y_min']
+    
     if current_row:
         current_row_sorted = sorted(current_row, key=lambda r: r['x_min'])
         rows.append(current_row_sorted)
     
-
-    sorted_boxes = []
-    for row in rows:
-        sorted_boxes.extend(row)
-    
+    # Flatten into DataFrame
+    sorted_boxes = [item for row in rows for item in row]
     return pd.DataFrame(sorted_boxes)
 
 def generate_block_text(block_df):
-
-    rows = {}
-    for _, row in block_df.iterrows():
-
-        row_key = round(row['y_center'] / (row['height'] * 0.3))
-        
-        if row_key not in rows:
-            rows[row_key] = []
-        
-        rows[row_key].append((row['x_min'], row['text']))
-
-    line_texts = []
-    for key in sorted(rows.keys()):
-
-        sorted_texts = [text for _, text in sorted(rows[key], key=lambda x: x[0])]
-        line_texts.append("".join(sorted_texts))
-    
-    return "".join(line_texts)
+    # Direct concatenation after proper sorting
+    return ''.join(block_df['text'])
 
 def process_ocr_excel(file_path):
     df = pd.read_excel(file_path)
-    
     text_blocks = merge_text_blocks(df)
-
+    
+    # Sort blocks by vertical position (top-first)
+    text_blocks_sorted = sorted(
+        text_blocks,
+        key=lambda indices: df.loc[indices, 'y_min'].min()
+    )
+    
     results = []
-    for block_indices in text_blocks:
+    for block_indices in text_blocks_sorted:
         block_df = df.loc[block_indices]
-
         sorted_block = sort_text_boxes(block_df)
-
         block_text = generate_block_text(sorted_block)
         results.append(block_text)
-    return " ".join(results[::-1])
+    
+    return " ".join(results)
 
-result = process_ocr_excel(r"C:\Users\1657820\Desktop\51433-swoosh-textxtract-v4\UAT_Files\10D52695-0000-C413-8AD3-876E973D5C0C_page_9.png\TextExtraction\10D52695-0000-C413-8AD3-876E973D5C0C_page_9.png_page1_extracted_data.xlsx")
+# Example usage
+result = process_ocr_excel(r"your_file_path.xlsx")
