@@ -1,121 +1,126 @@
-import pandas as pd
-from scipy.spatial import distance
-
-def merge_text_blocks(df, horizontal_threshold=0.3, vertical_threshold=0.5):
-    # Calculate geometry features
-    df['x_center'] = (df['x_min'] + df['x_max']) / 2
-    df['y_center'] = (df['y_min'] + df['y_max']) / 2
-    df['width'] = df['x_max'] - df['x_min']
-    df['height'] = df['y_max'] - df['y_min']
-    
-    # Compute averages
-    avg_width = df['width'].mean()
-    avg_height = df['height'].mean()
-    
-    # Cluster blocks
-    blocks = []
-    visited = set()
-    
-    for i, row in df.iterrows():
-        if i in visited:
-            continue
-            
-        current_block = [i]
-        visited.add(i)
-        queue = [i]
-        
-        while queue:
-            current_idx = queue.pop(0)
-            current_row = df.loc[current_idx]
-            
-            for j, other_row in df.iterrows():
-                if j in visited:
-                    continue
-                
-                # Calculate Euclidean distance
-                dist = distance.euclidean(
-                    (current_row['x_center'], current_row['y_center']),
-                    (other_row['x_center'], other_row['y_center'])
-                )
-                
-                # Horizontal proximity check
-                horizontal_close = (
-                    abs(current_row['y_center'] - other_row['y_center']) < avg_height * horizontal_threshold and
-                    dist < avg_width * (1 + horizontal_threshold)
-                )
-                
-                # Vertical proximity check
-                vertical_close = (
-                    abs(current_row['x_center'] - other_row['x_center']) < avg_width * vertical_threshold and
-                    dist < avg_height * (1 + vertical_threshold)
-                )
-                
-                if horizontal_close or vertical_close:
-                    current_block.append(j)
-                    visited.add(j)
-                    queue.append(j)
-        
-        blocks.append(current_block)
-    
-    return blocks
-
-def sort_text_boxes(block_df):
-    if block_df.empty:
-        return block_df
-        
-    avg_height = block_df['height'].mean()
-    row_threshold = avg_height * 0.5
-    sorted_block = block_df.sort_values('y_min')
-    
-    rows = []
-    current_row = []
-    baseline = None  # Baseline y_min for current row
-    
-    for _, row in sorted_block.iterrows():
-        if baseline is None:
-            current_row.append(row)
-            baseline = row['y_min']
-        else:
-            # Compare to row's baseline
-            if row['y_min'] <= baseline + row_threshold:
-                current_row.append(row)
-            else:
-                # Finalize current row
-                current_row_sorted = sorted(current_row, key=lambda r: r['x_min'])
-                rows.append(current_row_sorted)
-                current_row = [row]
-                baseline = row['y_min']
-    
-    if current_row:
-        current_row_sorted = sorted(current_row, key=lambda r: r['x_min'])
-        rows.append(current_row_sorted)
-    
-    # Flatten into DataFrame
-    sorted_boxes = [item for row in rows for item in row]
-    return pd.DataFrame(sorted_boxes)
-
-def generate_block_text(block_df):
-    # Direct concatenation after proper sorting
-    return ''.join(block_df['text'])
-
-def process_ocr_excel(file_path):
-    df = pd.read_excel(file_path)
-    text_blocks = merge_text_blocks(df)
-    
-    # Sort blocks by vertical position (top-first)
-    text_blocks_sorted = sorted(
-        text_blocks,
-        key=lambda indices: df.loc[indices, 'y_min'].min()
-    )
-    
-    results = []
-    for block_indices in text_blocks_sorted:
-        block_df = df.loc[block_indices]
-        sorted_block = sort_text_boxes(block_df)
-        block_text = generate_block_text(sorted_block)
-        results.append(block_text)
-    
-    return " ".join(results)
-
-# Example usage
-result = process_ocr_excel(r"your_file_path.xlsx")
+x_min	y_min	x_max	y_max	conf	text
+581	2507	1243	2538	99.26	SEIGE_a94cd894-edf0-4a23-b8df-127e2377ad6f_pg9_O_05032025
+1261	2486	1515	2523	93.94	 ACN: 051 866 409
+93	2465	310	2496	96.35	92890665
+1312	2451	1466	2487	97.53	As Agents
+82	2440	296	2473	99.85	P2500032516
+1219	2402	1557	2450	94.93	 PIL AUSTRALIA PTY LTD
+827	2377	1494	2407	96.46	PACIFIC INTERNATIONAL LINES (PRVATE) LIMITED
+76	2377	485	2405	97.62	.20X20GP CONTAINER(S) ONLY
+823	2337	1043	2365	98.89	Signed for the Carrier.
+82	2326	677	2359	98.98	Total number of containers or packages received by the Carrier :
+825	2293	1692	2323	97.75	and date has been signed, one of which being accompligheg the others to stand void.
+78	2282	237	2306	99.67	3366259400
+823	2265	1753	2300	97.78	IN WITNESS WHEREOF the number of original Bills of Lading stated above all of this tenor
+76	2255	790	2283	94.57	1005 16 STRAND ROAD KOLKATA - 700 020 Tel.91
+1196	2229	1380	2262	98.72	 16-JAN-2025
+823	2229	1113	2264	98.13	SHIPPED ON BOARD DATE :
+76	2227	670	2258	97.72	DIAMOND HERITAGE 10TH FLOOR ROOM NO.
+74	2198	666	2233	95.00	 PIL (INDIA) PRIVATE LIMITED, CALCUTTA
+827	2181	1454	2212	95.90	PLACE_&DATE'OF ISSUE: MELBOURNE16-JAN-2025
+74	2173	578	2205	96.88	 Agent's Address at Destination :
+823	1975	1222	2007	96.79	this Bill of Lading by the Merchant.
+825	1952	1751	1982	98.43	stamped or written, or otherwise incorporated,notwithstanding the non-signing of
+825	1924	1748	1955	97.92	expressly accepts and agrees to all its terms and conditions whether printed,
+823	1897	1751	1929	97.55	applicable. In accepting this Bill of Lading. the Merchant (as defined at clause 1)
+825	1872	1748	1902	98.37	whichever is applicable,to Place of Delivery or Port of Discharge, whichever is
+821	1838	1751	1881	97.46	CARRIER'S APPLICABLE TARIFF) from Place of Receipt or the Port of Loading,
+827	1819	1748	1847	97.86	HTTPS:/WWW.PILSHIP.COM,AND THE TERMS AND CONDITIONS OF THE
+1573	1794	1748	1822	93.04	FOUND AT
+1516	1794	1580	1818	99.85	BE
+1301	1792	1521	1820	96.22	WHICH MAY
+1145	1792	1313	1820	93.59	COPY OF
+983	1787	1136	1822	94.46	HEREOF.
+823	1764	1748	1797	98.21	and conditions hereof (INCLUDING THE TERMS AND CONDITIONS ON THE
+823	1739	1748	1772	96.93	received by the Carrier' on the face hereof for Carriage subject to all the terms
+821	1709	1753	1748	97.99	other packages or units identified as Total number of containers or packages
+825	1684	1751	1719	98.33	(unless otherwise stated herein) the'total number or quantity of Containers or
+823	1655	1751	1694	98.16	Received by the Carrier from the Shipper in apparent good order and condition
+558	1659	753	1689	96.30	FREIGHTPREPAID
+82	1657	309	1690	94.78	FREIGHT & CHARGES
+629	1606	1252	1637	98.44	 TOBE CONTINUED ON ATTACHED LIST **
+882	1495	1109	1530	99.15	XPORTPTY LTD
+724	1497	862	1527	94.72	AN GRAIN
+608	1499	740	1529	96.40	AUSTRALM
+606	1467	719	1502	98.14	3RD NOT
+1095	1421	1591	1449	97.58	TOWER #20-01,SINGAPORE 018936
+861	1423	965	1447	99.71	MARINA
+762	1423	830	1447	99.32	VIEW
+636	1423	750	1447	98.56	STRAITS
+888	1400	929	1418	96.09	TE
+606	1394	868	1424	98.29	OLAM GLOBALAGRI
+606	1366	778	1397	99.30	2ND NOTIFY
+766	1364	868	1395	96.80	PARTY:
+606	1314	951	1344	98.12	 MOBILE: +91-9831133664
+606	1288	854	1317	99.55	PAN:AACCA2587R
+602	1252	875	1300	93.54	IEC:0208003649.
+604	1234	1035	1266	93.44	GST NO. 19AACCA2587R1ZY: 
+608	1208	1068	1239	98.13	 * E-MAIL ID: PBPL@PODDARGROUP
+1120	1160	1218	1182	93.98	ENBOUNI
+606	1154	1115	1182	98.18	14 DAYS FREE COMBINED DETENTION
+606	1101	898	1134	97.66	QUANTITY: 524.24MT
+604	1076	1085	1108	99.32	PACKING: IN BULK IN CONTAINERS
+606	1051	1212	1081	99.68	AUSTRLIAN ORIGIN NIPPER TYPE 2024-2025
+606	1025	889	1054	98.32	20 BULKS IN TOTAL
+459	1023	546	1056	96.14	 BULKS
+606	998	1193	1028	96.92	20X20GP CONTAINER(S) SAID. TO CONTAIN:
+480	994	525	1028	99.88	20
+1446	949	1511	980	90.23	 KGS
+1343	949	1437	980	99.92	 52424
+154	905	283	929	95.03	Marks & Nos.
+437	898	545	936	99.94	Packages
+1572	888	1715	926	99.98	Measurement
+1317	884	1460	926	95.21	 Gross Weight
+834	891	1035	921	99.80	Description of Goods
+398	880	588	910	99.83	Quantity/Number of
+97	876	342	915	99.59	Container Nos./Seal Nos.
+225	829	1612	864	98.01	PARTICULARS AS DECLARED BY SHIPPER, WITHOUT RESPONSIBLITY OR WARRANTY AS TO CORRECTNESS BY CARRIER(see clause 15)
+861	775	1007	805	98.28	THREE (3)
+71	743	504	784	95.36	 .KOLKATA -' 700001 INDIA *
+1314	731	1759	759	96.00	Merchant Declared Value( see clause 7(6) & 31(3) :
+857	726	1087	759	98.37	Number of original B/Ls
+82	722	475	753	96.44	4TH FLOOR ROOM NO. 401
+82	695	546	725	96.06	107 OLD CHINA BAZAR STREET
+1311	671	1546	711	99.38	 KOLKATA INDIA
+857	672	1092	708	98.99	 KOLKATA INDIA
+82	665	496	696	97.95	 PODDAR BUSINESS PVT. LTD.
+78	640	203	670	96.19	Notify Party:
+859	634	1037	666	99.76	Port of Discharge:
+1313	631	1486	667	99.64	Place of Delivery:
+1314	585	1639	616	99.18	 MELBOURNE AUSTRALIA
+876	585	1153	616	97.37	 KOTA LUMAYAN 176N
+1313	543	1473	578	96.92	Port of Loading:
+857	543	1092	576	99.80	Vessel/Voyage Number:
+1314	484	1639	517	98.84	 MELBOURNE AUSTRALIA
+80	472	222	502	99.27	TO ORDER
+857	440	1020	475	96.79	Pre-Carriage by:
+80	442	195	473	99.90	Consignee:
+1318	440	1483	470	96.45	Place of Receipt:
+76	383	271	416	97.78	 AUSTRALIAIN
+861	368	1191	407	95.99	 Export Reference: 603496-01
+276	358	502	386	95.04	 VICTORIA 3067
+78	356	290	388	99.80	ABBOTSFORD
+82	328	569	359	96.42	LEVEL 1 70 TRENERRY CRESCENT
+1040	312	1237	342	99.82	 MEL400846300
+861	309	984	340	99.60	Booking No.
+78	301	374	332	99.14	 AUSTRALIA PTY LTD
+80	274	553	304	99.58	LOUIS DREYFUS COMPANY GRAINS
+80	248	167	273	98.33	Shipper:
+524	175	1233	207	99.48	PORT-TO-PORT OR COMBINED TRANSPORT BILL OF LADING
+1023	137	1319	178	91.67	 : CO. REG. NO 196700080N
+522	141	873	172	97.89	(Incorporated in Singapore)
+524	91	1624	127	99.13	PACIFIC INTERNATIONALLINES (PRIVATE) LIMITED
+1356	2316	1447	2373	44.09	law
+674	2227	790	2258	29.91	:1004-
+1442	2105	1479	2159	84.81	2
+1646	2071	1701	2125	73.25	p
+1446	2055	1483	2102	45.74	7
+829	1794	980	1818	88.76	REVERSE
+557	1605	619	1640	6.40	00
+794	1476	860	1498	61.30	ARTY
+611	1425	643	1443	90.32	7
+916	1278	927	1289	51.62	l
+541	1269	593	1296	35.36	C I
+1701	577	1719	618	91.35	1
+855	238	1239	279	84.78	Bill of Lading No. MEL
+74	53	405	157	56.55	EPIL
