@@ -1,116 +1,128 @@
 import pandas as pd
-from collections import defaultdict
+from scipy.spatial import distance
 
-def merge_boxes_to_blocks(df, horizontal_threshold=0.7, vertical_threshold=0.7):
-    """
-    将OCR文本框合并为文本块
-    参数:
-        df: DataFrame包含列['x_min','y_min','x_max','y_max','text']
-        horizontal_threshold: 水平合并的垂直重叠阈值(0-1)
-        vertical_threshold: 垂直合并的水平重叠阈值(0-1)
-    返回:
-        按块合并后的DataFrame(增加'block_id'列)
-    """
-    # 计算几何属性
+def merge_text_blocks(df, horizontal_threshold=0.3, vertical_threshold=0.5):
+
+    df['x_center'] = (df['x_min'] + df['x_max']) / 2
+    df['y_center'] = (df['y_min'] + df['y_max']) / 2
     df['width'] = df['x_max'] - df['x_min']
     df['height'] = df['y_max'] - df['y_min']
-    df['center_x'] = (df['x_min'] + df['x_max']) / 2
-    df['center_y'] = (df['y_min'] + df['y_max']) / 2
-
-    # 初始化并查集
-    parent = list(range(len(df)))
     
-    def find(x):
-        if parent[x] != x:
-            parent[x] = find(parent[x])
-        return parent[x]
+
+    avg_width = df['width'].mean()
+    avg_height = df['height'].mean()
     
-    def union(x, y):
-        parent[find(y)] = find(x)
 
-    # 水平合并 (水平相邻的文本框)
-    for i in range(len(df)):
-        for j in range(i + 1, len(df)):
-            # 计算垂直方向重叠率
-            y_overlap = max(0, min(df.iloc[i]['y_max'], df.iloc[j]['y_max']) - 
-                            max(df.iloc[i]['y_min'], df.iloc[j]['y_min']))
-            min_height = min(df.iloc[i]['height'], df.iloc[j]['height'])
-            
-            if y_overlap / min_height > horizontal_threshold:
-                x_distance = min(
-                    abs(df.iloc[i]['x_min'] - df.iloc[j]['x_max']),
-                    abs(df.iloc[j]['x_min'] - df.iloc[i]['x_max'])
-                )
-                if x_distance < max(df.iloc[i]['width'], df.iloc[j]['width']) * 1.5:
-                    union(i, j)
-
-    # 垂直合并 (垂直相邻的文本框)
-    for i in range(len(df)):
-        for j in range(i + 1, len(df)):
-            # 计算水平方向重叠率
-            x_overlap = max(0, min(df.iloc[i]['x_max'], df.iloc[j]['x_max']) - 
-                            max(df.iloc[i]['x_min'], df.iloc[j]['x_min']))
-            min_width = min(df.iloc[i]['width'], df.iloc[j]['width'])
-            
-            if x_overlap / min_width > vertical_threshold:
-                y_distance = min(
-                    abs(df.iloc[i]['y_min'] - df.iloc[j]['y_max']),
-                    abs(df.iloc[j]['y_min'] - df.iloc[i]['y_max'])
-                )
-                if y_distance < max(df.iloc[i]['height'], df.iloc[j]['height']) * 1.5:
-                    union(i, j)
-
-    # 创建文本块
-    blocks = defaultdict(list)
-    for i in range(len(df)):
-        blocks[find(i)].append(i)
+    blocks = []
+    visited = set()
     
-    # 添加block_id并排序
-    df['block_id'] = -1
-    for block_id, box_indices in enumerate(blocks.values()):
-        for idx in box_indices:
-            df.at[idx, 'block_id'] = block_id
+    for i, row in df.iterrows():
+        if i in visited:
+            continue
 
-    return df
-
-def generate_block_text(df):
-    """生成块文本并按阅读顺序排序"""
-    block_texts = []
-    for block_id, group in df.groupby('block_id'):
-        # 计算文本块边界
-        block_x_min = group['x_min'].min()
-        block_y_min = group['y_min'].min()
+        current_block = [i]
+        visited.add(i)
+        queue = [i]
         
-        # 按阅读顺序排序 (先Y后X)
-        sorted_group = group.sort_values(['y_min', 'x_min'])
-        
-        # 生成块文本（空格连接）
-        block_text = " ".join(sorted_group['text'].tolist())
-        block_texts.append({
-            'block_id': block_id,
-            'text': block_text,
-            'x_min': block_x_min,
-            'y_min': block_y_min
-        })
-    
-    # 创建块DataFrame并排序（先Y后X）
-    block_df = pd.DataFrame(block_texts)
-    return block_df.sort_values(['y_min', 'x_min'])
+        while queue:
+            current_idx = queue.pop(0)
+            current_row = df.loc[current_idx]
 
-# 使用示例
-if __name__ == "__main__":
-    # 从Excel读取OCR结果
-    ocr_df = pd.read_excel("ocr_results.xlsx")
+            for j, other_row in df.iterrows():
+                if j in visited:
+                    continue
+                
+                dist = distance.euclidean(
+                    (current_row['x_center'], current_row['y_center']),
+                    (other_row['x_center'], other_row['y_center'])
+                )
+                
+                horizontal_close = (
+                    abs(current_row['y_center'] - other_row['y_center']) < avg_height * horizontal_threshold and
+                    dist < avg_width * (1 + horizontal_threshold)
+                )
+                
+                vertical_close = (
+                    abs(current_row['x_center'] - other_row['x_center']) < avg_width * vertical_threshold and
+                    dist < avg_height * (1 + vertical_threshold)
+                )
+
+                if horizontal_close or vertical_close:
+                    current_block.append(j)
+                    visited.add(j)
+                    queue.append(j)
+        
+        blocks.append(current_block)
     
-    # 合并文本框生成块
-    merged_df = merge_boxes_to_blocks(ocr_df)
+    return blocks
+
+def sort_text_boxes(block_df):
+    avg_height = block_df['height'].mean()
+    row_threshold = avg_height * 0.5
+
+    rows = []
+    sorted_block = block_df.sort_values('y_min')
     
-    # 生成块文本并排序
-    block_df = generate_block_text(merged_df)
+    current_row = []
+    last_y_min = None
     
-    # 输出结果
-    print("文本块结果：")
-    print(block_df[['block_id', 'text']])
+    for _, row in sorted_block.iterrows():
+        if last_y_min is None:
+            current_row.append(row)
+            last_y_min = row['y_min']
+        else:
+            if row['y_min'] - last_y_min < row_threshold:
+                current_row.append(row)
+            else:
+                current_row_sorted = sorted(current_row, key=lambda r: r['x_min'])
+                rows.append(current_row_sorted)
+                current_row = [row]
+            last_y_min = row['y_min']
+
+    if current_row:
+        current_row_sorted = sorted(current_row, key=lambda r: r['x_min'])
+        rows.append(current_row_sorted)
     
-    # 保存结果
-    block_df.to_excel("text_blocks.xlsx", index=False)
+
+    sorted_boxes = []
+    for row in rows:
+        sorted_boxes.extend(row)
+    
+    return pd.DataFrame(sorted_boxes)
+
+def generate_block_text(block_df):
+
+    rows = {}
+    for _, row in block_df.iterrows():
+
+        row_key = round(row['y_center'] / (row['height'] * 0.3))
+        
+        if row_key not in rows:
+            rows[row_key] = []
+        
+        rows[row_key].append((row['x_min'], row['text']))
+
+    line_texts = []
+    for key in sorted(rows.keys()):
+
+        sorted_texts = [text for _, text in sorted(rows[key], key=lambda x: x[0])]
+        line_texts.append("".join(sorted_texts))
+    
+    return "".join(line_texts)
+
+def process_ocr_excel(file_path):
+    df = pd.read_excel(file_path)
+    
+    text_blocks = merge_text_blocks(df)
+
+    results = []
+    for block_indices in text_blocks:
+        block_df = df.loc[block_indices]
+
+        sorted_block = sort_text_boxes(block_df)
+
+        block_text = generate_block_text(sorted_block)
+        results.append(block_text)
+    return " ".join(results[::-1])
+
+result = process_ocr_excel(r"C:\Users\1657820\Desktop\51433-swoosh-textxtract-v4\UAT_Files\10D52695-0000-C413-8AD3-876E973D5C0C_page_9.png\TextExtraction\10D52695-0000-C413-8AD3-876E973D5C0C_page_9.png_page1_extracted_data.xlsx")
