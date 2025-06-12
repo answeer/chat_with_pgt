@@ -1,90 +1,286 @@
-def merge_text_blocks(df, horizontal_threshold=0.5, vertical_threshold=0.8):
-    # Existing merge code with optimized thresholds
-    # ... [same as original, with optimized threshold values] ...
+from transformers import LayoutLMv3ForTokenClassification, LayoutLMv3Processor
+from PIL import Image
+import torch
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib.patches as patches
+import os
 
-def sort_text_boxes(block_df):
-    # Sort with document-specific thresholds
-    avg_height = block_df['height'].mean()
-    row_threshold = avg_height * 0.3  # Tighter vertical grouping
+# 1. 初始化模型和处理器
+def load_model(model_path, entity_names):
+    """
+    加载模型并自动生成标签映射
+    model_path: 模型路径
+    entity_names: 要提取的实体名称列表，如 ["INVOICE_NUM", "DATE", "TOTAL"]
+    """
+    # 自动生成标签映射
+    label_list = ["O"]
+    for entity in entity_names:
+        label_list.append(f"B-{entity}")
+        label_list.append(f"I-{entity}")
     
-    rows = []
-    sorted_block = block_df.sort_values('y_min')
+    label2id = {label: idx for idx, label in enumerate(label_list)}
+    id2label = {idx: label for label, idx in label2id.items()}
     
-    current_row = []
-    last_y_min = None
+    print("自动生成的标签映射:")
+    for idx, label in id2label.items():
+        print(f"{idx}: {label}")
     
-    for _, row in sorted_block.iterrows():
-        if last_y_min is None:
-            current_row.append(row)
-            last_y_min = row['y_min']
-        else:
-            # Group in same row if vertically close
-            if abs(row['y_center'] - last_y_min) < row_threshold:
-                current_row.append(row)
-            else:
-                # Sort left-to-right within row
-                current_row_sorted = sorted(current_row, key=lambda r: r['x_min'])
-                rows.append(current_row_sorted)
-                current_row = [row]
-            last_y_min = row['y_center']  # Use center for better accuracy
+    if model_path:
+        model = LayoutLMv3ForTokenClassification.from_pretrained(
+            model_path,
+            id2label=id2label,
+            label2id=label2id
+        )
+    else:
+        model = LayoutLMv3ForTokenClassification.from_pretrained(
+            "microsoft/layoutlmv3-base",
+            num_labels=len(label2id),
+            id2label=id2label,
+            label2id=label2id
+        )
     
-    if current_row:
-        current_row_sorted = sorted(current_row, key=lambda r: r['x_min'])
-        rows.append(current_row_sorted)
-    
-    # Flatten rows while preserving order
-    return pd.DataFrame([item for row in rows for item in row])
+    processor = LayoutLMv3Processor.from_pretrained("microsoft/layoutlmv3-base", apply_ocr=False)
+    return model, processor, id2label
 
-def generate_block_text(block_df):
-    # Bill of lading specific reconstruction rules
-    left_column_threshold = block_df['x_center'].quantile(0.3)
-    document_text = []
+# 2. 从Excel加载OCR结果
+def load_ocr_from_excel(excel_path, image_width, image_height):
+    """
+    从Excel文件加载OCR结果
+    """
+    df = pd.read_excel(excel_path)
     
-    current_section = []
-    last_y = None
+    words = []
+    bboxes = []
     
-    for _, row in block_df.sort_values(['y_center', 'x_center']).iterrows():
-        # Detect section breaks (vertical gaps)
-        if last_y and (row['y_center'] - last_y) > block_df['height'].mean() * 1.5:
-            document_text.append(" ".join(current_section))
-            current_section = []
+    for _, row in df.iterrows():
+        text = str(row['text'])
+        x_min = row['x_min']
+        x_max = row['x_max']
+        y_min = row['y_min']
+        y_max = row['y_max']
         
-        # Two-column formatting
-        if row['x_center'] < left_column_threshold:
-            current_section.append(row['text'])
-        else:
-            # Add key-value separator for right column
-            if current_section and not current_section[-1].endswith(':'):
-                current_section.append(":")
-            current_section.append(row['text'])
+        # 归一化坐标到0-1000范围
+        norm_x_min = int((x_min / image_width) * 1000)
+        norm_x_max = int((x_max / image_width) * 1000)
+        norm_y_min = int((y_min / image_height) * 1000)
+        norm_y_max = int((y_max / image_height) * 1000)
         
-        last_y = row['y_center']
+        # 确保坐标在有效范围内
+        norm_x_min = max(0, min(1000, norm_x_min))
+        norm_x_max = max(0, min(1000, norm_x_max))
+        norm_y_min = max(0, min(1000, norm_y_min))
+        norm_y_max = max(0, min(1000, norm_y_max))
+        
+        words.append(text)
+        bboxes.append([norm_x_min, norm_y_min, norm_x_max, norm_y_max])
     
-    if current_section:
-        document_text.append(" ".join(current_section))
-    
-    return "\n".join(document_text)
+    return words, bboxes
 
-def process_ocr_excel(file_path):
-    df = pd.read_excel(file_path)
+# 3. 可视化结果函数
+def visualize_results(image, words, bboxes, predictions, id2label, output_path="document_analysis_result.png"):
+    """
+    可视化OCR结果和预测标签
+    """
+    plt.figure(figsize=(20, 14))
+    plt.imshow(image)
+    ax = plt.gca()
     
-    # Pre-filter low confidence detections
-    df = df[df['conf'] > 85]  # Remove low-confidence artifacts
+    for i, (word, bbox, pred) in enumerate(zip(words, bboxes, predictions)):
+        # 转换为原始坐标
+        orig_bbox = [
+            bbox[0] * image.width / 1000,
+            bbox[1] * image.height / 1000,
+            bbox[2] * image.width / 1000,
+            bbox[3] * image.height / 1000
+        ]
+        
+        rect = patches.Rectangle(
+            (orig_bbox[0], orig_bbox[1]),
+            orig_bbox[2] - orig_bbox[0],
+            orig_bbox[3] - orig_bbox[1],
+            linewidth=1,
+            edgecolor='r',
+            facecolor='none'
+        )
+        ax.add_patch(rect)
+        
+        # 添加标签文本
+        label = id2label.get(pred, "O")
+        if label != "O":
+            plt.text(
+                orig_bbox[0], orig_bbox[1] - 5,
+                f"{word} ({label})",
+                fontsize=8,
+                bbox=dict(facecolor='yellow', alpha=0.5)
+            )
     
-    text_blocks = merge_text_blocks(df)
+    plt.axis('off')
+    plt.savefig(output_path, bbox_inches='tight')
+    plt.close()
+    print(f"可视化结果已保存至: {output_path}")
+
+# 4. 主推理函数
+def extract_document_info(image_path, ocr_excel_path, entity_names, model_path=None):
+    """
+    主函数：执行文档信息提取
+    image_path: 文档图像路径
+    ocr_excel_path: OCR结果Excel文件路径
+    entity_names: 要提取的实体名称列表
+    model_path: 微调模型路径（可选）
+    """
+    # 加载图像
+    image = Image.open(image_path).convert("RGB")
+    img_width, img_height = image.size
     
-    # Sort blocks by vertical position
-    block_positions = []
-    for block_indices in text_blocks:
-        block_df = df.loc[block_indices]
-        block_top = block_df['y_min'].min()
-        block_left = block_df['x_min'].min()
-        block_positions.append((block_top, block_left, block_df))
+    # 加载模型
+    model, processor, id2label = load_model(model_path, entity_names)
+    model.eval()
     
-    results = []
-    for _, _, block_df in sorted(block_positions, key=lambda x: (x[0], x[1])):
-        sorted_block = sort_text_boxes(block_df)
-        block_text = generate_block_text(sorted_block)
-        results.append(block_text)
+    # 从Excel加载OCR结果
+    words, bboxes = load_ocr_from_excel(ocr_excel_path, img_width, img_height)
     
-    return "\n\n".join(results)
+    # 预处理输入
+    encoding = processor(
+        image,
+        text=words,
+        boxes=bboxes,
+        return_tensors="pt",
+        truncation=True,
+        padding="max_length",
+        max_length=512
+    )
+    
+    # 模型推理
+    with torch.no_grad():
+        outputs = model(**encoding)
+    
+    # 处理输出
+    predictions = outputs.logits.argmax(-1).squeeze().tolist()
+    input_ids = encoding["input_ids"].squeeze().tolist()
+    
+    # 获取实际单词的预测
+    token_predictions = []
+    token_bboxes = []
+    token_words = []
+    
+    for i, (input_id, bbox) in enumerate(zip(input_ids, encoding["bbox"].squeeze())):
+        token = processor.tokenizer.decode(input_id)
+        
+        # 跳过特殊token和填充token
+        if token in processor.tokenizer.all_special_tokens or token == processor.tokenizer.pad_token:
+            continue
+            
+        # 处理子词
+        if token.startswith("##"):
+            if token_predictions:
+                token_predictions[-1] = predictions[i]
+                token_words[-1] += token.replace("##", "")
+            continue
+            
+        token_predictions.append(predictions[i])
+        token_bboxes.append(bbox.tolist())
+        token_words.append(token)
+    
+    # 可视化结果
+    output_dir = os.path.dirname(image_path) or "."
+    output_img_path = os.path.join(output_dir, "document_analysis_result.png")
+    visualize_results(image, token_words, token_bboxes, token_predictions, id2label, output_img_path)
+    
+    # 提取结构化信息
+    extracted_info = {}
+    current_entity = None
+    current_text = ""
+    current_bbox = None
+    
+    for i, (word, pred, bbox) in enumerate(zip(token_words, token_predictions, token_bboxes)):
+        label = id2label.get(pred, "O")
+        
+        if label.startswith("B-"):
+            # 保存上一个实体
+            if current_entity:
+                extracted_info[current_entity] = {
+                    "text": current_text.strip(),
+                    "bbox": current_bbox
+                }
+            
+            # 开始新实体
+            current_entity = label.split("-")[1]
+            current_text = word
+            current_bbox = bbox
+        elif label.startswith("I-") and current_entity == label.split("-")[1]:
+            current_text += " " + word
+            # 扩展边界框
+            current_bbox = [
+                min(current_bbox[0], bbox[0]),
+                min(current_bbox[1], bbox[1]),
+                max(current_bbox[2], bbox[2]),
+                max(current_bbox[3], bbox[3])
+            ]
+        else:
+            # 保存上一个实体
+            if current_entity:
+                extracted_info[current_entity] = {
+                    "text": current_text.strip(),
+                    "bbox": current_bbox
+                }
+                current_entity = None
+                current_text = ""
+                current_bbox = None
+    
+    # 保存最后一个实体
+    if current_entity:
+        extracted_info[current_entity] = {
+            "text": current_text.strip(),
+            "bbox": current_bbox
+        }
+    
+    return extracted_info
+
+# 5. 执行推理
+if __name__ == "__main__":
+    # 设置你的文档图像路径
+    image_path = "path/to/your/document.jpg"
+    
+    # 设置OCR结果Excel文件路径
+    ocr_excel_path = "path/to/your/ocr_results.xlsx"
+    
+    # 设置要提取的实体名称列表
+    entity_names = ["INVOICE_NUM", "DATE", "TOTAL", "VENDOR", "PO_NUMBER"]
+    
+    # 可选：微调后的模型路径
+    model_path = None  # 使用预训练模型
+    # model_path = "./fine_tuned_model"
+    
+    # 运行信息提取
+    results = extract_document_info(image_path, ocr_excel_path, entity_names, model_path)
+    
+    # 打印提取结果
+    print("\n提取到的文档信息:")
+    for entity, info in results.items():
+        # 将归一化坐标转换回原始图像坐标
+        orig_bbox = [
+            info['bbox'][0] * Image.open(image_path).width / 1000,
+            info['bbox'][1] * Image.open(image_path).height / 1000,
+            info['bbox'][2] * Image.open(image_path).width / 1000,
+            info['bbox'][3] * Image.open(image_path).height / 1000
+        ]
+        print(f"{entity}: {info['text']}")
+        print(f"  位置: x1={orig_bbox[0]:.1f}, y1={orig_bbox[1]:.1f}, x2={orig_bbox[2]:.1f}, y2={orig_bbox[3]:.1f}")
+    
+    # 可选：保存结果到Excel
+    output_df = pd.DataFrame([
+        {
+            "entity": entity,
+            "text": info["text"],
+            "x_min": orig_bbox[0],
+            "y_min": orig_bbox[1],
+            "x_max": orig_bbox[2],
+            "y_max": orig_bbox[3]
+        } for entity, info in results.items()
+    ])
+    
+    output_excel_path = os.path.join(os.path.dirname(image_path), "extracted_entities.xlsx")
+    output_df.to_excel(output_excel_path, index=False)
+    print(f"\n提取结果已保存至: {output_excel_path}")
