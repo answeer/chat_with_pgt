@@ -1,286 +1,175 @@
-from transformers import LayoutLMv3ForTokenClassification, LayoutLMv3Processor
+from transformers import DonutProcessor, VisionEncoderDecoderModel
 from PIL import Image
 import torch
+import re
+import json
 import pandas as pd
-import numpy as np
+import os
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
-import os
+import numpy as np
 
-# 1. 初始化模型和处理器
-def load_model(model_path, entity_names):
-    """
-    加载模型并自动生成标签映射
-    model_path: 模型路径
-    entity_names: 要提取的实体名称列表，如 ["INVOICE_NUM", "DATE", "TOTAL"]
-    """
-    # 自动生成标签映射
-    label_list = ["O"]
-    for entity in entity_names:
-        label_list.append(f"B-{entity}")
-        label_list.append(f"I-{entity}")
-    
-    label2id = {label: idx for idx, label in enumerate(label_list)}
-    id2label = {idx: label for label, idx in label2id.items()}
-    
-    print("自动生成的标签映射:")
-    for idx, label in id2label.items():
-        print(f"{idx}: {label}")
-    
-    if model_path:
-        model = LayoutLMv3ForTokenClassification.from_pretrained(
-            model_path,
-            id2label=id2label,
-            label2id=label2id
-        )
-    else:
-        model = LayoutLMv3ForTokenClassification.from_pretrained(
-            "microsoft/layoutlmv3-base",
-            num_labels=len(label2id),
-            id2label=id2label,
-            label2id=label2id
-        )
-    
-    processor = LayoutLMv3Processor.from_pretrained("microsoft/layoutlmv3-base", apply_ocr=False)
-    return model, processor, id2label
-
-# 2. 从Excel加载OCR结果
-def load_ocr_from_excel(excel_path, image_width, image_height):
-    """
-    从Excel文件加载OCR结果
-    """
-    df = pd.read_excel(excel_path)
-    
-    words = []
-    bboxes = []
-    
-    for _, row in df.iterrows():
-        text = str(row['text'])
-        x_min = row['x_min']
-        x_max = row['x_max']
-        y_min = row['y_min']
-        y_max = row['y_max']
+class DonutDocumentExtractor:
+    def __init__(self, model_path=None, task_prompt=None):
+        """
+        初始化 Donut 模型
+        model_path: 微调后的模型路径（如果使用预训练模型则设为None）
+        task_prompt: 任务提示词，指定要提取的信息
+        """
+        # 设置默认任务提示
+        if task_prompt is None:
+            task_prompt = "<s>"
         
-        # 归一化坐标到0-1000范围
-        norm_x_min = int((x_min / image_width) * 1000)
-        norm_x_max = int((x_max / image_width) * 1000)
-        norm_y_min = int((y_min / image_height) * 1000)
-        norm_y_max = int((y_max / image_height) * 1000)
+        self.task_prompt = task_prompt
         
-        # 确保坐标在有效范围内
-        norm_x_min = max(0, min(1000, norm_x_min))
-        norm_x_max = max(0, min(1000, norm_x_max))
-        norm_y_min = max(0, min(1000, norm_y_min))
-        norm_y_max = max(0, min(1000, norm_y_max))
-        
-        words.append(text)
-        bboxes.append([norm_x_min, norm_y_min, norm_x_max, norm_y_max])
-    
-    return words, bboxes
-
-# 3. 可视化结果函数
-def visualize_results(image, words, bboxes, predictions, id2label, output_path="document_analysis_result.png"):
-    """
-    可视化OCR结果和预测标签
-    """
-    plt.figure(figsize=(20, 14))
-    plt.imshow(image)
-    ax = plt.gca()
-    
-    for i, (word, bbox, pred) in enumerate(zip(words, bboxes, predictions)):
-        # 转换为原始坐标
-        orig_bbox = [
-            bbox[0] * image.width / 1000,
-            bbox[1] * image.height / 1000,
-            bbox[2] * image.width / 1000,
-            bbox[3] * image.height / 1000
-        ]
-        
-        rect = patches.Rectangle(
-            (orig_bbox[0], orig_bbox[1]),
-            orig_bbox[2] - orig_bbox[0],
-            orig_bbox[3] - orig_bbox[1],
-            linewidth=1,
-            edgecolor='r',
-            facecolor='none'
-        )
-        ax.add_patch(rect)
-        
-        # 添加标签文本
-        label = id2label.get(pred, "O")
-        if label != "O":
-            plt.text(
-                orig_bbox[0], orig_bbox[1] - 5,
-                f"{word} ({label})",
-                fontsize=8,
-                bbox=dict(facecolor='yellow', alpha=0.5)
-            )
-    
-    plt.axis('off')
-    plt.savefig(output_path, bbox_inches='tight')
-    plt.close()
-    print(f"可视化结果已保存至: {output_path}")
-
-# 4. 主推理函数
-def extract_document_info(image_path, ocr_excel_path, entity_names, model_path=None):
-    """
-    主函数：执行文档信息提取
-    image_path: 文档图像路径
-    ocr_excel_path: OCR结果Excel文件路径
-    entity_names: 要提取的实体名称列表
-    model_path: 微调模型路径（可选）
-    """
-    # 加载图像
-    image = Image.open(image_path).convert("RGB")
-    img_width, img_height = image.size
-    
-    # 加载模型
-    model, processor, id2label = load_model(model_path, entity_names)
-    model.eval()
-    
-    # 从Excel加载OCR结果
-    words, bboxes = load_ocr_from_excel(ocr_excel_path, img_width, img_height)
-    
-    # 预处理输入
-    encoding = processor(
-        image,
-        text=words,
-        boxes=bboxes,
-        return_tensors="pt",
-        truncation=True,
-        padding="max_length",
-        max_length=512
-    )
-    
-    # 模型推理
-    with torch.no_grad():
-        outputs = model(**encoding)
-    
-    # 处理输出
-    predictions = outputs.logits.argmax(-1).squeeze().tolist()
-    input_ids = encoding["input_ids"].squeeze().tolist()
-    
-    # 获取实际单词的预测
-    token_predictions = []
-    token_bboxes = []
-    token_words = []
-    
-    for i, (input_id, bbox) in enumerate(zip(input_ids, encoding["bbox"].squeeze())):
-        token = processor.tokenizer.decode(input_id)
-        
-        # 跳过特殊token和填充token
-        if token in processor.tokenizer.all_special_tokens or token == processor.tokenizer.pad_token:
-            continue
-            
-        # 处理子词
-        if token.startswith("##"):
-            if token_predictions:
-                token_predictions[-1] = predictions[i]
-                token_words[-1] += token.replace("##", "")
-            continue
-            
-        token_predictions.append(predictions[i])
-        token_bboxes.append(bbox.tolist())
-        token_words.append(token)
-    
-    # 可视化结果
-    output_dir = os.path.dirname(image_path) or "."
-    output_img_path = os.path.join(output_dir, "document_analysis_result.png")
-    visualize_results(image, token_words, token_bboxes, token_predictions, id2label, output_img_path)
-    
-    # 提取结构化信息
-    extracted_info = {}
-    current_entity = None
-    current_text = ""
-    current_bbox = None
-    
-    for i, (word, pred, bbox) in enumerate(zip(token_words, token_predictions, token_bboxes)):
-        label = id2label.get(pred, "O")
-        
-        if label.startswith("B-"):
-            # 保存上一个实体
-            if current_entity:
-                extracted_info[current_entity] = {
-                    "text": current_text.strip(),
-                    "bbox": current_bbox
-                }
-            
-            # 开始新实体
-            current_entity = label.split("-")[1]
-            current_text = word
-            current_bbox = bbox
-        elif label.startswith("I-") and current_entity == label.split("-")[1]:
-            current_text += " " + word
-            # 扩展边界框
-            current_bbox = [
-                min(current_bbox[0], bbox[0]),
-                min(current_bbox[1], bbox[1]),
-                max(current_bbox[2], bbox[2]),
-                max(current_bbox[3], bbox[3])
-            ]
+        # 加载处理器和模型
+        if model_path:
+            self.processor = DonutProcessor.from_pretrained(model_path)
+            self.model = VisionEncoderDecoderModel.from_pretrained(model_path)
         else:
-            # 保存上一个实体
-            if current_entity:
-                extracted_info[current_entity] = {
-                    "text": current_text.strip(),
-                    "bbox": current_bbox
-                }
-                current_entity = None
-                current_text = ""
-                current_bbox = None
+            # 使用预训练模型
+            self.processor = DonutProcessor.from_pretrained("naver-clova-ix/donut-base")
+            self.model = VisionEncoderDecoderModel.from_pretrained("naver-clova-ix/donut-base")
+        
+        # 设置设备
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.model.to(self.device)
     
-    # 保存最后一个实体
-    if current_entity:
-        extracted_info[current_entity] = {
-            "text": current_text.strip(),
-            "bbox": current_bbox
-        }
+    def preprocess_image(self, image_path):
+        """加载并预处理图像"""
+        image = Image.open(image_path).convert("RGB")
+        return image
     
-    return extracted_info
+    def generate_json(self, image):
+        """生成JSON输出"""
+        # 准备输入
+        pixel_values = self.processor(image, return_tensors="pt").pixel_values
+        pixel_values = pixel_values.to(self.device)
+        
+        # 准备解码器输入
+        decoder_input_ids = self.processor.tokenizer(
+            self.task_prompt, 
+            add_special_tokens=False, 
+            return_tensors="pt"
+        ).input_ids.to(self.device)
+        
+        # 生成输出
+        outputs = self.model.generate(
+            pixel_values,
+            decoder_input_ids=decoder_input_ids,
+            max_length=self.model.decoder.config.max_position_embeddings,
+            pad_token_id=self.processor.tokenizer.pad_token_id,
+            eos_token_id=self.processor.tokenizer.eos_token_id,
+            use_cache=True,
+            bad_words_ids=[[self.processor.tokenizer.unk_token_id]],
+            return_dict_in_generate=True,
+            output_scores=True,
+        )
+        
+        # 解码输出
+        sequence = self.processor.batch_decode(outputs.sequences)[0]
+        sequence = sequence.replace(self.processor.tokenizer.eos_token, "").replace(self.processor.tokenizer.pad_token, "")
+        sequence = re.sub(r"<.*?>", "", sequence, count=1).strip()  # 移除第一个任务提示
+        
+        return sequence
+    
+    def extract_info(self, image_path):
+        """提取文档信息"""
+        # 加载图像
+        image = self.preprocess_image(image_path)
+        
+        # 生成JSON输出
+        json_output = self.generate_json(image)
+        
+        try:
+            # 尝试解析JSON
+            extracted_data = json.loads(json_output)
+        except json.JSONDecodeError:
+            # 如果解析失败，尝试修复常见的JSON问题
+            try:
+                # 尝试添加引号修复
+                fixed_json = re.sub(r'(\w+):', r'"\1":', json_output)
+                fixed_json = re.sub(r':\s*([^"{\[\d][^,}]*)', r': "\1"', fixed_json)
+                extracted_data = json.loads(fixed_json)
+            except:
+                # 如果仍然失败，返回原始文本
+                extracted_data = {"raw_output": json_output}
+        
+        return extracted_data
+    
+    def visualize_extraction(self, image_path, extracted_data, output_path="donut_result.png"):
+        """可视化提取结果（可选，需要OCR信息）"""
+        # Donut 本身不提供位置信息，如果需要可视化，需要额外处理
+        print("Donut 模型不直接提供位置信息，可视化功能需要额外实现")
+        return None
+    
+    def save_to_excel(self, extracted_data, output_path="extracted_data.xlsx"):
+        """保存提取结果到Excel"""
+        # 转换数据为DataFrame
+        if isinstance(extracted_data, dict):
+            # 如果是字典，直接转换
+            df = pd.DataFrame([extracted_data])
+        elif isinstance(extracted_data, list):
+            # 如果是列表，转换为多行
+            df = pd.DataFrame(extracted_data)
+        else:
+            # 其他格式转换为单行
+            df = pd.DataFrame({"result": [str(extracted_data)]})
+        
+        # 保存到Excel
+        df.to_excel(output_path, index=False)
+        print(f"提取结果已保存至: {output_path}")
+        return output_path
 
-# 5. 执行推理
-if __name__ == "__main__":
-    # 设置你的文档图像路径
+def get_task_prompt(entity_names):
+    """
+    根据实体名称生成任务提示
+    entity_names: 要提取的实体名称列表
+    """
+    # 创建JSON结构模板
+    json_structure = {name: "" for name in entity_names}
+    json_str = json.dumps(json_structure, indent=2)
+    
+    # 创建任务提示
+    task_prompt = f"<s>extract the following fields: {', '.join(entity_names)}. Output in JSON format:\n{json_str}"
+    return task_prompt
+
+# 主执行函数
+def main():
+    # 设置参数
     image_path = "path/to/your/document.jpg"
+    output_excel = "extracted_data.xlsx"
     
-    # 设置OCR结果Excel文件路径
-    ocr_excel_path = "path/to/your/ocr_results.xlsx"
+    # 定义要提取的实体名称
+    entity_names = ["invoice_number", "date", "total_amount", "vendor", "po_number"]
     
-    # 设置要提取的实体名称列表
-    entity_names = ["INVOICE_NUM", "DATE", "TOTAL", "VENDOR", "PO_NUMBER"]
+    # 创建任务提示
+    task_prompt = get_task_prompt(entity_names)
+    print("任务提示:", task_prompt)
     
-    # 可选：微调后的模型路径
-    model_path = None  # 使用预训练模型
-    # model_path = "./fine_tuned_model"
+    # 初始化Donut提取器
+    # 使用预训练模型
+    extractor = DonutDocumentExtractor(task_prompt=task_prompt)
     
-    # 运行信息提取
-    results = extract_document_info(image_path, ocr_excel_path, entity_names, model_path)
+    # 使用微调模型（如果有）
+    # extractor = DonutDocumentExtractor(model_path="./fine_tuned_donut", task_prompt=task_prompt)
     
-    # 打印提取结果
-    print("\n提取到的文档信息:")
-    for entity, info in results.items():
-        # 将归一化坐标转换回原始图像坐标
-        orig_bbox = [
-            info['bbox'][0] * Image.open(image_path).width / 1000,
-            info['bbox'][1] * Image.open(image_path).height / 1000,
-            info['bbox'][2] * Image.open(image_path).width / 1000,
-            info['bbox'][3] * Image.open(image_path).height / 1000
-        ]
-        print(f"{entity}: {info['text']}")
-        print(f"  位置: x1={orig_bbox[0]:.1f}, y1={orig_bbox[1]:.1f}, x2={orig_bbox[2]:.1f}, y2={orig_bbox[3]:.1f}")
+    # 提取信息
+    extracted_data = extractor.extract_info(image_path)
     
-    # 可选：保存结果到Excel
-    output_df = pd.DataFrame([
-        {
-            "entity": entity,
-            "text": info["text"],
-            "x_min": orig_bbox[0],
-            "y_min": orig_bbox[1],
-            "x_max": orig_bbox[2],
-            "y_max": orig_bbox[3]
-        } for entity, info in results.items()
-    ])
+    # 打印结果
+    print("\n提取结果:")
+    if isinstance(extracted_data, dict):
+        for key, value in extracted_data.items():
+            print(f"{key}: {value}")
+    else:
+        print(extracted_data)
     
-    output_excel_path = os.path.join(os.path.dirname(image_path), "extracted_entities.xlsx")
-    output_df.to_excel(output_excel_path, index=False)
-    print(f"\n提取结果已保存至: {output_excel_path}")
+    # 保存结果到Excel
+    extractor.save_to_excel(extracted_data, output_excel)
+    
+    # 可选：可视化结果（需要额外实现）
+    # extractor.visualize_extraction(image_path, extracted_data)
+
+if __name__ == "__main__":
+    main()
