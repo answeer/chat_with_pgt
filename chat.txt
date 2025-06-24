@@ -1,54 +1,143 @@
 import json
 import re
+import os
+from datetime import datetime
 
-def clean_and_parse_inference_result(raw_str):
+def clean_and_parse_inference_result(raw_str, item_id="unknown"):
     """清理并解析包含Markdown标记的JSON字符串"""
-    # 移除Markdown代码块标记 (```json 和 ```)
-    cleaned = re.sub(r'^```json\s*|\s*```$', '', raw_str, flags=re.MULTILINE)
-    # 解析为Python字典
-    return json.loads(cleaned.strip())
+    try:
+        # 移除Markdown代码块标记 (```json 和 ```)
+        cleaned = re.sub(r'^```json\s*|\s*```$', '', raw_str, flags=re.MULTILINE)
+        cleaned = cleaned.strip()
+        
+        # 处理可能的格式问题
+        cleaned = cleaned.replace('\n', ' ')  # 替换换行符
+        cleaned = re.sub(r'\s{2,}', ' ', cleaned)  # 压缩多余空格
+        
+        # 解析为Python字典
+        return json.loads(cleaned)
+    except json.JSONDecodeError as e:
+        # 创建错误报告
+        error_report = {
+            "error_type": "JSONDecodeError",
+            "error_message": str(e),
+            "original_string": raw_str,
+            "cleaned_string": cleaned,
+            "item_id": item_id
+        }
+        return error_report
+    except Exception as e:
+        return {
+            "error_type": "GeneralException",
+            "error_message": str(e),
+            "original_string": raw_str,
+            "item_id": item_id
+        }
 
-def process_json_file(input_file, output_file):
-    """处理JSON文件并保存结果"""
+def process_json_file(input_file, output_file, error_log_dir="error_logs"):
+    """处理JSON文件并保存结果，记录错误日志"""
+    # 创建错误日志目录
+    os.makedirs(error_log_dir, exist_ok=True)
+    
+    # 生成带时间戳的错误日志文件名
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    error_log_file = os.path.join(error_log_dir, f"errors_{timestamp}.json")
+    
+    stats = {
+        "total_items": 0,
+        "successful": 0,
+        "failed": 0,
+        "error_log": error_log_file
+    }
+    
     try:
         # 读取原始JSON文件
         with open(input_file, 'r', encoding='utf-8') as f:
             data = json.load(f)
         
-        # 检查数据格式是否符合预期
+        # 检查数据格式
         if not isinstance(data, list):
             raise ValueError("JSON文件内容应该是列表")
         
+        stats["total_items"] = len(data)
+        errors = []
+        
         # 处理每个条目
-        processed_count = 0
-        for item in data:
+        for idx, item in enumerate(data):
+            item_id = item.get("id", f"index_{idx}")
+            
             if "inference_result" in item and isinstance(item["inference_result"], str):
-                try:
-                    # 转换并替换原始字符串
-                    item["inference_result"] = clean_and_parse_inference_result(
-                        item["inference_result"]
-                    )
-                    processed_count += 1
-                except json.JSONDecodeError as e:
-                    print(f"解析错误: {e}\n在条目: {item.get('id', '未知ID')}")
-                    # 保留原始字符串以便调试
-                    item["inference_result_error"] = str(e)
+                # 转换并替换原始字符串
+                result = clean_and_parse_inference_result(
+                    item["inference_result"],
+                    item_id
+                )
+                
+                if "error_type" in result:
+                    # 保存错误信息
+                    stats["failed"] += 1
+                    errors.append(result)
+                    
+                    # 保留原始数据并添加错误标记
+                    item["inference_result_error"] = result
+                else:
+                    # 成功转换
+                    stats["successful"] += 1
+                    item["inference_result"] = result
+            else:
+                # 没有inference_result字段
+                stats["failed"] += 1
+                errors.append({
+                    "error_type": "MissingField",
+                    "error_message": "Missing or invalid 'inference_result' field",
+                    "item_id": item_id,
+                    "item_data": item
+                })
         
         # 保存处理后的数据
         with open(output_file, 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
         
-        print(f"处理完成! 共处理 {processed_count} 条记录")
+        # 保存错误日志
+        if errors:
+            with open(error_log_file, 'w', encoding='utf-8') as f:
+                json.dump(errors, f, indent=2, ensure_ascii=False)
+        
+        # 打印统计信息
+        print(f"\n处理完成! 共处理 {stats['total_items']} 条记录")
+        print(f"成功转换: {stats['successful']} 条")
+        print(f"转换失败: {stats['failed']} 条")
         print(f"原始文件: {input_file}")
         print(f"输出文件: {output_file}")
+        
+        if stats['failed'] > 0:
+            print(f"错误日志: {error_log_file}")
+        
+        return stats
     
     except Exception as e:
-        print(f"处理失败: {e}")
+        print(f"\n处理失败: {e}")
+        # 保存错误信息
+        with open(os.path.join(error_log_dir, f"fatal_error_{timestamp}.log"), 'w') as f:
+            f.write(f"Fatal error processing file: {e}\n")
+            f.write(f"Input file: {input_file}\n")
+            f.write(f"Timestamp: {timestamp}\n")
+        return None
 
 if __name__ == "__main__":
-    # 配置输入输出文件路径
+    # 配置输入输出
     input_filename = "input_data.json"  # 替换为你的输入文件名
     output_filename = "processed_data.json"  # 输出文件名
     
     # 执行处理
-    process_json_file(input_filename, output_filename)
+    stats = process_json_file(input_filename, output_filename)
+    
+    if stats and stats['failed'] > 0:
+        print("\n需要手动处理的建议:")
+        print("1. 检查错误日志文件了解具体错误")
+        print("2. 常见问题:")
+        print("   - 非标准JSON格式: 检查引号是否匹配")
+        print("   - 特殊字符问题: 检查是否有控制字符")
+        print("   - 不完整的JSON: 检查是否缺少大括号或引号")
+        print("3. 对于少量错误，可手动修复源数据")
+        print("4. 对于大量错误，可考虑编写自定义修复函数")
