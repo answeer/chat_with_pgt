@@ -2,37 +2,181 @@ import json
 import re
 import os
 from datetime import datetime
+import unicodedata
+
+def repair_json_string(json_str):
+    """尝试修复常见的JSON格式错误"""
+    # 尝试1: 处理转义引号问题
+    if r'\"' in json_str:
+        repaired = json_str.replace(r'\"', '"')
+        try:
+            return json.loads(repaired)
+        except:
+            pass
+    
+    # 尝试2: 处理单引号代替双引号
+    if "'" in json_str:
+        repaired = json_str.replace("'", '"')
+        try:
+            return json.loads(repaired)
+        except:
+            pass
+    
+    # 尝试3: 处理不匹配的括号
+    open_braces = json_str.count('{')
+    close_braces = json_str.count('}')
+    if open_braces > close_braces:
+        repaired = json_str + '}' * (open_braces - close_braces)
+        try:
+            return json.loads(repaired)
+        except:
+            pass
+    
+    # 尝试4: 处理末尾逗号问题
+    if re.search(r',\s*[}\]}]', json_str):
+        repaired = re.sub(r',\s*([}\]}])', r'\1', json_str)
+        try:
+            return json.loads(repaired)
+        except:
+            pass
+    
+    # 尝试5: 处理控制字符问题
+    if any(ord(c) < 32 and c not in '\n\r\t' for c in json_str):
+        repaired = ''.join(c for c in json_str if unicodedata.category(c)[0] != 'C' or c in '\n\r\t')
+        try:
+            return json.loads(repaired)
+        except:
+            pass
+    
+    # 尝试6: 处理不完整的键值对
+    if re.search(r':\s*[^"\d{][^,]*$', json_str):
+        repaired = re.sub(r':\s*([^"\d{][^,]*)$', r': "\1"', json_str)
+        try:
+            return json.loads(repaired)
+        except:
+            pass
+    
+    return None
 
 def clean_and_parse_inference_result(raw_str, item_id="unknown"):
-    """清理并解析包含Markdown标记的JSON字符串"""
+    """清理并解析包含Markdown标记的JSON字符串，尝试自动修复错误"""
+    original_str = raw_str
+    
     try:
-        # 移除Markdown代码块标记 (```json 和 ```)
+        # 初始清理
         cleaned = re.sub(r'^```json\s*|\s*```$', '', raw_str, flags=re.MULTILINE)
         cleaned = cleaned.strip()
         
-        # 处理可能的格式问题
-        cleaned = cleaned.replace('\n', ' ')  # 替换换行符
-        cleaned = re.sub(r'\s{2,}', ' ', cleaned)  # 压缩多余空格
+        # 尝试直接解析
+        try:
+            return json.loads(cleaned)
+        except json.JSONDecodeError as e:
+            first_error = e
         
-        # 解析为Python字典
-        return json.loads(cleaned)
+        # 尝试自动修复
+        repaired_data = repair_json_string(cleaned)
+        if repaired_data is not None:
+            return repaired_data
+        
+        # 如果自动修复失败，尝试更激进的清理
+        # 移除所有控制字符
+        cleaned = ''.join(c for c in cleaned if unicodedata.category(c)[0] != 'C' or c in '\n\r\t')
+        # 压缩多余空格
+        cleaned = re.sub(r'\s+', ' ', cleaned)
+        
+        # 尝试解析清理后的字符串
+        try:
+            return json.loads(cleaned)
+        except json.JSONDecodeError:
+            pass
+        
+        # 所有尝试都失败，抛出原始错误
+        raise first_error
+
     except json.JSONDecodeError as e:
-        # 创建错误报告
+        # 创建详细的错误报告
         error_report = {
             "error_type": "JSONDecodeError",
             "error_message": str(e),
-            "original_string": raw_str,
+            "original_string": original_str,
             "cleaned_string": cleaned,
-            "item_id": item_id
+            "item_id": item_id,
+            "diagnosis": diagnose_json_error(cleaned, e),
+            "suggested_fix": suggest_json_fix(cleaned, e)
         }
         return error_report
     except Exception as e:
         return {
             "error_type": "GeneralException",
             "error_message": str(e),
-            "original_string": raw_str,
+            "original_string": original_str,
             "item_id": item_id
         }
+
+def diagnose_json_error(json_str, exception):
+    """提供详细的错误诊断信息"""
+    if "Expecting property name enclosed in double quotes" in str(exception):
+        return "键名缺少双引号或使用了单引号"
+    
+    if "Unterminated string starting at" in str(exception):
+        return "字符串缺少结束引号"
+    
+    if "Expecting ':' delimiter" in str(exception):
+        return "键值对缺少冒号分隔符"
+    
+    if "Expecting ',' delimiter" in str(exception):
+        return "缺少逗号分隔符"
+    
+    if "Extra data" in str(exception):
+        return "JSON结构结束后有多余内容"
+    
+    if "Unterminated object" in str(exception):
+        open_braces = json_str.count('{')
+        close_braces = json_str.count('}')
+        if open_braces > close_braces:
+            return f"缺少 {open_braces - close_braces} 个右大括号"
+        else:
+            return "对象未正确结束"
+    
+    if "Unterminated array" in str(exception):
+        open_brackets = json_str.count('[')
+        close_brackets = json_str.count(']')
+        if open_brackets > close_brackets:
+            return f"缺少 {open_brackets - close_brackets} 个右方括号"
+        else:
+            return "数组未正确结束"
+    
+    return "未知错误类型 - 可能需要手动检查"
+
+def suggest_json_fix(json_str, exception):
+    """根据错误类型提供修复建议"""
+    msg = str(exception)
+    
+    if "line" in msg and "column" in msg:
+        # 提取错误位置
+        line_no = int(re.search(r'line (\d+)', msg).group(1))
+        col_no = int(re.search(r'column (\d+)', msg).group(1))
+        
+        # 分割行
+        lines = json_str.split('\n')
+        if line_no <= len(lines):
+            error_line = lines[line_no - 1]
+            
+            # 在错误位置添加标记
+            if col_no <= len(error_line):
+                marked_line = error_line[:col_no] + "❌<<<ERROR HERE>>>❌" + error_line[col_no:]
+                return f"错误位置: 第 {line_no} 行, 第 {col_no} 列\n标记行: {marked_line}"
+    
+    if "Expecting property name enclosed in double quotes" in msg:
+        return "尝试: 1. 确保所有键名都用双引号括起来 2. 替换单引号为双引号"
+    
+    if "Unterminated string starting at" in msg:
+        return "尝试: 1. 检查字符串是否缺少结束引号 2. 确保字符串内的引号正确转义"
+    
+    if "Extra data" in msg:
+        return "尝试: 1. 检查JSON结构是否完整 2. 移除JSON结束后的多余内容"
+    
+    return "建议: 1. 复制内容到在线JSON验证器检查 2. 检查特殊字符问题"
 
 def process_json_file(input_file, output_file, error_log_dir="error_logs"):
     """处理JSON文件并保存结果，记录错误日志"""
@@ -47,6 +191,7 @@ def process_json_file(input_file, output_file, error_log_dir="error_logs"):
         "total_items": 0,
         "successful": 0,
         "failed": 0,
+        "repaired": 0,
         "error_log": error_log_file
     }
     
@@ -73,7 +218,7 @@ def process_json_file(input_file, output_file, error_log_dir="error_logs"):
                     item_id
                 )
                 
-                if "error_type" in result:
+                if isinstance(result, dict) and "error_type" in result:
                     # 保存错误信息
                     stats["failed"] += 1
                     errors.append(result)
@@ -84,6 +229,10 @@ def process_json_file(input_file, output_file, error_log_dir="error_logs"):
                     # 成功转换
                     stats["successful"] += 1
                     item["inference_result"] = result
+                    
+                    # 检查是否通过修复成功
+                    if result != json.loads(re.sub(r'^```json\s*|\s*```$', '', item["inference_result"], flags=re.MULTILINE).strip()):
+                        stats["repaired"] += 1
             else:
                 # 没有inference_result字段
                 stats["failed"] += 1
@@ -105,13 +254,21 @@ def process_json_file(input_file, output_file, error_log_dir="error_logs"):
         
         # 打印统计信息
         print(f"\n处理完成! 共处理 {stats['total_items']} 条记录")
-        print(f"成功转换: {stats['successful']} 条")
+        print(f"成功转换: {stats['successful']} 条 (其中自动修复: {stats['repaired']} 条)")
         print(f"转换失败: {stats['failed']} 条")
         print(f"原始文件: {input_file}")
         print(f"输出文件: {output_file}")
         
         if stats['failed'] > 0:
             print(f"错误日志: {error_log_file}")
+            print("\n失败记录分析:")
+            error_types = {}
+            for error in errors:
+                err_type = error.get("error_type", "Unknown")
+                error_types[err_type] = error_types.get(err_type, 0) + 1
+            
+            for err_type, count in error_types.items():
+                print(f"  - {err_type}: {count} 条")
         
         return stats
     
@@ -124,6 +281,42 @@ def process_json_file(input_file, output_file, error_log_dir="error_logs"):
             f.write(f"Timestamp: {timestamp}\n")
         return None
 
+def manual_fix_errors(error_log_file):
+    """根据错误日志提供手动修复建议"""
+    with open(error_log_file, 'r', encoding='utf-8') as f:
+        errors = json.load(f)
+    
+    print(f"\n共发现 {len(errors)} 个错误记录")
+    print("常见问题及解决方案:")
+    
+    # 收集不同错误类型的解决方案
+    solutions = {
+        "JSONDecodeError": [],
+        "MissingField": [
+            "1. 检查原始数据是否确实缺少'inference_result'字段",
+            "2. 如果数据来自OCR，可能需要重新处理该条目"
+        ]
+    }
+    
+    for error in errors:
+        if error["error_type"] == "JSONDecodeError":
+            diagnosis = error.get("diagnosis", "未诊断")
+            solution = error.get("suggested_fix", "未提供解决方案")
+            solutions["JSONDecodeError"].append(f"- 问题: {diagnosis}\n  解决方案: {solution}")
+    
+    # 打印解决方案
+    for error_type, fixes in solutions.items():
+        print(f"\n{error_type} 错误:")
+        for i, fix in enumerate(set(fixes), 1):
+            print(f"{i}. {fix}")
+    
+    print("\n批量修复建议:")
+    print("1. 对于缺少引号的问题，可以使用文本编辑器的批量替换功能")
+    print("2. 对于大括号不匹配的问题，可以编写脚本自动添加缺失的括号")
+    print("3. 对于特殊字符问题，可以使用脚本过滤控制字符")
+    
+    return solutions
+
 if __name__ == "__main__":
     # 配置输入输出
     input_filename = "input_data.json"  # 替换为你的输入文件名
@@ -133,11 +326,11 @@ if __name__ == "__main__":
     stats = process_json_file(input_filename, output_filename)
     
     if stats and stats['failed'] > 0:
-        print("\n需要手动处理的建议:")
-        print("1. 检查错误日志文件了解具体错误")
-        print("2. 常见问题:")
-        print("   - 非标准JSON格式: 检查引号是否匹配")
-        print("   - 特殊字符问题: 检查是否有控制字符")
-        print("   - 不完整的JSON: 检查是否缺少大括号或引号")
-        print("3. 对于少量错误，可手动修复源数据")
-        print("4. 对于大量错误，可考虑编写自定义修复函数")
+        # 提供手动修复建议
+        error_log = stats["error_log"]
+        manual_fix_errors(error_log)
+        
+        print("\n高级修复选项:")
+        print("1. 对于重复出现的模式错误，可以修改repair_json_string函数")
+        print("2. 使用正则表达式批量修复源文件")
+        print(f"3. 检查错误日志: {error_log} 获取详细诊断")
