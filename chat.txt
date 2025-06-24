@@ -1,1 +1,54 @@
-'```json\n{\n  "date": "",\n  "shipper name": "CENTURY PLYBOARDS(INDIA) LTD.",\n  "shipper address": "P-15/1 TARATALA ROAD,CENTURY HOUSE KOLKATA-700088 WEST BENGAL, INDIA",\n  "shipper country": "WEST BENGAL, INDIA",\n  "transport document number": "VASCCUSIN004680",\n  "plase of issue": "SINGAPORE",\n  "notify party name": "TAK PRODUCTS & SERVICES PTE.LTD.,",\n  "notify party address": "14 SENOKO LOOP SINGAPORE 758150",\n  "vessel": "",\n  "agent name": "GOODRICH ASIA PACIFIC PTE LTD",\n  "agent address": "1 MARITIME SQUARE, #13-01A HARBOURFRONT CENTRE, SINGAPORE - 099253.",\n  "agent country": "SINGAPORE"\n}\n```'
+import json
+import re
+
+def clean_and_parse_inference_result(raw_str):
+    """清理并解析包含Markdown标记的JSON字符串"""
+    # 移除Markdown代码块标记 (```json 和 ```)
+    cleaned = re.sub(r'^```json\s*|\s*```$', '', raw_str, flags=re.MULTILINE)
+    # 解析为Python字典
+    return json.loads(cleaned.strip())
+
+def process_json_file(input_file, output_file):
+    """处理JSON文件并保存结果"""
+    try:
+        # 读取原始JSON文件
+        with open(input_file, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        
+        # 检查数据格式是否符合预期
+        if not isinstance(data, list):
+            raise ValueError("JSON文件内容应该是列表")
+        
+        # 处理每个条目
+        processed_count = 0
+        for item in data:
+            if "inference_result" in item and isinstance(item["inference_result"], str):
+                try:
+                    # 转换并替换原始字符串
+                    item["inference_result"] = clean_and_parse_inference_result(
+                        item["inference_result"]
+                    )
+                    processed_count += 1
+                except json.JSONDecodeError as e:
+                    print(f"解析错误: {e}\n在条目: {item.get('id', '未知ID')}")
+                    # 保留原始字符串以便调试
+                    item["inference_result_error"] = str(e)
+        
+        # 保存处理后的数据
+        with open(output_file, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        
+        print(f"处理完成! 共处理 {processed_count} 条记录")
+        print(f"原始文件: {input_file}")
+        print(f"输出文件: {output_file}")
+    
+    except Exception as e:
+        print(f"处理失败: {e}")
+
+if __name__ == "__main__":
+    # 配置输入输出文件路径
+    input_filename = "input_data.json"  # 替换为你的输入文件名
+    output_filename = "processed_data.json"  # 输出文件名
+    
+    # 执行处理
+    process_json_file(input_filename, output_filename)
