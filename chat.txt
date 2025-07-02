@@ -1,398 +1,186 @@
-# Databricks notebook source
-# MAGIC %pip install -U databricks-sdk==0.40.0 databricks-agents==0.16.0 databricks-langchain==0.3.0 mlflow[databricks]==2.20.2 databricks-vectorsearch==0.49 langchain==0.3.19 langchain_core==0.3.37 PyPDF2==3.0.1 langchain-text-splitters==0.3.6 llama-index==0.10.43 pymupdf==1.25.5 pillow==11.2.1 tqdm==4.67.1 nltk==3.9.1 typing -i https://artifactory.global.standardchartered.com/artifactory/api/pypi/pypi-release/simple
-# MAGIC
-# MAGIC dbutils.library.restartPython()
+在util文件夹下，现有的llm文件夹下有三个文件，__init__.py,内容为空，generate.py:
+import json
+from databricks.sdk.service.serving import ChatMessage, ChatMessageRole
+from utils.llm.db_managed.helper import *
 
-# COMMAND ----------
+def generate(databricks_client, query, relevant_chunk, model_serving_endpoint):
 
-# variables
-chunk_size = dbutils.widgets.text("chunk_size", "512")
-chunk_overlap = dbutils.widgets.text("chunk_overlap", "10")
-vector_search_endpoint_name = dbutils.widgets.text("vector_search_endpoint_name", "55491-aifactory-aifact-pdfve")
-catalog = dbutils.widgets.text("catalog", "aifactory_engg")
-schema = dbutils.widgets.text("schema", "rag_data_pipeline")
-volume = dbutils.widgets.text("volume", 'pdfsource')
-source_table_name = dbutils.widgets.text("source_table_name", 'aifact_pdfsource')
-embedding_model_endpoint_name = dbutils.widgets.text("embedding_model_endpoint_name", 'databricks-bge-large-en')
-
-# default values
-chunk_size = int(dbutils.widgets.get("chunk_size")) if dbutils.widgets.get("chunk_size") else 512
-chunk_overlap = int(dbutils.widgets.get("chunk_overlap")) if dbutils.widgets.get("chunk_overlap") else 10
-
-vector_search_endpoint_name = dbutils.widgets.get("vector_search_endpoint_name")
-if not vector_search_endpoint_name:
-    raise ValueError("vector_search_endpoint_name is required")
-
-volume = dbutils.widgets.get("volume")
-
-catalog = dbutils.widgets.get("catalog")
-if not catalog:
-    raise ValueError("catalog is required")
-
-schema = dbutils.widgets.get("schema")
-if not schema:
-    raise ValueError("schema is required")
-
-source_table_name = dbutils.widgets.get("source_table_name")
-if not source_table_name:
-    raise ValueError("source_table_name is required")
-
-embedding_model_endpoint_name = dbutils.widgets.get("embedding_model_endpoint_name")
-if not embedding_model_endpoint_name:
-    raise ValueError("embedding_model_endpoint_name is required")
-
-volume_path = f'/Volumes/{catalog}/{schema}/{volume}'
-data_table_path = f'{catalog}.{schema}.{source_table_name}'
-
-# COMMAND ----------
-
-# predefined functions
-import time
-
-def endpoint_exists(vsc, vs_endpoint_name):
-  try:
-    return vs_endpoint_name in [e['name'] for e in vsc.list_endpoints().get('endpoints', [])]
-  except Exception as e:
-    #Temp fix for potential REQUEST_LIMIT_EXCEEDED issue
-    if "REQUEST_LIMIT_EXCEEDED" in str(e):
-      print("WARN: couldn't get endpoint status due to REQUEST_LIMIT_EXCEEDED error. The demo will consider it exists")
-      return True
-    else:
-      raise e
-
-def wait_for_vs_endpoint_to_be_ready(vsc, vs_endpoint_name):
-  for i in range(180):
+    file_name = relevant_chunk[1]
+    content = relevant_chunk[2]
+    constructed_query = {
+        "query": query,
+        "context": {
+            "file_name": file_name,
+            "content": content
+        }
+    }
     try:
-      endpoint = vsc.get_endpoint(vs_endpoint_name)
+        # Assuming `databricks_client` is an instance of the Databricks SDK client
+        response = databricks_client.serving_endpoints.query(
+            name=model_serving_endpoint,
+            messages=[ChatMessage(role=ChatMessageRole.USER, content= json.dumps(constructed_query) ),]
+        )
+        return response
     except Exception as e:
-      #Temp fix for potential REQUEST_LIMIT_EXCEEDED issue
-      if "REQUEST_LIMIT_EXCEEDED" in str(e):
-        print("WARN: couldn't get endpoint status due to REQUEST_LIMIT_EXCEEDED error. Please manually check your endpoint status")
-        return
-      else:
-        raise e
-    status = endpoint.get("endpoint_status", endpoint.get("status"))["state"].upper()
-    if "ONLINE" in status:
-      return endpoint
-    elif "PROVISIONING" in status or i <6:
-      if i % 20 == 0: 
-        print(f"Waiting for endpoint to be ready, this can take a few min... {endpoint}")
-      time.sleep(10)
+        print(f"Error during model endpoint query: {e}")
+        return {},
+helper.py:
+import os
+from databricks.sdk import WorkspaceClient
+
+DATABRICKS_TOKEN = os.getenv("DATABRICKS_TOKEN")
+WORKSPACE_URL = os.getenv("WORKSPACE_URL")
+
+databricks_client = WorkspaceClient(
+    host=WORKSPACE_URL,
+    token=DATABRICKS_TOKEN
+)
+vector store文件夹下有四个文件，__init__.py，内容为空，index.py:
+
+from utils.vector_store.db_managed.helper import *
+
+def index(vector_search_endpoint_name, vs_index_fullname, source_table_fullname, embedding_model_endpoint_name):
+    if index_exists(vsc, vector_search_endpoint_name, vs_index_fullname):
+        #Trigger a sync to update our vs content with the new data saved in the table
+        wait_for_index_to_be_ready(vsc, vector_search_endpoint_name, vs_index_fullname)
+        vsc.get_index(vector_search_endpoint_name, vs_index_fullname).sync()
+
+        print(f"index {vs_index_fullname} on table {source_table_fullname} is ready")
     else:
-      raise Exception(f'''Error with the endpoint {vs_endpoint_name}. - this shouldn't happen: {endpoint}.\n Please delete it and re-run the previous cell: vsc.delete_endpoint("{vs_endpoint_name}")''')
-  raise Exception(f"Timeout, your endpoint isn't ready yet: {vsc.get_endpoint(vs_endpoint_name)}")
+        print(f"Creating index {vs_index_fullname} on endpoint {vector_search_endpoint_name}...")
+        vsc.create_delta_sync_index(
+            endpoint_name=vector_search_endpoint_name,
+            index_name=vs_index_fullname,
+            source_table_name=source_table_fullname,
+            pipeline_type="TRIGGERED",
+            primary_key="id",
+            embedding_source_column='chunks', #The column containing our text
+            embedding_model_endpoint_name=embedding_model_endpoint_name #The embedding endpoint used to create the embeddings
+        )
+        #Let's wait for the index to be ready and all our embeddings to be created and indexed
+        wait_for_index_to_be_ready(vsc, vector_search_endpoint_name, vs_index_fullname)
+query.py:
+
+from utils.vector_store.db_managed.helper import *
+
+def query_vector_store(query, vector_search_endpoint_name, vs_index_fullname):
+    try:
+        results = vsc.get_index(vector_search_endpoint_name, vs_index_fullname).similarity_search(
+            query_text=query,
+            columns=["id", "file_name", "chunks"],
+            num_results=1
+        )
+        docs = results.get('result', {}).get('data_array', [])
+        if docs:
+            return docs[0]
+        return ''
+    except Exception as e:
+        print(f"Error during similarity search: {e}")
+        return ''
+helper.py:
+import time
+import os
+from databricks.vector_search.client import VectorSearchClient
+
+DATABRICKS_TOKEN = os.getenv("DATABRICKS_TOKEN")
+WORKSPACE_URL = os.getenv("WORKSPACE_URL")
+
+vsc = VectorSearchClient(
+    disable_notice=True,
+    workspace_url=WORKSPACE_URL,
+    personal_access_token=DATABRICKS_TOKEN,
+)
 
 
+#  Index utils
 def index_exists(vsc, endpoint_name, index_full_name):
     try:
         vsc.get_index(endpoint_name, index_full_name).describe()
         return True
     except Exception as e:
-        if 'RESOURCE_DOES_NOT_EXIST' not in str(e):
-            print(f'Unexpected error describing the index. This could be a permission issue.')
+        if "RESOURCE_DOES_NOT_EXIST" not in str(e):
+            print(
+                f"Unexpected error describing the index. This could be a permission issue."
+            )
             raise e
     return False
-    
+
+
 def wait_for_index_to_be_ready(vsc, vs_endpoint_name, index_name):
-  for i in range(180):
-    idx = vsc.get_index(vs_endpoint_name, index_name).describe()
-    index_status = idx.get('status', idx.get('index_status', {}))
-    status = index_status.get('detailed_state', index_status.get('status', 'UNKNOWN')).upper()
-    url = index_status.get('index_url', index_status.get('url', 'UNKNOWN'))
-    if "ONLINE" in status:
-      return
-    if "UNKNOWN" in status:
-      print(f"Can't get the status - will assume index is ready {idx} - url: {url}")
-      return
-    elif "PROVISIONING" in status:
-      if i % 40 == 0: print(f"Waiting for index to be ready, this can take a few min... {index_status} - pipeline url:{url}")
-      time.sleep(10)
-    else:
-        raise Exception(f'''Error with the index - this shouldn't happen. DLT pipeline might have been killed.\n Please delete it and re-run the previous cell: vsc.delete_index("{index_name}, {vs_endpoint_name}") \nIndex details: {idx}''')
-  raise Exception(f"Timeout, your index isn't ready yet: {vsc.get_index(index_name, vs_endpoint_name)}")
-
-def wait_for_model_serving_endpoint_to_be_ready(ep_name):
-    from databricks.sdk import WorkspaceClient
-    from databricks.sdk.service.serving import EndpointStateReady, EndpointStateConfigUpdate
-    import time
-
-    # TODO make the endpoint name as a param
-    # Wait for it to be ready
-    w = WorkspaceClient()
-    state = ""
-    for i in range(200):
-        state = w.serving_endpoints.get(ep_name).state
-        if state.config_update == EndpointStateConfigUpdate.IN_PROGRESS:
+    for i in range(180):
+        idx = vsc.get_index(vs_endpoint_name, index_name).describe()
+        index_status = idx.get("status", idx.get("index_status", {}))
+        status = index_status.get(
+            "detailed_state", index_status.get("status", "UNKNOWN")
+        ).upper()
+        url = index_status.get("index_url", index_status.get("url", "UNKNOWN"))
+        if "ONLINE" in status:
+            return
+        if "UNKNOWN" in status:
+            print(
+                f"Can't get the status - will assume index is ready {idx} - url: {url}"
+            )
+            return
+        elif "PROVISIONING" in status:
             if i % 40 == 0:
-                print(f"Waiting for endpoint to deploy {ep_name}. Current state: {state}")
+                print(
+                    f"Waiting for index to be ready, this can take a few min... {index_status} - pipeline url:{url}"
+                )
             time.sleep(10)
-        elif state.ready == EndpointStateReady.READY:
-          print('endpoint ready.')
-          return
         else:
-          break
-    raise Exception(f"Couldn't start the endpoint, timeout, please check your endpoint for more details: {state}")
+            raise Exception(
+                f"""Error with the index - this shouldn't happen. DLT pipeline might have been killed.\n Please delete it and re-run the previous cell: vsc.delete_index("{index_name}, {vs_endpoint_name}") \nIndex details: {idx}"""
+            )
+    raise Exception(
+        f"Timeout, your index isn't ready yet: {vsc.get_index(index_name, vs_endpoint_name)}"
+    )
+
+#  Vector Search Endpoint
+def endpoint_exists(vsc, vs_endpoint_name):
+    try:
+        return vs_endpoint_name in [
+            e["name"] for e in vsc.list_endpoints().get("endpoints", [])
+        ]
+    except Exception as e:
+        # Temp fix for potential REQUEST_LIMIT_EXCEEDED issue
+        if "REQUEST_LIMIT_EXCEEDED" in str(e):
+            print(
+                "WARN: couldn't get endpoint status due to REQUEST_LIMIT_EXCEEDED error. The demo will consider it exists"
+            )
+            return True
+        else:
+            raise e
 
 
-# COMMAND ----------
-
-import fitz  # PyMuPDF for PDF processing
-import re  # Regular expressions for text pattern matching
-from typing import List  # Type hinting for lists
-import nltk  # Natural Language Toolkit for text processing
-import os  # Operating system interface
-
-# Configuration settings
-CHUNK_SIZE = chunk_size  # Size of each text chunk
-CHUNK_OVERLAP = chunk_overlap  # Overlap size between chunks
-HEADER_RATIO = 0.10  # Ratio to identify header section in a page
-FOOTER_RATIO = 0.08  # Ratio to identify footer section in a page
-
-# Set environment variables for offline mode
-os.environ["TRANSFORMERS_OFFLINE"] = "1"
-os.environ["HF_DATASETS_OFFLINE"] = "1"
-
-# Paths for model and NLTK data
-# model_path = "/Volumes/aifactory_engg/hf_models/huggingface_models/hf_mlflow_models/models/all-MiniLM-L6-v2"
-nltk_path = "/Volumes/aifactory_engg/hf_models/huggingface_models/hf_mlflow_models/nltk/nltk_data"
-
-# Append NLTK data path and verify resource
-nltk.data.path.append(nltk_path)
-nltk.data.find('tokenizers/punkt')
-print("NLTK资源加载成功")
-
-# Compile regex patterns for various text elements
-PATTERNS = {
-    'section_header': re.compile(r'^(?:SECTION|CHAPTER|ARTICLE)\s+[IVXLCDM0-9.]+', re.IGNORECASE),
-    'list_item': re.compile(r'^\s*(?:\d+\.|\*|\-)\s'),
-    'hyphen_word': re.compile(r'(\w+)-\s*(\w+)'),
-    'page_number': re.compile(r'\bPage\s+\d+', re.IGNORECASE),
-    'white_space': re.compile(r'\s{2,}')
-}
-
-def process_page(page) -> str:
-    """Process a single PDF page"""
-    # Extract text blocks from the page
-    blocks = [b for b in page.get_text("dict")["blocks"] if b["type"] == 0]
-    page_height = page.rect.height
-    # Filter out header and footer blocks
-    blocks = [b for b in blocks if b["bbox"][1] > page_height * HEADER_RATIO and b["bbox"][3] < page_height * (1 - FOOTER_RATIO)]
-    # Reconstruct and clean text
-    text = reconstruct_text(blocks)
-    return clean_text(text)
-
-def reconstruct_text(blocks: list) -> str:
-    """Reconstruct text flow and fix layout issues"""
-    # Sort blocks by their position on the page
-    sorted_blocks = sorted(blocks, key=lambda x: (x["bbox"][1], x["bbox"][0]))
-    text_lines = []
-
-    for block in sorted_blocks:
-        for line in block["lines"]:
-            line_text = ' '.join([span["text"] for span in line["spans"]])
-            # Handle hyphenated words at the end of lines
-            if text_lines and PATTERNS['hyphen_word'].search(text_lines[-1]):
-                last_word = text_lines[-1].split()[-1]
-                match = PATTERNS['hyphen_word'].match(last_word)
-                if match:
-                    text_lines[-1] = text_lines[-1][:-len(last_word)] + match.group(1)
-                    line_text = match.group(2) + line_text
-            text_lines.append(line_text)
-
-    return '\n'.join(text_lines)
-
-def clean_text(text: str) -> str:
-    """Text cleaning and normalization"""
-    # Remove page numbers and extra white spaces
-    text = PATTERNS['page_number'].sub('', text)
-    text = PATTERNS['white_space'].sub(' ', text)
-    return text.strip()
-
-def split_sentences(text: str) -> List[str]:
-    """Use nltk to split sentences"""
-    return nltk.sent_tokenize(text)
-
-def structure_aware_split(text: str) -> List[str]:
-    """Structure-aware pre-splitting"""
-    chunks = []
-    current_chunk = []
-
-    for line in text.split('\n'):
-        line = line.strip()
-        if not line:
-            continue
-
-        # Handle section headers
-        if PATTERNS['section_header'].match(line):
-            if current_chunk:
-                chunks.append(' '.join(current_chunk))
-                current_chunk = []
-            chunks.append(line)
-            continue
-
-        # Handle list items
-        if PATTERNS['list_item'].match(line):
-            if current_chunk and not PATTERNS['list_item'].match(current_chunk[-1]):
-                chunks.append(' '.join(current_chunk))
-                current_chunk = []
-            current_chunk.append(line)
-            continue
-
-        current_chunk.append(line)
-
-    if current_chunk:
-        chunks.append(' '.join(current_chunk))
-
-    return chunks
-
-def merge_chunks(chunks: List[str]) -> List[str]:
-    """Dynamic window merging algorithm"""
-    merged_chunks = []
-    current_chunk = []
-    current_length = 0
-    overlap_buffer = []
-
-    for chunk in chunks:
-        chunk_len = len(chunk)
-
-        while current_length + chunk_len > CHUNK_SIZE:
-            remaining = CHUNK_SIZE - current_length
-            if remaining > 50:
-                current_chunk.append(chunk[:remaining])
-                merged_chunks.append(' '.join(current_chunk).strip())
-
-                overlap_buffer = current_chunk[-CHUNK_OVERLAP // 50:]
-                current_chunk = overlap_buffer.copy()
-                current_length = sum(len(c) for c in current_chunk)
-                chunk = chunk[remaining:]
-                chunk_len = len(chunk)
+def wait_for_vs_endpoint_to_be_ready(vsc, vs_endpoint_name):
+    for i in range(180):
+        try:
+            endpoint = vsc.get_endpoint(vs_endpoint_name)
+        except Exception as e:
+            # Temp fix for potential REQUEST_LIMIT_EXCEEDED issue
+            if "REQUEST_LIMIT_EXCEEDED" in str(e):
+                print(
+                    "WARN: couldn't get endpoint status due to REQUEST_LIMIT_EXCEEDED error. Please manually check your endpoint status"
+                )
+                return
             else:
-                break
-
-        current_chunk.append(chunk)
-        current_length += chunk_len
-
-        if current_length >= CHUNK_SIZE:
-            merged_chunks.append(' '.join(current_chunk).strip())
-            overlap_buffer = current_chunk[-CHUNK_OVERLAP // 50:]
-            current_chunk = overlap_buffer.copy()
-            current_length = sum(len(c) for c in current_chunk)
-
-    if current_chunk:
-        merged_chunks.append(' '.join(current_chunk).strip())
-
-    return merged_chunks
-
-def chunk_text(text: str) -> List[str]:
-    """Main chunking process"""
-    pre_chunks = structure_aware_split(text)
-    sentence_chunks = []
-
-    for chunk in pre_chunks:
-        if len(chunk) > CHUNK_SIZE * 1.5:
-            sentence_chunks.extend(split_sentences(chunk))
+                raise e
+        status = endpoint.get("endpoint_status", endpoint.get("status"))[
+            "state"
+        ].upper()
+        if "ONLINE" in status:
+            return endpoint
+        elif "PROVISIONING" in status or i < 6:
+            if i % 20 == 0:
+                print(
+                    f"Waiting for endpoint to be ready, this can take a few min... {endpoint}"
+                )
+            time.sleep(10)
         else:
-            sentence_chunks.append(chunk)
-
-    return merge_chunks(sentence_chunks)
-
-def process_pdf(file_path: str) -> List[str]:
-    """End-to-end processing flow"""
-    doc = fitz.open(file_path)
-    full_text = []
-
-    for page in doc:
-        page_text = process_page(page)
-        full_text.append(page_text)
-
-    doc.close()
-    return full_text
-
-# COMMAND ----------
-
-from pyspark.sql import Row
-import uuid
-from tqdm.auto import tqdm
-
-pdf_files = dbutils.fs.ls(volume_path)
-
-# Extract text from each PDF and create a list of Rows
-pdf_data = []
-for pdf_file in tqdm([f for f in pdf_files if f.name.endswith('.pdf')], desc="Processing PDFs"):
-    dbfs_path = pdf_file.path.replace('dbfs:/', '/')
-
-    pdf_full_text = process_pdf(dbfs_path)
-    chunks_data = chunk_text('\n\n'.join(pdf_full_text))
-    pdf_data.extend([Row(id=str(uuid.uuid4()), file_name=pdf_file.name, chunks=chunk) for chunk in chunks_data])
-    
-
-# COMMAND ----------
-
-pdf_chunks_df = spark.createDataFrame(pdf_data)
-display(pdf_chunks_df.limit(6))
-
-# COMMAND ----------
-
-display(pdf_chunks_df)
-
-# COMMAND ----------
-
-pdf_chunks_df.write.format("delta").option("delta.enableChangeDataFeed", "true").option("mergeSchema", "true").mode("overwrite").saveAsTable(data_table_path)
-
-
-# COMMAND ----------
-
-# vector search endpoint should be one central
-from databricks.vector_search.client import VectorSearchClient
-vsc = VectorSearchClient(disable_notice=True)
-vector_search_endpoint_name=vector_search_endpoint_name
-
-if endpoint_exists(vsc, vector_search_endpoint_name):
-    print(f"Endpoint named {vector_search_endpoint_name} is ready.")
-
-# COMMAND ----------
-
-from databricks.sdk import WorkspaceClient
-import databricks.sdk.service.catalog as c
-
-catalog = catalog
-schema = schema
-source_table_name = source_table_name
-vs_index_name = f"{source_table_name}_vs_index"
-embedding_model_endpoint_name = embedding_model_endpoint_name
-
-#The table we'd like to index
-source_table_fullname = f"{catalog}.{schema}.{source_table_name}"
-# Where we want to store our index
-vs_index_fullname = f"{catalog}.{schema}.{vs_index_name}"
-
-if not index_exists(vsc, vector_search_endpoint_name, vs_index_fullname):
-  print(f"Creating index {vs_index_fullname} on endpoint {vector_search_endpoint_name}...")
-  vsc.create_delta_sync_index(
-    endpoint_name=vector_search_endpoint_name,
-    index_name=vs_index_fullname,
-    source_table_name=source_table_fullname,
-    pipeline_type="TRIGGERED",
-    primary_key="id",
-    embedding_source_column='chunks', #The column containing our text
-    embedding_model_endpoint_name=embedding_model_endpoint_name #The embedding endpoint used to create the embeddings
-  )
-  #Let's wait for the index to be ready and all our embeddings to be created and indexed
-  wait_for_index_to_be_ready(vsc, vector_search_endpoint_name, vs_index_fullname)
-else:
-  #Trigger a sync to update our vs content with the new data saved in the table
-  wait_for_index_to_be_ready(vsc, vector_search_endpoint_name, vs_index_fullname)
-  vsc.get_index(vector_search_endpoint_name, vs_index_fullname).sync()
-
-print(f"index {vs_index_fullname} on table {source_table_fullname} is ready")
-
-# COMMAND ----------
-
-question = 'generic'
-
-results = vsc.get_index(vector_search_endpoint_name, vs_index_fullname).similarity_search(
-  query_text=question,
-  columns=["id", "file_name", "chunks"],
-  num_results=1)
-docs = results.get('result', {}).get('data_array', [])
-docs
+            raise Exception(
+                f"""Error with the endpoint {vs_endpoint_name}. - this shouldn't happen: {endpoint}.\n Please delete it and re-run the previous cell: vsc.delete_endpoint("{vs_endpoint_name}")"""
+            )
+    raise Exception(
+        f"Timeout, your endpoint isn't ready yet: {vsc.get_endpoint(vs_endpoint_name)}"
+    )
+请根据以上内容对已生成的内容进行修改
