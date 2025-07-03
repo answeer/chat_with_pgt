@@ -1,2 +1,25 @@
- Knowledge extraction from complex unstructured data - Data extract from unstructured complex data source with AI
-The mainstream RAG solution always have challenge to extract semantically accurate information from complex data sources such as PDF/words (containing table, table-like structure , cross-reference to other documents)
+import json
+from databricks.sdk.service.serving import ChatMessage, ChatMessageRole
+from utils.llm.db_managed.helper import *
+
+def generate(databricks_client, query, relevant_chunk, model_serving_endpoint):
+
+    file_name = relevant_chunk[1]
+    content = relevant_chunk[2]
+    constructed_query = {
+        "query": query,
+        "context": {
+            "file_name": file_name,
+            "content": content
+        }
+    }
+    try:
+        # Assuming `databricks_client` is an instance of the Databricks SDK client
+        response = databricks_client.serving_endpoints.query(
+            name=model_serving_endpoint,
+            messages=[ChatMessage(role=ChatMessageRole.USER, content= json.dumps(constructed_query) ),]
+        )
+        return response
+    except Exception as e:
+        print(f"Error during model endpoint query: {e}")
+        return {}
