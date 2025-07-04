@@ -1,6 +1,110 @@
-Challenge
-An advanced OCR solution that extracts structured data from unstructured documents and automatically populates relevant fields within the established data model. The system combines optical character recognition with intelligent field mapping to transform document images into searchable, structured data that integrates with the classification and indexing framework.
 
-Success Criteria
-Process at least 100 document images (scanned PDFs, photos, or image files) using OCR technology and extracts structured data with high accuracy for key fields such as dates, names, amounts, addresses, and document numbers. The system must demonstrate intelligent field mapping by automatically identifying and categorizing extracted text into predefined data model fields (customer information, transaction details, policy numbers, etc.), populate a structured database or JSON format with the extracted information. The solution must include a web interface for uploading document images and viewing extraction results with confidence scores, support common document types like forms, invoices, contracts, and identification documents, provide data validation capabilities that flag potential OCR errors or missing critical fields, and demonstrate end-to-end workflow by showing how extracted structured data enhances document searchability and metadata enrichment within the broader document management ecosystem, reducing manual data entry time by at least 80% while maintaining data quality standards.
+import torch
+from PIL import Image
+from transformers import AutoModel, AutoTokenizer
+import time
+import os
+import json
 
+model_path = r'C:\\Users\\1657820\\Documents\\models\\mini_cpm'
+# load omni model default, the default init_vision/init_audio/init_tts is True
+# if load vision-only model, please set init_audio=False and init_tts=False
+# if load audio-only model, please set init_vision=False
+model = AutoModel.from_pretrained(
+    model_path,
+    trust_remote_code=True,
+    attn_implementation='sdpa', # sdpa or flash_attention_2
+    torch_dtype=torch.bfloat16,
+    init_vision=True,
+    init_audio=False,
+    init_tts=False
+)
+
+
+model = model.eval().cuda()
+tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+
+# In addition to vision-only mode, tts processor and vocos also needs to be initialized
+model.init_tts()
+
+result = []
+prompt = """{
+    "shipment onboard date": "",
+    "shipper name": "",
+    "shipper address": "",
+    "shipper country": "",
+    "transport document number": "",
+    "place of issue": "",
+    "notify party name": "",
+    "notify party address": "",
+    "vessel or tanker name": "",
+    "agents other than delivery and forwarding agent, not required for tanker or charterers party bill of lading": [],
+    "agent address other than delivery and forwarding agent, not required for tanker or charterers party bill of lading": [],
+    "agent country other than delivery and forwarding agent, not required for tanker or charterers party bill of lading": [],
+    "consignee name": "",
+    "consignee address if present": "",
+    "consignee country if present": "",
+    "place of recept": "",
+    "place of delivery": "",
+    "port of loading": "",
+    "port of discharge": "",
+    "delivery agent": "",
+    "delivery agent address": "",
+    "forwarding agent name": "",
+    "forwarding agent address": "",
+    "forwarding agent country": "",
+    "carrier name": "",
+    "name as owner": "",
+    "name as charterers": "",
+    "vessel name": "",
+    "charterers name": ""
+}
+
+
+Given is the Bill of Lading, Tanker Bill of Lading, Chartered party Bill of Lading document for trade document processing.
+Extract the entities as per the template given in json, some entities may be in 2 or more lines.And give the cooradinates of entities.
+Use the below knowledge base to extract the entities.
+## Knowledge Base:
+ - `Notify party` can be one or more, if more than one present extract all of then in a list
+ - For `vessel name` do not extract the Voyage Number
+ - Tanker or chartered party bill of lading document extract the following
+    - `Owner name`
+    - `Charterers name`
+    - `vessel name` will be tanker name
+- `Carrier name` will be be always be present in the bottom right of the page where it is signed. This will be blank for tanker or chartered party bill of lading
+- `transport document number` can also be referred as BL\\No, B\\L No,
+- `delivery agent` can also be defined as delivery agent, shipping agent, destination agent,
+- `shipment onboard date` will be on the bottom of the page
+
+"""
+
+directory = r"C:\Users\1657820\Documents\datasets\uat_0703"
+for file in os.listdir(directory):
+
+  file_path = os.path.join(directory, file)
+
+# test.py
+  image = Image.open(file_path).convert('RGB')
+
+  msgs = [{'role': 'user', 'content': [image, prompt]}]
+  now = time.time()
+  res = model.chat(
+      image=None,
+      msgs=msgs,
+      tokenizer=tokenizer
+  )
+  elapse = time.time() - now
+  try:
+    cleaned_data = res.strip()
+    cleaned_data = cleaned_data.replace('```json\n','').replace('\n```','').strip()
+    data_dict = json.loads(cleaned_data)
+  except Exception as e:
+    data_dict = res
+  result.append({
+                "file_name":os.path.basename(file_path),
+                "inference_time":round(elapse,2),
+                "inference_results":data_dict
+            })
+
+with open('minicpm_reuslt_uat_0703.json', 'w') as f:
+  json.dump(result, f, indent=4)
