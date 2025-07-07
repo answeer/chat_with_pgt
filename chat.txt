@@ -1,110 +1,243 @@
-
-import torch
+from fastapi import FastAPI, File, UploadFile, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from typing import Dict, Any, List
 from PIL import Image
+import torch
 from transformers import AutoModel, AutoTokenizer
-import time
-import os
 import json
+import os
+import uuid
+import logging
+import time
 
-model_path = r'C:\\Users\\1657820\\Documents\\models\\mini_cpm'
-# load omni model default, the default init_vision/init_audio/init_tts is True
-# if load vision-only model, please set init_audio=False and init_tts=False
-# if load audio-only model, please set init_vision=False
-model = AutoModel.from_pretrained(
-    model_path,
-    trust_remote_code=True,
-    attn_implementation='sdpa', # sdpa or flash_attention_2
-    torch_dtype=torch.bfloat16,
-    init_vision=True,
-    init_audio=False,
-    init_tts=False
+# Initialize FastAPI app
+app = FastAPI(
+    title="VLM Document Processing API",
+    description="API for extracting structured data from documents using Vision-Language Models",
+    version="1.0"
 )
 
+# Configure CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-model = model.eval().cuda()
-tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-# In addition to vision-only mode, tts processor and vocos also needs to be initialized
-model.init_tts()
+# Pydantic models for request/response validation
+class ExtractionRequest(BaseModel):
+    prompt: str = None
+    document_type: str = "bill_of_lading"
 
-result = []
-prompt = """{
-    "shipment onboard date": "",
-    "shipper name": "",
-    "shipper address": "",
-    "shipper country": "",
-    "transport document number": "",
-    "place of issue": "",
-    "notify party name": "",
-    "notify party address": "",
-    "vessel or tanker name": "",
-    "agents other than delivery and forwarding agent, not required for tanker or charterers party bill of lading": [],
-    "agent address other than delivery and forwarding agent, not required for tanker or charterers party bill of lading": [],
-    "agent country other than delivery and forwarding agent, not required for tanker or charterers party bill of lading": [],
-    "consignee name": "",
-    "consignee address if present": "",
-    "consignee country if present": "",
-    "place of recept": "",
-    "place of delivery": "",
-    "port of loading": "",
-    "port of discharge": "",
-    "delivery agent": "",
-    "delivery agent address": "",
-    "forwarding agent name": "",
-    "forwarding agent address": "",
-    "forwarding agent country": "",
-    "carrier name": "",
-    "name as owner": "",
-    "name as charterers": "",
-    "vessel name": "",
-    "charterers name": ""
-}
+class ExtractionResult(BaseModel):
+    document_type: str
+    fields: Dict[str, Any]
+    validation_warnings: List[str] = []
+    confidence_scores: Dict[str, float] = {}
+    processing_time: float
 
+# Global model and tokenizer instances
+model = None
+tokenizer = None
 
-Given is the Bill of Lading, Tanker Bill of Lading, Chartered party Bill of Lading document for trade document processing.
-Extract the entities as per the template given in json, some entities may be in 2 or more lines.And give the cooradinates of entities.
-Use the below knowledge base to extract the entities.
-## Knowledge Base:
- - `Notify party` can be one or more, if more than one present extract all of then in a list
- - For `vessel name` do not extract the Voyage Number
- - Tanker or chartered party bill of lading document extract the following
-    - `Owner name`
-    - `Charterers name`
-    - `vessel name` will be tanker name
-- `Carrier name` will be be always be present in the bottom right of the page where it is signed. This will be blank for tanker or chartered party bill of lading
-- `transport document number` can also be referred as BL\\No, B\\L No,
-- `delivery agent` can also be defined as delivery agent, shipping agent, destination agent,
-- `shipment onboard date` will be on the bottom of the page
+def initialize_model(model_path: str):
+    """Initialize the VLM model and tokenizer"""
+    global model, tokenizer
+    
+    if not os.path.exists(model_path):
+        raise FileNotFoundError(f"Model path not found: {model_path}")
+    
+    logger.info("Loading VLM model...")
+    start_time = time.time()
+    
+    model = AutoModel.from_pretrained(
+        model_path,
+        trust_remote_code=True,
+        attn_implementation='sdpa',
+        torch_dtype=torch.bfloat16,
+        init_vision=True,
+        init_audio=False,
+        init_tts=False
+    )
+    
+    model = model.eval().cuda()
+    tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+    
+    logger.info(f"Model loaded in {time.time() - start_time:.2f} seconds")
+    return model, tokenizer
 
-"""
+# Initialize model on startup
+@app.on_event("startup")
+async def startup_event():
+    model_path = r'C:\Users\1657820\Documents\models\mini_cpm'
+    try:
+        initialize_model(model_path)
+    except Exception as e:
+        logger.error(f"Model initialization failed: {str(e)}")
+        raise RuntimeError("Model initialization failed") from e
 
-directory = r"C:\Users\1657820\Documents\datasets\uat_0703"
-for file in os.listdir(directory):
+def process_image_with_vlm(
+    image: Image.Image, 
+    document_type: str = "bill_of_lading",
+    custom_prompt: str = None
+) -> Dict[str, Any]:
+    """
+    Process document image using VLM and extract structured data
+    
+    Args:
+        image: PIL Image object
+        document_type: Type of document being processed
+        custom_prompt: Optional custom prompt for extraction
+    
+    Returns:
+        Dictionary with extraction results
+    """
+    if model is None or tokenizer is None:
+        raise RuntimeError("Model not initialized")
+    
+    # Default prompt for bill of lading documents
+    default_prompt = """{
+        "shipment onboard date": "",
+        "shipper name": "",
+        "shipper address": "",
+        "shipper country": "",
+        "transport document number": "",
+        "place of issue": "",
+        "notify party name": "",
+        "notify party address": "",
+        "vessel or tanker name": "",
+        "agents other than delivery and forwarding agent, not required for tanker or charterers party bill of lading": [],
+        "agent address other than delivery and forwarding agent, not required for tanker or charterers party bill of lading": [],
+        "agent country other than delivery and forwarding agent, not required for tanker or charterers party bill of lading": [],
+        "consignee name": "",
+        "consignee address if present": "",
+        "consignee country if present": "",
+        "place of recept": "",
+        "place of delivery": "",
+        "port of loading": "",
+        "port of discharge": "",
+        "delivery agent": "",
+        "delivery agent address": "",
+        "forwarding agent name": "",
+        "forwarding agent address": "",
+        "forwarding agent country": "",
+        "carrier name": "",
+        "name as owner": "",
+        "name as charterers": "",
+        "vessel name": "",
+        "charterers name": ""
+    }
 
-  file_path = os.path.join(directory, file)
+    Given is the Bill of Lading, Tanker Bill of Lading, Chartered party Bill of Lading document for trade document processing.
+    Extract the entities as per the template given in json, some entities may be in 2 or more lines.
+    Use the below knowledge base to extract the entities.
+    ## Knowledge Base:
+     - `Notify party` can be one or more, if more than one present extract all of then in a list
+     - For `vessel name` do not extract the Voyage Number
+     - Tanker or chartered party bill of lading document extract the following
+        - `Owner name`
+        - `Charterers name`
+        - `vessel name` will be tanker name
+    - `Carrier name` will be be always be present in the bottom right of the page where it is signed. This will be blank for tanker or chartered party bill of lading
+    - `transport document number` can also be referred as BL\\No, B\\L No,
+    - `delivery agent` can also be defined as delivery agent, shipping agent, destination agent,
+    - `shipment onboard date` will be on the bottom of the page
+    """
+    
+    # Use custom prompt if provided, otherwise use default
+    prompt = custom_prompt if custom_prompt else default_prompt
+    
+    # Prepare message for VLM
+    msgs = [{'role': 'user', 'content': [image, prompt]}]
+    
+    # Process with VLM
+    start_time = time.time()
+    response = model.chat(
+        image=None,
+        msgs=msgs,
+        tokenizer=tokenizer
+    )
+    processing_time = time.time() - start_time
+    
+    # Clean and parse response
+    try:
+        cleaned_response = response.strip()
+        cleaned_response = cleaned_response.replace('```json\n', '').replace('\n```', '').strip()
+        result_data = json.loads(cleaned_response)
+    except json.JSONDecodeError:
+        logger.error("Failed to parse VLM response as JSON")
+        result_data = {"error": "Failed to parse VLM output", "raw_response": response}
+    except Exception as e:
+        logger.error(f"Unexpected error processing response: {str(e)}")
+        result_data = {"error": str(e), "raw_response": response}
+    
+    # Add processing metadata
+    result_data["processing_time"] = round(processing_time, 2)
+    result_data["document_type"] = document_type
+    
+    return result_data
 
-# test.py
-  image = Image.open(file_path).convert('RGB')
+@app.post("/process-document", response_model=ExtractionResult)
+async def process_document(
+    file: UploadFile = File(..., description="Document image file"),
+    request_params: ExtractionRequest = None
+):
+    """
+    Process a document image and extract structured data using VLM
+    
+    - **file**: Upload document image (JPG, PNG, PDF)
+    - **request_params**: Optional processing parameters (JSON body)
+    """
+    try:
+        # Generate unique ID for the request
+        request_id = str(uuid.uuid4())
+        logger.info(f"Processing request {request_id}")
+        
+        # Determine processing parameters
+        document_type = "bill_of_lading"
+        custom_prompt = None
+        
+        if request_params:
+            document_type = request_params.document_type or document_type
+            custom_prompt = request_params.prompt
+        
+        # Read and validate image
+        if file.content_type not in ["image/jpeg", "image/png", "application/pdf"]:
+            raise HTTPException(400, "Unsupported file type")
+        
+        image = Image.open(file.file).convert('RGB')
+        
+        # Process document
+        result = process_image_with_vlm(
+            image, 
+            document_type=document_type,
+            custom_prompt=custom_prompt
+        )
+        
+        # Prepare response
+        return {
+            "document_type": result.get("document_type", document_type),
+            "fields": result,
+            "validation_warnings": [],
+            "confidence_scores": {},
+            "processing_time": result.get("processing_time", 0)
+        }
+    
+    except Exception as e:
+        logger.error(f"Processing failed: {str(e)}")
+        raise HTTPException(500, f"Document processing error: {str(e)}") from e
 
-  msgs = [{'role': 'user', 'content': [image, prompt]}]
-  now = time.time()
-  res = model.chat(
-      image=None,
-      msgs=msgs,
-      tokenizer=tokenizer
-  )
-  elapse = time.time() - now
-  try:
-    cleaned_data = res.strip()
-    cleaned_data = cleaned_data.replace('```json\n','').replace('\n```','').strip()
-    data_dict = json.loads(cleaned_data)
-  except Exception as e:
-    data_dict = res
-  result.append({
-                "file_name":os.path.basename(file_path),
-                "inference_time":round(elapse,2),
-                "inference_results":data_dict
-            })
-
-with open('minicpm_reuslt_uat_0703.json', 'w') as f:
-  json.dump(result, f, indent=4)
+@app.get("/health")
+def health_check():
+    """Service health check endpoint"""
+    return {
+        "status": "OK",
+        "model_loaded": model is not None,
+        "service": "VLM Document Processing"
+    }
