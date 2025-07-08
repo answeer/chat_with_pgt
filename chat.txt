@@ -1,199 +1,61 @@
-# dashboard/models.py
-from django.db import models
-
-class Project(models.Model):
-    name = models.CharField(max_length=100, unique=True)
-    description = models.TextField(blank=True)
-    created_at = models.DateTimeField(auto_now_add=True)
-    status = models.CharField(max_length=20, default="active")
-    document_types = models.JSONField(default=list)
-
-    def __str__(self):
-        return self.name
-
-class DocumentType(models.Model):
-    name = models.CharField(max_length=255)
-    entities_to_extract = models.JSONField()
-    description = models.TextField(blank=True)
-    knowledgebase = models.TextField(blank=True, null=True)
-
-    def __str__(self):
-        return self.name
-
-class Document(models.Model):
-    STATUS_CHOICES = [
-        ('pending', 'Pending Processing'),
-        ('processing', 'Processing'),
-        ('processed', 'Processed'),
-        ('reviewed', 'Reviewed'),
-        ('failed', 'Processing Failed'),
-    ]
-    
-    project = models.ForeignKey(
-        Project, related_name="documents", on_delete=models.CASCADE
-    )
-    name = models.CharField(max_length=255)
-    uploaded_at = models.DateTimeField(auto_now_add=True)
-    doc_type = models.CharField(max_length=255, null=True, blank=True)
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
-    entities = models.JSONField(default=dict, blank=True)
-    reviewed_entities = models.JSONField(default=dict, blank=True)
-    review = models.BooleanField(default=False)
-    image = models.ImageField(upload_to='documents/')  # 改为ImageField存储文件
-    processing_time = models.FloatField(null=True, blank=True)
-    error_message = models.TextField(blank=True)
-
-    def __str__(self):
-        return self.name
-
-
-
-# ocr_extract/services/ocr_processor.py
+# ocr_extract/tasks.py
+import subprocess
+import sys
 import os
-import re
-import json
-import time
-import requests
-from PIL import Image
-from paddleocr import PaddleOCR
 from django.conf import settings
 
-class DocumentProcessor:
-    """重构后的OCR处理类"""
+def run_in_background(document_id):
+    """在后台进程中运行文档处理"""
+    # 获取当前 Python 解释器路径
+    python_path = sys.executable
     
-    def __init__(self, model="miniCPM"):
-        self.model = model
-        self.ocr = PaddleOCR(
-            use_angle_cls=True,
-            lang='en',
-            det_model_dir=os.path.join(settings.BASE_DIR, 'paddle_models/det'),
-            rec_model_dir=os.path.join(settings.BASE_DIR, 'paddle_models/rec'),
-            cls_model_dir=os.path.join(settings.BASE_DIR, 'paddle_models/cls')
+    # 获取当前模块路径
+    module_path = os.path.dirname(os.path.abspath(__file__))
+    script_path = os.path.join(module_path, "process_document.py")
+    
+    # 构建命令
+    command = f'"{python_path}" "{script_path}" {document_id}'
+    
+    # 根据操作系统选择启动方式
+    if os.name == 'nt':  # Windows
+        subprocess.Popen(
+            command, 
+            shell=True,
+            creationflags=subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
         )
-        self.vlm_url = settings.VLM_API_URL
+    else:  # Unix/Linux/Mac
+        subprocess.Popen(
+            command, 
+            shell=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True
+        )
 
-    def process_document(self, image_path: str) -> dict:
-        """处理文档并返回结果"""
-        try:
-            start = time.time()
-            self.ocr_results = self.run_paddle_ocr(image_path)
-            doc_type = self.classify_document(image_path)
-            extraction_results = self.extract_with_vlm(image_path, doc_type)
-            final_results = self.clean_and_match_coordinates(
-                extraction_results['results'], 
-                doc_type
-            )
-            return {
-                "success": True,
-                "processing_time": round(time.time() - start, 2),
-                "doc_type": doc_type,
-                "results": final_results
-            }
-        except Exception as e:
-            return {
-                "success": False,
-                "error": str(e)
-            }
-    
-    def run_paddle_ocr(self, image_path: str) -> list:
-        result = self.ocr.ocr(image_path, cls=True)
-        return result[0] if result else []
-
-    def classify_document(self, image_path: str) -> str:
-        prompt = "Classify this document: bill_of_lading, invoice, contract, id_card, form, or other. Return only the document type."
-        response = self.call_vlm(image_path, prompt)
-        return response['results'].strip().lower()
-
-    def extract_with_vlm(self, image_path, doc_type: str) -> dict:
-        prompt = self.create_prompt(doc_type)
-        return self.call_vlm(image_path, prompt)
-
-    def create_prompt(self, doc_type: str) -> str:
-        from dashboard.models import DocumentType
-        try:
-            doc_type_obj = DocumentType.objects.get(name__iexact=doc_type)
-            entities = json.dumps(doc_type_obj.entities_to_extract)
-            knowledgebase = doc_type_obj.knowledgebase
-            return f"{entities}\n{knowledgebase}"
-        except DocumentType.DoesNotExist:
-            # 默认回退
-            default_entities = {
-                "shipment onboard date": "",
-                "shipper name": "",
-                # ... 其他字段
-            }
-            default_knowledge = "Extract all relevant entities from the document."
-            return f"{json.dumps(default_entities)}\n{default_knowledge}"
-
-    def call_vlm(self, image_path, prompt: str) -> str:
-        files = {'image': open(image_path, 'rb')}
-        data = {'prompt': prompt}
-        response = requests.post(self.vlm_url, files=files, data=data)
-        response.raise_for_status()
-        return response.json()
-
-    def clean_and_match_coordinates(self, raw_output: str, doc_type: str) -> dict:
-        entities_data = self.clean_json_output(raw_output)
-        enhanced_results = {}
-        for entity, value in entities_data.items():
-            if value:
-                coordinates = self.find_entity_coordinates(value)
-                enhanced_results[entity] = {
-                    "value": value,
-                    "coordinates": coordinates
-                }
-            else:
-                enhanced_results[entity] = {
-                    "value": "",
-                    "coordinates": []
-                }
-        return enhanced_results
-
-    def clean_json_output(self, raw_output: str) -> dict:
-        cleaned = re.sub(r'^```json\s*|\s*```$', '', raw_output, flags=re.MULTILINE)
-        return json.loads(cleaned.strip())
-
-    def find_entity_coordinates(self, entity_value: str) -> list:
-        if isinstance(entity_value, list):
-            return [self._find_single_coord(name) for name in entity_value]
-        return self._find_single_coord(entity_value)
-    
-    def _find_single_coord(self, text: str) -> list:
-        if not self.ocr_results:
-            return []
-        
-        best_match = None
-        highest_similarity = 0
-        
-        for res in self.ocr_results:
-            ocr_text = res[1][0].strip()
-            target_text = text.strip()
-            similarity = self.calculate_text_similarity(ocr_text, target_text)
-                
-            if similarity > highest_similarity:
-                highest_similarity = similarity
-                best_match = res[0]
-        
-        return best_match if highest_similarity > 0.7 else []
-
-    def calculate_text_similarity(self, text1: str, text2: str) -> float:
-        if text1 == text2:
-            return 1.0
-        if text1 in text2 or text2 in text1:
-            return 0.9
-        set1, set2 = set(text1), set(text2)
-        return len(set1 & set2) / max(len(set1), len(set2), 1)
+# 创建独立的处理脚本
+# 在同一个目录下创建 process_document.py
 
 
-# ocr_extract/tasks.py
-from celery import shared_task
-from dashboard.models import Document
-from .services.ocr_processor import DocumentProcessor
-import tempfile
+
+# ocr_extract/process_document.py
 import os
+import sys
+import django
+import time
+import tempfile
 
-@shared_task
-def process_document_async(document_id):
+# 设置 Django 环境
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'your_project.settings')
+django.setup()
+
+from dashboard.models import Document
+from ocr_extract.services.ocr_processor import DocumentProcessor
+
+def process_document(document_id):
+    print(f"Starting processing for document {document_id}")
+    start_time = time.time()
+    
     document = Document.objects.get(id=document_id)
     try:
         document.status = 'processing'
@@ -215,19 +77,33 @@ def process_document_async(document_id):
             document.doc_type = result.get('doc_type', '')
             document.entities = result.get('results', {})
             document.processing_time = result.get('processing_time', 0)
+            print(f"Successfully processed document {document_id}")
         else:
             document.status = 'failed'
             document.error_message = result.get('error', 'Unknown error')
+            print(f"Failed to process document {document_id}: {document.error_message}")
         
         document.save()
     except Exception as e:
         document.status = 'failed'
         document.error_message = str(e)
         document.save()
+        print(f"Error processing document {document_id}: {str(e)}")
     finally:
         # 清理临时文件
         if tmp_path and os.path.exists(tmp_path):
             os.remove(tmp_path)
+        
+        elapsed = time.time() - start_time
+        print(f"Completed processing for document {document_id} in {elapsed:.2f} seconds")
+
+if __name__ == "__main__":
+    if len(sys.argv) != 2:
+        print("Usage: python process_document.py <document_id>")
+        sys.exit(1)
+    
+    document_id = int(sys.argv[1])
+    process_document(document_id)
 
 
 # dashboard/views.py
@@ -239,9 +115,9 @@ from django.http import JsonResponse
 from django.contrib import messages
 import json
 import yaml
-from ocr_extract.tasks import process_document_async
+from ocr_extract.tasks import run_in_background  # 修改导入
 
-# ... 其他导入和函数保持不变 ...
+# ... 其他函数保持不变 ...
 
 @csrf_exempt
 def upload_document(request, project_id):
@@ -257,57 +133,13 @@ def upload_document(request, project_id):
                 review=False,
                 project=project,
                 name=uploaded_file.name,
-                image=uploaded_file,  # 使用ImageField
+                image=uploaded_file,
             )
             
-            # 启动异步处理任务
-            process_document_async.delay(document.id)
+            # 使用 subprocess 启动后台处理
+            run_in_background(document.id)
             
             messages.success(request, "Document uploaded and processing started!")
             return redirect("dashboard:project_detail", pk=project_id)
 
     return render(request, "dashboard/upload_document.html", {"project": project})
-
-@csrf_exempt
-def review_document(request, document_id):
-    document = get_object_or_404(Document, id=document_id)
-    
-    # 准备实体数据用于前端渲染
-    entities_data = []
-    if document.entities:
-        for entity, data in document.entities.items():
-            entities_data.append({
-                "name": entity,
-                "value": data.get("value", ""),
-                "coordinates": data.get("coordinates", [])
-            })
-    
-    return render(request, "dashboard/review_document.html", {
-        "document": document,
-        "entities": entities_data
-    })
-
-# ... 其他函数保持不变 ...
-
-
-# settings.py
-# 添加新应用
-INSTALLED_APPS = [
-    # ...
-    'ocr_extract',
-    'dashboard',
-]
-
-# 文件存储设置
-MEDIA_URL = '/media/'
-MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
-
-# OCR配置
-VLM_API_URL = "http://localhost:5000/extract"  # 根据实际部署调整
-
-# Celery配置（如果使用异步）
-CELERY_BROKER_URL = 'redis://localhost:6379/0'
-CELERY_RESULT_BACKEND = 'redis://localhost:6379/0'
-CELERY_ACCEPT_CONTENT = ['json']
-CELERY_TASK_SERIALIZER = 'json'
-
