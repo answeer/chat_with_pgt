@@ -1,67 +1,57 @@
-
-import torch
-from PIL import Image
-from transformers import AutoModel, AutoTokenizer
-import time
+import base64
+import json
+import re
 import os
+import time
+import requests
+from PIL import Image
+import psycopg2
 import json
 
-model_path = r'C:\\Users\\1657820\\Documents\\models\\mini_cpm'
-# load omni model default, the default init_vision/init_audio/init_tts is True
-# if load vision-only model, please set init_audio=False and init_tts=False
-# if load audio-only model, please set init_vision=False
-model = AutoModel.from_pretrained(
-    model_path,
-    trust_remote_code=True,
-    attn_implementation='sdpa', # sdpa or flash_attention_2
-    torch_dtype=torch.bfloat16,
-    init_vision=True,
-    init_audio=False,
-    init_tts=False
-)
 
+def insert_db(data):
+    conn = psycopg2.connect("dbname=test user=postgres password=pass")
+    cur = conn.cursor()
 
-model = model.eval().cuda()
-tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+    cur.execute(
+        "INSERT INTO my_table (data) VALUES (%s)",
+        (json.dumps(data),) 
+    )
 
-# In addition to vision-only mode, tts processor and vocos also needs to be initialized
-model.init_tts()
+    conn.commit()
+    cur.close()
+    conn.close()
 
-result = []
-prompt = """{
-    "shipment onboard date": "",
-    "shipper name": "",
-    "shipper address": "",
-    "shipper country": "",
-    "transport document number": "",
-    "place of issue": "",
-    "notify party name": "",
-    "notify party address": "",
-    "vessel or tanker name": "",
-    "agents other than delivery and forwarding agent, not required for tanker or charterers party bill of lading": [],
-    "agent address other than delivery and forwarding agent, not required for tanker or charterers party bill of lading": [],
-    "agent country other than delivery and forwarding agent, not required for tanker or charterers party bill of lading": [],
-    "consignee name": "",
-    "consignee address if present": "",
-    "consignee country if present": "",
-    "place of recept": "",
-    "place of delivery": "",
-    "port of loading": "",
-    "port of discharge": "",
-    "delivery agent": "",
-    "delivery agent address": "",
-    "forwarding agent name": "",
-    "forwarding agent address": "",
-    "forwarding agent country": "",
-    "carrier name": "",
-    "name as owner": "",
-    "name as charterers": "",
-    "vessel name": "",
-    "charterers name": ""
-}
+entities_map = {"bill_of_lading":"""{
+                    "shipment onboard date": "",
+                    "shipper name": "",
+                    "shipper address": "",
+                    "shipper country": "",
+                    "transport document number": "",
+                    "place of issue": "",
+                    "notify party name": "",
+                    "notify party address": "",
+                    "vessel or tanker name": "",
+                    "consignee name": "",
+                    "consignee address if present": "",
+                    "consignee country if present": "",
+                    "place of recept": "",
+                    "place of delivery": "",
+                    "port of loading": "",
+                    "port of discharge": "",
+                    "delivery agent": "",
+                    "delivery agent address": "",
+                    "forwarding agent name": "",
+                    "forwarding agent address": "",
+                    "forwarding agent country": "",
+                    "carrier name": "",
+                    "name as owner": "",
+                    "name as charterers": "",
+                    "vessel name": "",
+                    "charterers name": ""
+                }"""}
 
-
-Given is the Bill of Lading, Tanker Bill of Lading, Chartered party Bill of Lading document for trade document processing.
+base_prompt_map = {"bill_of_lading":"""Given is the Bill of Lading, Tanker Bill of Lading, Chartered party Bill of Lading document for trade document processing.
 Extract the entities as per the template given in json, some entities may be in 2 or more lines.And give the cooradinates of entities.
 Use the below knowledge base to extract the entities.
 ## Knowledge Base:
@@ -74,37 +64,155 @@ Use the below knowledge base to extract the entities.
 - `Carrier name` will be be always be present in the bottom right of the page where it is signed. This will be blank for tanker or chartered party bill of lading
 - `transport document number` can also be referred as BL\\No, B\\L No,
 - `delivery agent` can also be defined as delivery agent, shipping agent, destination agent,
-- `shipment onboard date` will be on the bottom of the page
+- `shipment onboard date` will be on the bottom of the page"""}
 
-"""
 
-directory = r"C:\Users\1657820\Documents\datasets\uat_0703"
-for file in os.listdir(directory):
+class DocumentProcessor:
+    """
+    Main document processing class using multi-modal language models
+    Handles end-to-end processing: preprocessing, classification, extraction, validation
+    """
+    def __init__(self, model="miniCPM"):
+        self.model = model  # Default to miniCPM
+    
+    def save_res(results):
+        pass
 
-  file_path = os.path.join(directory, file)
+    def process_document(self, image_path: str) -> dict:
+        """
+        Main processing pipeline for document images
+        Args:
+            image_path: Path to the document image file
+        Returns:
+            Structured extraction results with validation
+        """
+        start = time.time()
 
-# test.py
-  image = Image.open(file_path).convert('RGB')
+        # Step 1: Document type classification
+        doc_type = self.classify_document(image_path)
+        
+        # Step 3: Information extraction using VLM
+        extraction_results = self.extract_with_vlm(image_path, doc_type)
 
-  msgs = [{'role': 'user', 'content': [image, prompt]}]
-  now = time.time()
-  res = model.chat(
-      image=None,
-      msgs=msgs,
-      tokenizer=tokenizer
-  )
-  elapse = time.time() - now
-  try:
-    cleaned_data = res.strip()
-    cleaned_data = cleaned_data.replace('```json\n','').replace('\n```','').strip()
-    data_dict = json.loads(cleaned_data)
-  except Exception as e:
-    data_dict = res
-  result.append({
+        final_results = self.clean_json_output(extraction_results['results'])
+
+        elapse = time.time() - start
+        
+        return elapse, final_results
+
+    def preprocess_image(self, image_path: str) -> Image.Image:
+        """
+        Enhance document image quality for better OCR results
+        Args:
+            image_path: Path to source image
+        Returns:
+            Enhanced PIL Image object
+        """
+        img = Image.open(image_path)
+        
+        return img
+
+    def classify_document(self, image_path: Image.Image) -> str:
+        """
+        Determine document type using zero-shot classification
+        Args:
+            image: Preprocessed document image
+        Returns:
+            Document type string (e.g., 'invoice', 'contract')
+        """
+        # Create classification prompt
+        prompt = "Classify this document: bill_of_lading, invoice, contract, id_card, form, or other, just return the document type only."
+        
+        # Get VLM response
+        response = self.call_vlm(image_path, prompt)
+        
+        # Normalize response
+        doc_type = response['results']
+        
+        return doc_type
+
+    def extract_with_vlm(self, image_path, doc_type: str) -> dict:
+        """
+        Extract structured data using the VLM API
+        """
+        
+        # Prepare API request
+        prompt = self.create_prompt(doc_type)
+
+        response = self.call_vlm(image_path, prompt)
+
+        return response
+
+    def create_prompt(self, doc_type: str) -> str:
+        """
+        Generate optimized prompt for specific document type
+        Args:
+            doc_type: Classified document type
+        Returns:
+            Formatted prompt string
+        """
+
+        entities = entities_map[doc_type]
+        base_prompt = base_prompt_map[doc_type]
+
+        prompt = entities + base_prompt
+
+        return prompt
+        
+    def call_vlm(self, image_path, prompt: str) -> str:
+
+        url = "http://localhost:5000/extract"
+
+        files = {
+            'image': open(image_path,'rb'),
+        }
+        
+        data = {'prompt': prompt}
+
+        response = requests.post(url,files=files,data=data)
+
+        return response.json()
+
+    def clean_json_output(self, raw_output: str) -> str:
+        """
+        Clean and prepare VLM output for JSON parsing
+        Args:
+            raw_output: Raw text from VLM
+        Returns:
+            Clean JSON string
+        """
+        # Remove markdown code fences
+        cleaned = re.sub(r'^```json\s*|\s*```$', '', raw_output, flags=re.MULTILINE)
+        
+        # Remove leading/trailing whitespace
+        return json.loads(cleaned.strip())
+
+
+    def encode_image(self, image: Image.Image) -> str:
+        """
+        Convert PIL image to base64 string
+        Args:
+            image: PIL Image object
+        Returns:
+            base64 encoded string
+        """
+        from io import BytesIO
+        
+        buffer = BytesIO()
+        image.save(buffer, format="JPEG")
+        return base64.b64encode(buffer.getvalue()).decode("utf-8")
+
+
+if __name__ == "__main__":
+    document_processor = DocumentProcessor()
+    results = []
+    image_folder = r"C:\Users\1657820\Documents\datasets\UAT_Latest"
+    for file in os.listdir(image_folder):
+        file_path = os.path.join(image_folder, file)
+        elapse, final_results = document_processor.process_document(file_path)
+        results.append({
                 "file_name":os.path.basename(file_path),
                 "inference_time":round(elapse,2),
-                "inference_results":data_dict
+                "inference_results":final_results
             })
-
-with open('minicpm_reuslt_uat_0703.json', 'w') as f:
-  json.dump(result, f, indent=4)
+    print(results)
