@@ -34,17 +34,17 @@ entities_map = {"bill_of_lading":"""{
                     "notify party address": "",
                     "vessel or tanker name": "",
                     "consignee name": "",
-                    "consignee address if present": "",
-                    "consignee country if present": "",
+                    "consignee address": "",
+                    "consignee country": "",
                     "place of recept": "",
                     "place of delivery": "",
                     "port of loading": "",
                     "port of discharge": "",
                     "delivery agent": "",
                     "delivery agent address": "",
-                    "forwarding agent name": "",
-                    "forwarding agent address": "",
-                    "forwarding agent country": "",
+                    "agent name": "",
+                    "agent address": "",
+                    "agent country": "",
                     "carrier name": "",
                     "name as owner": "",
                     "name as charterers": "",
@@ -164,8 +164,8 @@ class DocumentProcessor:
         
         for i, res in enumerate(self.ocr_results['rec_texts']):
             if res:
-                ocr_text = res.lower().strip()
-                target_text = text.lower().strip()
+                ocr_text = res.strip()
+                target_text = text.strip()
                 
                 # 计算文本相似度
                 similarity = self.calculate_text_similarity(ocr_text, target_text)
