@@ -1,1 +1,344 @@
-classify documents based on the input files and suggested to use combination of llm capabilities and elastic search to achieve this.
+import base64
+import json
+import re
+import os
+import time
+import requests
+from PIL import Image
+import psycopg2
+import json
+from paddleocr import PaddleOCR
+
+
+def insert_db(data):
+    conn = psycopg2.connect("dbname=test user=postgres password=pass")
+    cur = conn.cursor()
+
+    cur.execute(
+        "INSERT INTO my_table (data) VALUES (%s)",
+        (json.dumps(data),) 
+    )
+
+    conn.commit()
+    cur.close()
+    conn.close()
+
+entities_map = {"bill_of_lading":"""{
+                    "shipment onboard date": "",
+                    "shipper name": "",
+                    "shipper address": "",
+                    "shipper country": "",
+                    "transport document number": "",
+                    "place of issue": "",
+                    "notify party name": "",
+                    "notify party address": "",
+                    "vessel or tanker name": "",
+                    "consignee name": "",
+                    "consignee address if present": "",
+                    "consignee country if present": "",
+                    "place of recept": "",
+                    "place of delivery": "",
+                    "port of loading": "",
+                    "port of discharge": "",
+                    "delivery agent": "",
+                    "delivery agent address": "",
+                    "forwarding agent name": "",
+                    "forwarding agent address": "",
+                    "forwarding agent country": "",
+                    "carrier name": "",
+                    "name as owner": "",
+                    "name as charterers": "",
+                    "vessel name": "",
+                    "charterers name": ""
+                }"""}
+
+base_prompt_map = {"bill_of_lading":"""Given is the Bill of Lading, Tanker Bill of Lading, Chartered party Bill of Lading document for trade document processing.
+Extract the entities as per the template given in json, some entities may be in 2 or more lines.And give the cooradinates of entities.
+Use the below knowledge base to extract the entities.
+## Knowledge Base:
+ - `Notify party` can be one or more, if more than one present extract all of then in a list
+ - For `vessel name` do not extract the Voyage Number
+ - Tanker or chartered party bill of lading document extract the following
+    - `Owner name`
+    - `Charterers name`
+    - `vessel name` will be tanker name
+- `Carrier name` will be be always be present in the bottom right of the page where it is signed. This will be blank for tanker or chartered party bill of lading
+- `transport document number` can also be referred as BL\\No, B\\L No,
+- `delivery agent` can also be defined as delivery agent, shipping agent, destination agent,
+- `shipment onboard date` will be on the bottom of the page"""}
+
+
+class DocumentProcessor:
+    """
+    Main document processing class using multi-modal language models
+    Handles end-to-end processing: preprocessing, classification, extraction, validation
+    """
+    def __init__(self, model="miniCPM"):
+        self.model = model  # Default to miniCPM
+        self.ocr = PaddleOCR(
+                    text_detection_model_name="PP-OCRv5_mobile_det",
+                    text_recognition_model_name="PP-OCRv5_mobile_rec",
+                    use_doc_orientation_classify=False,
+                    use_doc_unwarping=False,
+                    use_textline_orientation=False)
+
+    def save_res(results):
+        pass
+
+    def process_document(self, image_path: str) -> dict:
+        """
+        Main processing pipeline for document images
+        Args:
+            image_path: Path to the document image file
+        Returns:
+            Structured extraction results with validation
+        """
+        start = time.time()
+
+        self.ocr_results = self.run_paddle_ocr(image_path)
+        # Step 2: Document type classification
+        doc_type = self.classify_document(image_path)
+        
+        # Step 3: Information extraction using VLM
+        extraction_results = self.extract_with_vlm(image_path, doc_type)
+
+        final_results = self.clean_and_match_coordinates(
+            extraction_results['results'], 
+            doc_type
+        )
+        elapse = time.time() - start
+        
+        return elapse, final_results
+    
+
+    def clean_and_match_coordinates(self, raw_output: str, doc_type: str) -> dict:
+        """
+        清理VLM输出并匹配OCR坐标
+        Args:
+            raw_output: VLM原始输出
+            ocr_results: PaddleOCR结果
+            doc_type: 文档类型
+        Returns:
+            包含实体值和坐标的增强结果
+        """
+        # 清理VLM输出
+        entities_data = self.clean_json_output(raw_output)
+        
+        # 为每个实体匹配坐标
+        enhanced_results = {}
+        for entity, value in entities_data.items():
+            if value:  # 只处理有值的实体
+                coordinates = self.find_entity_coordinates(value, entity, doc_type)
+                enhanced_results[entity] = {
+                    "value": value,
+                    "coordinates": coordinates
+                }
+            else:
+                enhanced_results[entity] = {
+                    "value": "",
+                    "coordinates": []
+                }
+        
+        return enhanced_results
+
+    def find_entity_coordinates(self, entity_value: str, entity_name: str, doc_type: str) -> list:
+        """
+        为实体值查找匹配的坐标
+        Args:
+            entity_value: 实体值文本
+            ocr_results: OCR结果列表
+            entity_name: 实体名称（用于特殊处理）
+            doc_type: 文档类型
+        Returns:
+            坐标点列表 [[x1, y1], [x2, y2], [x3, y3], [x4, y4]]
+        """
+        # 特殊处理：通知方可能是多个
+        if isinstance(entity_value, list):
+            return [self._find_single_coord(name) for name in entity_value]
+        
+        return self._find_single_coord(entity_value)
+    
+    def _find_single_coord(self, text: str) -> list:
+        best_match = None
+        highest_similarity = 0
+        
+        for i, res in enumerate(self.ocr_results['rec_texts']):
+            if res:
+                ocr_text = res.lower().strip()
+                target_text = text.lower().strip()
+                
+                # 计算文本相似度
+                similarity = self.calculate_text_similarity(ocr_text, target_text)
+                
+                # 更新最佳匹配
+                if similarity > highest_similarity:
+                    highest_similarity = similarity
+                    best_match = self.ocr_results['rec_polys'][i]
+        
+        # 设置相似度阈值（0.7 = 70%匹配）
+        if highest_similarity > 0.7:
+            # 将坐标转换为列表形式
+            return best_match.tolist()
+        
+        return []
+    
+    def calculate_text_similarity(self, text1: str, text2: str) -> float:
+        """
+        计算两个文本的相似度（0-1之间）
+        Args:
+            text1: 第一个文本
+            text2: 第二个文本
+        Returns:
+            相似度分数
+        """
+        # 简单实现：基于子串匹配
+        if text1 == text2:
+            return 1.0
+        
+        if text1 in text2 or text2 in text1:
+            return 0.9
+        
+        # 更高级的实现可以使用Levenshtein距离等
+        # 这里简化实现
+        common_chars = set(text1) & set(text2)
+        similarity = len(common_chars) / max(len(set(text1)), len(set(text2)), 1)
+        
+        return similarity
+
+
+    def run_paddle_ocr(self, image_path: str) -> list:
+        result = self.ocr.predict(image_path)
+        return result[0] if result else []
+
+    def preprocess_image(self, image_path: str) -> Image.Image:
+        """
+        Enhance document image quality for better OCR results
+        Args:
+            image_path: Path to source image
+        Returns:
+            Enhanced PIL Image object
+        """
+        img = Image.open(image_path)
+        
+        return img
+
+    def classify_document(self, image_path: Image.Image) -> str:
+        """
+        Determine document type using zero-shot classification
+        Args:
+            image: Preprocessed document image
+        Returns:
+            Document type string (e.g., 'invoice', 'contract')
+        """
+        # Create classification prompt
+        prompt = "Classify this document: bill_of_lading, invoice, contract, id_card, form, or other, just return the document type only."
+        
+        # Get VLM response
+        response = self.call_vlm(image_path, prompt)
+        
+        # Normalize response
+        doc_type = response['results']
+        
+        return doc_type
+
+    def extract_with_vlm(self, image_path, doc_type: str) -> dict:
+        """
+        Extract structured data using the VLM API
+        """
+        
+        # Prepare API request
+        prompt = self.create_prompt(doc_type)
+
+        response = self.call_vlm(image_path, prompt)
+
+        return response
+
+    def create_prompt(self, doc_type: str) -> str:
+        """
+        Generate optimized prompt for specific document type
+        Args:
+            doc_type: Classified document type
+        Returns:
+            Formatted prompt string
+        """
+
+        entities = entities_map[doc_type]
+        base_prompt = base_prompt_map[doc_type]
+
+        prompt = entities + base_prompt
+
+        return prompt
+        
+    def call_vlm(self, image_path, prompt: str) -> str:
+
+        url = "http://localhost:5000/extract"
+
+        files = {
+            'image': open(image_path,'rb'),
+        }
+        
+        data = {'prompt': prompt}
+
+        response = requests.post(url,files=files,data=data)
+
+        return response.json()
+
+    def clean_json_output(self, raw_output: str) -> str:
+        """
+        Clean and prepare VLM output for JSON parsing
+        Args:
+            raw_output: Raw text from VLM
+        Returns:
+            Clean JSON string
+        """
+        # Remove markdown code fences
+        cleaned = re.sub(r'^```json\s*|\s*```$', '', raw_output, flags=re.MULTILINE)
+        
+        # Remove leading/trailing whitespace
+        return json.loads(cleaned.strip())
+
+
+    def encode_image(self, image: Image.Image) -> str:
+        """
+        Convert PIL image to base64 string
+        Args:
+            image: PIL Image object
+        Returns:
+            base64 encoded string
+        """
+        from io import BytesIO
+        
+        buffer = BytesIO()
+        image.save(buffer, format="JPEG")
+        return base64.b64encode(buffer.getvalue()).decode("utf-8")
+
+
+if __name__ == "__main__":
+    document_processor = DocumentProcessor()
+    results = []
+    image_folder = r"C:\Users\1657820\Documents\datasets\UAT_Latest"
+    for file in os.listdir(image_folder):
+        if file.lower().endswith(('.png', '.jpg', '.jpeg')):
+            file_path = os.path.join(image_folder, file)
+            print(f"Processing: {file}")
+            try:
+                elapse, final_results = document_processor.process_document(file_path)
+                results.append({
+                    "file_name": os.path.basename(file_path),
+                    "inference_time": round(elapse, 2),
+                    "inference_results": final_results
+                })
+                # 打印带坐标的结果
+                print(f"Results for {file}:")
+                for entity, data in final_results.items():
+                    print(f"  {entity}: {data['value']}")
+                    if data['coordinates']:
+                        print(f"    Coordinates: {data['coordinates']}")
+            except Exception as e:
+                print(f"Error processing {file}: {str(e)}")
+    
+    # 保存结果到文件
+    with open("processing_results.json", "w") as f:
+        json.dump(results, f, indent=2)
+    
+    print("Processing completed. Results saved to processing_results.json")
