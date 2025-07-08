@@ -1,240 +1,19 @@
-文件上传功能已经包含在dashboard的前端应用中，这是现有的view文件内容：
-# dashboard/views.py
-from django.shortcuts import get_object_or_404, redirect, render
-from django.views.decorators.csrf import csrf_exempt
-
-from .forms import ProjectForm
-from .models import Document, Project, DocumentType
-from django.http import JsonResponse
-from django.contrib import messages
-import json
-
-import yaml
-
-
-def get_validation_options():
-    # Path to the YAML file
-    yaml_file_path = "./validation.yml"
-
-    # Open and read the YAML file
-    with open(yaml_file_path, "r") as file:
-        data = yaml.safe_load(file)
-
-    # Extract validation options
-    validation_options = data.get("validation_options", [])
-    return validation_options
-
-
-def create_document(request):
-    document_types = DocumentType.objects.all()
-
-    if request.method == 'POST':
-        document_name = request.POST.get('document_name')
-        knowledgebase = request.POST.get('knowledgebase')
-        selected_document_type_ids = request.POST.getlist('document_types')
-
-        # Fetch the names of the selected document types
-        selected_document_type_names = DocumentType.objects.filter(
-            id__in=selected_document_type_ids
-        ).values_list('name', flat=True)
-
-        # Create the Document instance
-        Document.objects.create(
-            name=document_name,
-            knowledgebase=knowledgebase,
-            # document_types=list(selected_document_type_names)  # Save as a list of names
-            document_types=get_validation_options()  # Save as a list of names
-        )
-        return redirect('dashboard:dashboard')
-
-    return render(request, 'dashboard/create_document.html', {
-        'document_types': document_types
-    })
-
-
-def upload_document(request, project_id):
-    project = get_object_or_404(Project, pk=project_id)
-
-    if request.method == "POST":
-        uploaded_file = request.FILES.get("document")
-        if uploaded_file:
-            # Insert the document into the dashboard_document table
-            Document.objects.create(
-                status="pending",
-                entities={},
-                reviewed_entities={},
-                review=0,
-                project=project,
-                name=uploaded_file.name,
-                image_path=uploaded_file,
-            )
-            
-
-            return redirect("dashboard:project_detail", pk=project_id)
-
-    return render(request, "dashboard/upload_document.html", {"project": project})
-
-
-@csrf_exempt
-def review_document(request, document_id):
-    # Fetch the document from the database
-    document = get_object_or_404(Document, id=document_id)
-
-    # Pass the document to the template
-    return render(request, "review_document.html", {"document": document})
-
-
-@csrf_exempt
-def submit_review(request, document_id):
-    if request.method == "POST":
-        # Get the document object
-        document = get_object_or_404(Document, id=document_id)
-
-        # Extract reviewed entities from the form
-        reviewed_entities = {}
-
-        is_reviewed_present = any(
-            key == "reviewed" for key, value in request.POST.items()
-        )
-        print("----", is_reviewed_present)
-        for key, value in request.POST.items():
-            if key.startswith("reviewed_entities["):
-                entity_key = key[len("reviewed_entities[") : -1]  # Extract the key name
-                reviewed_entities[entity_key] = value
-
-        # Save the reviewed entities as JSON
-        document.reviewed_entities = reviewed_entities
-        if is_reviewed_present:
-            document.review = 1  # Mark as reviewed if checkbox is checked
-            document.status = "reviewed"  # Mark as reviewed if checkbox is checked
-        document.save()
-
-        # Add a success message and redirect
-        messages.success(request, "Document review submitted successfully!")
-        return redirect("dashboard:dashboard")  # Redirect to the dashboard
-
-    return JsonResponse({"error": "Invalid request method"}, status=400)
-
-
-@csrf_exempt
-def review_document(request, doc_id):
-    document = get_object_or_404(Document, id=doc_id)
-    return render(request, "dashboard/review_document.html", {"document": document})
-
-
-@csrf_exempt
-def dashboard(request):
-    projects = Project.objects.prefetch_related("documents").all()
-    for project in projects:
-        project.total_docs = project.documents.count()
-        project.processed_docs = project.documents.filter(
-            status="Pending Review"
-        ).count()
-        project.reviewed_docs = project.documents.filter(status="reviewed").count()
-    total_projects = projects.count()
-
-    print("projects   ", total_projects)
-    total_documents = sum(p.total_docs for p in projects)
-    total_processed = sum(p.processed_docs for p in projects)
-    total_reviewed = sum(p.reviewed_docs for p in projects)
-    return render(
-        request,
-        "dashboard/dashboard.html",
-        {
-            "projects": projects,
-            "total_projects": total_projects,
-            "total_documents": total_documents,
-            "total_processed": total_processed,
-            "total_reviewed": total_reviewed,
-        },
-    )
-
-
-@csrf_exempt
-def project_detail(request, pk):
-    project = get_object_or_404(Project, pk=pk)
-    documents = project.documents.all()
-    return render(
-        request,
-        "dashboard/project_detail.html",
-        {
-            "project": project,
-            "documents": documents,
-        },
-    )
-
-
-@csrf_exempt
-def create_project(request):
-    document_types = DocumentType.objects.all()  # Fetch all document types from the database
-
-    if request.method == "POST":
-        project_name = request.POST.get("name")
-        selected_document_types = request.POST.getlist("document_types")  # Get selected document types
-        description = request.POST.get("description")# Get selected document types
-
-        print("-------------- ",project_name, selected_document_types)
-
-        # Create a new Project instance
-        project = Project.objects.create(
-            name=project_name,
-            description = description,
-            status = "posted",
-            document_types=selected_document_types  # Save selected document types
-        )
-        return redirect("dashboard:dashboard")
-
-    return render(request, "dashboard/create_project.html", {
-        "document_types": document_types  # Pass document types to the template
-    })
-
-
-@csrf_exempt
-def edit_project(request, pk):
-    project = get_object_or_404(Project, pk=pk)
-    if request.method == "POST":
-        description = request.POST.get("description")  # Get the description value
-        project.description = description  # Update the project description
-        project.document_types = ",".join(request.POST.getlist("document_types"))  # Save as comma-separated values
-        project.save()  # Save the changes to the database
-        return redirect("dashboard:dashboard")
-    else:
-        form = ProjectForm(instance=project)
-        # Split the stored document types into a list for preloading
-        print("??????? ",project.document_types)
-        # selected_document_types = project.document_types.split(",") if project.document_types else []
-        document_types = DocumentType.objects.all()
-
-    return render(
-        request,
-        "dashboard/create_project.html",
-        {
-            "form": form,
-            "edit_mode": True,
-            "project": project,
-            "document_types": document_types # Pass selected document types as a list
-        },
-    )
-这是现有的model文件内容：
+# dashboard/models.py
 from django.db import models
-
 
 class Project(models.Model):
     name = models.CharField(max_length=100, unique=True)
-    document_type = models.CharField(max_length=100)
     description = models.TextField(blank=True)
-    entities_to_extract = models.JSONField(default=list, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     status = models.CharField(max_length=20, default="active")
-    document_types = models.JSONField(default=list)  # Store document type names as a list   ---> get the list of classification class  ["BOL"]
+    document_types = models.JSONField(default=list)
 
     def __str__(self):
         return self.name
 
-
 class DocumentType(models.Model):
-    name = models.CharField(max_length=255)  # ["BOL"]
-    entities_to_extract = models.JSONField()  # Store entities as a JSON list   -> these are the enties to extract
+    name = models.CharField(max_length=255)
+    entities_to_extract = models.JSONField()
     description = models.TextField(blank=True)
     knowledgebase = models.TextField(blank=True, null=True)
 
@@ -242,18 +21,293 @@ class DocumentType(models.Model):
         return self.name
 
 class Document(models.Model):
+    STATUS_CHOICES = [
+        ('pending', 'Pending Processing'),
+        ('processing', 'Processing'),
+        ('processed', 'Processed'),
+        ('reviewed', 'Reviewed'),
+        ('failed', 'Processing Failed'),
+    ]
+    
     project = models.ForeignKey(
         Project, related_name="documents", on_delete=models.CASCADE
     )
-    name = models.CharField(max_length=100, blank=True)
-    uploaded_at = models.DateTimeField(auto_now_add=True, blank=True)
-    doc_type = models.CharField(max_length=255, null=True, blank=True)  # <-- populate form classification
-    status = models.CharField(max_length=20, default="in progress")
-    entities = models.JSONField(default=list, blank=True)  # <-- populate from the predicted entitries
-    reviewed_entities = models.JSONField(default=list, blank=True)  # JSONField for storing reviewed entities
-    review = models.BooleanField(default=False)
-    image_path = models.CharField(max_length=255, null=True, blank=True)  # New column for image path
     name = models.CharField(max_length=255)
+    uploaded_at = models.DateTimeField(auto_now_add=True)
+    doc_type = models.CharField(max_length=255, null=True, blank=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    entities = models.JSONField(default=dict, blank=True)
+    reviewed_entities = models.JSONField(default=dict, blank=True)
+    review = models.BooleanField(default=False)
+    image = models.ImageField(upload_to='documents/')  # 改为ImageField存储文件
+    processing_time = models.FloatField(null=True, blank=True)
+    error_message = models.TextField(blank=True)
 
     def __str__(self):
-        return self.name or f"Document {self.id}"
+        return self.name
+
+
+
+# ocr_extract/services/ocr_processor.py
+import os
+import re
+import json
+import time
+import requests
+from PIL import Image
+from paddleocr import PaddleOCR
+from django.conf import settings
+
+class DocumentProcessor:
+    """重构后的OCR处理类"""
+    
+    def __init__(self, model="miniCPM"):
+        self.model = model
+        self.ocr = PaddleOCR(
+            use_angle_cls=True,
+            lang='en',
+            det_model_dir=os.path.join(settings.BASE_DIR, 'paddle_models/det'),
+            rec_model_dir=os.path.join(settings.BASE_DIR, 'paddle_models/rec'),
+            cls_model_dir=os.path.join(settings.BASE_DIR, 'paddle_models/cls')
+        )
+        self.vlm_url = settings.VLM_API_URL
+
+    def process_document(self, image_path: str) -> dict:
+        """处理文档并返回结果"""
+        try:
+            start = time.time()
+            self.ocr_results = self.run_paddle_ocr(image_path)
+            doc_type = self.classify_document(image_path)
+            extraction_results = self.extract_with_vlm(image_path, doc_type)
+            final_results = self.clean_and_match_coordinates(
+                extraction_results['results'], 
+                doc_type
+            )
+            return {
+                "success": True,
+                "processing_time": round(time.time() - start, 2),
+                "doc_type": doc_type,
+                "results": final_results
+            }
+        except Exception as e:
+            return {
+                "success": False,
+                "error": str(e)
+            }
+    
+    def run_paddle_ocr(self, image_path: str) -> list:
+        result = self.ocr.ocr(image_path, cls=True)
+        return result[0] if result else []
+
+    def classify_document(self, image_path: str) -> str:
+        prompt = "Classify this document: bill_of_lading, invoice, contract, id_card, form, or other. Return only the document type."
+        response = self.call_vlm(image_path, prompt)
+        return response['results'].strip().lower()
+
+    def extract_with_vlm(self, image_path, doc_type: str) -> dict:
+        prompt = self.create_prompt(doc_type)
+        return self.call_vlm(image_path, prompt)
+
+    def create_prompt(self, doc_type: str) -> str:
+        from dashboard.models import DocumentType
+        try:
+            doc_type_obj = DocumentType.objects.get(name__iexact=doc_type)
+            entities = json.dumps(doc_type_obj.entities_to_extract)
+            knowledgebase = doc_type_obj.knowledgebase
+            return f"{entities}\n{knowledgebase}"
+        except DocumentType.DoesNotExist:
+            # 默认回退
+            default_entities = {
+                "shipment onboard date": "",
+                "shipper name": "",
+                # ... 其他字段
+            }
+            default_knowledge = "Extract all relevant entities from the document."
+            return f"{json.dumps(default_entities)}\n{default_knowledge}"
+
+    def call_vlm(self, image_path, prompt: str) -> str:
+        files = {'image': open(image_path, 'rb')}
+        data = {'prompt': prompt}
+        response = requests.post(self.vlm_url, files=files, data=data)
+        response.raise_for_status()
+        return response.json()
+
+    def clean_and_match_coordinates(self, raw_output: str, doc_type: str) -> dict:
+        entities_data = self.clean_json_output(raw_output)
+        enhanced_results = {}
+        for entity, value in entities_data.items():
+            if value:
+                coordinates = self.find_entity_coordinates(value)
+                enhanced_results[entity] = {
+                    "value": value,
+                    "coordinates": coordinates
+                }
+            else:
+                enhanced_results[entity] = {
+                    "value": "",
+                    "coordinates": []
+                }
+        return enhanced_results
+
+    def clean_json_output(self, raw_output: str) -> dict:
+        cleaned = re.sub(r'^```json\s*|\s*```$', '', raw_output, flags=re.MULTILINE)
+        return json.loads(cleaned.strip())
+
+    def find_entity_coordinates(self, entity_value: str) -> list:
+        if isinstance(entity_value, list):
+            return [self._find_single_coord(name) for name in entity_value]
+        return self._find_single_coord(entity_value)
+    
+    def _find_single_coord(self, text: str) -> list:
+        if not self.ocr_results:
+            return []
+        
+        best_match = None
+        highest_similarity = 0
+        
+        for res in self.ocr_results:
+            ocr_text = res[1][0].strip()
+            target_text = text.strip()
+            similarity = self.calculate_text_similarity(ocr_text, target_text)
+                
+            if similarity > highest_similarity:
+                highest_similarity = similarity
+                best_match = res[0]
+        
+        return best_match if highest_similarity > 0.7 else []
+
+    def calculate_text_similarity(self, text1: str, text2: str) -> float:
+        if text1 == text2:
+            return 1.0
+        if text1 in text2 or text2 in text1:
+            return 0.9
+        set1, set2 = set(text1), set(text2)
+        return len(set1 & set2) / max(len(set1), len(set2), 1)
+
+
+# ocr_extract/tasks.py
+from celery import shared_task
+from dashboard.models import Document
+from .services.ocr_processor import DocumentProcessor
+import tempfile
+import os
+
+@shared_task
+def process_document_async(document_id):
+    document = Document.objects.get(id=document_id)
+    try:
+        document.status = 'processing'
+        document.save()
+        
+        # 创建临时文件
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as tmp_file:
+            for chunk in document.image.chunks():
+                tmp_file.write(chunk)
+            tmp_path = tmp_file.name
+        
+        # 处理文档
+        processor = DocumentProcessor()
+        result = processor.process_document(tmp_path)
+        
+        # 更新文档状态
+        if result['success']:
+            document.status = 'processed'
+            document.doc_type = result.get('doc_type', '')
+            document.entities = result.get('results', {})
+            document.processing_time = result.get('processing_time', 0)
+        else:
+            document.status = 'failed'
+            document.error_message = result.get('error', 'Unknown error')
+        
+        document.save()
+    except Exception as e:
+        document.status = 'failed'
+        document.error_message = str(e)
+        document.save()
+    finally:
+        # 清理临时文件
+        if tmp_path and os.path.exists(tmp_path):
+            os.remove(tmp_path)
+
+
+# dashboard/views.py
+from django.shortcuts import get_object_or_404, redirect, render
+from django.views.decorators.csrf import csrf_exempt
+from .forms import ProjectForm
+from .models import Document, Project, DocumentType
+from django.http import JsonResponse
+from django.contrib import messages
+import json
+import yaml
+from ocr_extract.tasks import process_document_async
+
+# ... 其他导入和函数保持不变 ...
+
+@csrf_exempt
+def upload_document(request, project_id):
+    project = get_object_or_404(Project, pk=project_id)
+
+    if request.method == "POST":
+        uploaded_file = request.FILES.get("document")
+        if uploaded_file:
+            document = Document.objects.create(
+                status="pending",
+                entities={},
+                reviewed_entities={},
+                review=False,
+                project=project,
+                name=uploaded_file.name,
+                image=uploaded_file,  # 使用ImageField
+            )
+            
+            # 启动异步处理任务
+            process_document_async.delay(document.id)
+            
+            messages.success(request, "Document uploaded and processing started!")
+            return redirect("dashboard:project_detail", pk=project_id)
+
+    return render(request, "dashboard/upload_document.html", {"project": project})
+
+@csrf_exempt
+def review_document(request, document_id):
+    document = get_object_or_404(Document, id=document_id)
+    
+    # 准备实体数据用于前端渲染
+    entities_data = []
+    if document.entities:
+        for entity, data in document.entities.items():
+            entities_data.append({
+                "name": entity,
+                "value": data.get("value", ""),
+                "coordinates": data.get("coordinates", [])
+            })
+    
+    return render(request, "dashboard/review_document.html", {
+        "document": document,
+        "entities": entities_data
+    })
+
+# ... 其他函数保持不变 ...
+
+
+# settings.py
+# 添加新应用
+INSTALLED_APPS = [
+    # ...
+    'ocr_extract',
+    'dashboard',
+]
+
+# 文件存储设置
+MEDIA_URL = '/media/'
+MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
+
+# OCR配置
+VLM_API_URL = "http://localhost:5000/extract"  # 根据实际部署调整
+
+# Celery配置（如果使用异步）
+CELERY_BROKER_URL = 'redis://localhost:6379/0'
+CELERY_RESULT_BACKEND = 'redis://localhost:6379/0'
+CELERY_ACCEPT_CONTENT = ['json']
+CELERY_TASK_SERIALIZER = 'json'
+
