@@ -1,5 +1,10 @@
-Challenge
-An advanced OCR solution that extracts structured data from unstructured documents and automatically populates relevant fields within the established data model. The system combines optical character recognition with intelligent field mapping to transform document images into searchable, structured data that integrates with the classification and indexing framework.
-
-Success Criteria
-Process at least 100 document images (scanned PDFs, photos, or image files) using OCR technology and extracts structured data with high accuracy for key fields such as dates, names, amounts, addresses, and document numbers. The system must demonstrate intelligent field mapping by automatically identifying and categorizing extracted text into predefined data model fields (customer information, transaction details, policy numbers, etc.), populate a structured database or JSON format with the extracted information. The solution must include a web interface for uploading document images and viewing extraction results with confidence scores, support common document types like forms, invoices, contracts, and identification documents, provide data validation capabilities that flag potential OCR errors or missing critical fields, and demonstrate end-to-end workflow by showing how extracted structured data enhances document searchability and metadata enrichment within the broader document management ecosystem, reducing manual data entry time by at least 80% while maintaining data quality standards.
+Django==4.2.11
+paddleocr==2.7.0.3
+paddlepaddle==2.5.2
+requests==2.31.0
+Pillow==10.2.0
+psycopg2-binary==2.9.9
+python-dotenv==1.0.1
+gunicorn==21.2.0
+django-extensions==3.2.3
+pyyaml==6.0.1
