@@ -1,27 +1,6 @@
-# document.py
-import argparse
-import cv2
-
-def main():
-    # 创建参数解析器
-    parser = argparse.ArgumentParser(description='Image Processing Tool')
-    parser.add_argument('image_path', help='Path to input image')
-    parser.add_argument('--output', '-o', help='Output file path')
-    
-    args = parser.parse_args()
-    
-    # 处理图像
-    img = cv2.imread(args.image_path)
-    if img is None:
-        raise FileNotFoundError(f"Invalid image path: {args.image_path}")
-    
-    # 示例处理：调整大小
-    resized = cv2.resize(img, (300, 300))
-    
-    # 设置输出路径
-    output_path = args.output or args.image_path.replace('.', '_resized.')
-    cv2.imwrite(output_path, resized)
-    print(f"Saved result to: {output_path}")
-
-if __name__ == "__main__":
-    main()
+[{'entity_name': 'shipment onboard date', 'description': ' ', 'validation_logic': 'None'}, {'entity_name': 'shipper name', 'description': ' ', 'validation_logic': 'None'}, {'entity_name': 'shipper address', 'description': ' ', 'validation_logic': 'None'}]
+{
+                    "shipment onboard date": "",
+                    "shipper name": "",
+                    "shipper address": "",
+}
