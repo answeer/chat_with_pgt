@@ -1,55 +1,58 @@
-Trade Document Processing System
-https://img.shields.io/badge/Django-092E20?style=for-the-badge&logo=django&logoColor=green
-https://img.shields.io/badge/PaddleOCR-FF6F00?style=for-the-badge&logo=paddlepaddle&logoColor=white
-https://img.shields.io/badge/PostgreSQL-316192?style=for-the-badge&logo=postgresql&logoColor=white
+# Trade Document Processing System
 
-The Trade Document Processing System is a comprehensive solution for extracting structured data from trade documents like Bills of Lading, invoices, and contracts using advanced OCR and AI technologies.
+[![Django](https://img.shields.io/badge/Django-4.2-brightgreen.svg)](https://www.djangoproject.com/)
+[![PaddleOCR](https://img.shields.io/badge/PaddleOCR-2.7-blue.svg)](https://github.com/PaddlePaddle/PaddleOCR)
+[![Python](https://img.shields.io/badge/Python-3.9%2B-blue.svg)](https://www.python.org/)
 
-Key Features
+The Trade Document Processing System is a Django-based application that automates the extraction of structured data from trade documents like Bills of Lading using advanced OCR and Vision-Language Models.
 
-Document Classification: Automatically classifies uploaded documents
-Entity Extraction: Extracts key information from documents
-Visual Review: Displays extracted data with visual bounding boxes
-Project Management: Organize documents by projects
-Validation Workflow: Review and validate extracted information
-Technology Stack
+![System Architecture](https://via.placeholder.com/800x400?text=System+Architecture+Diagram)
 
-Backend: Django 4.x
-OCR Engine: PaddleOCR
-AI Processing: MiniCPM VLM
-Database: PostgreSQL
-Frontend: HTML/CSS/JS with Bootstrap
-Task Processing: Subprocess-based background tasks
-Installation
+## Key Features
 
-Prerequisites
+- **Document Classification**: Automatically categorizes uploaded documents
+- **Entity Extraction**: Identifies key fields from documents using OCR and VLM
+- **Review Workflow**: Provides interface for human verification of extracted data
+- **Project Organization**: Group documents by projects with custom settings
+- **OCR Integration**: Utilizes PaddleOCR for text recognition
+- **VLM Processing**: Connects to Vision-Language Models for entity extraction
 
-Python 3.9+
-PostgreSQL 14+
-PaddlePaddle & PaddleOCR
-MiniCPM VLM service
-Setup Instructions
+## Technology Stack
 
-Clone the repository:
-bash
-git clone https://github.com/your-username/trade-document-processor.git
-cd trade-document-processor
-Create and activate virtual environment:
+- **Backend**: Django 4.2
+- **OCR Engine**: PaddleOCR
+- **VLM Integration**: Custom API
+- **Database**: PostgreSQL
+- **Frontend**: HTML, CSS, JavaScript, Bootstrap
+- **Task Processing**: Subprocess-based background processing
+
+## Installation Guide
+
+### Prerequisites
+
+- Python 3.9+
+- PostgreSQL
+- PaddleOCR dependencies
+- Virtual environment (recommended)
+
+### Setup Steps
+
+1. **Clone the repository**
+   ```bash
+   git clone https://github.com/yourusername/trade-document-processor.git
+   cd trade-document-processor
+
+
+
+Create and activate virtual environment
 bash
 python -m venv venv
 source venv/bin/activate  # Linux/Mac
-venv\Scripts\activate    # Windows
-Install dependencies:
+venv\Scripts\activate  # Windows
+Install dependencies
 bash
 pip install -r requirements.txt
-Set up environment variables:
-Create .env file:
-env
-SECRET_KEY='your-django-secret-key'
-DATABASE_URL='postgres://user:password@localhost/dbname'
-VLM_API_URL='http://localhost:5000/extract'
-DEBUG=True
-Download OCR models:
+Download OCR models
 bash
 mkdir -p paddle_models
 cd paddle_models
@@ -59,144 +62,140 @@ wget https://paddleocr.bj.bcebos.com/dygraph_v2.0/ch/ch_ppocr_mobile_v2.0_cls_in
 tar -xvf *.tar
 rm *.tar
 cd ..
-Run database migrations:
+Configure environment variables
+Create .env file:
+env
+DEBUG=True
+SECRET_KEY=your-secret-key
+DATABASE_URL=postgres://user:password@localhost/dbname
+VLM_API_URL=http://localhost:5000/extract
+Set up database
 bash
 python manage.py migrate
-Create superuser:
+Create superuser
 bash
 python manage.py createsuperuser
-Run the development server:
+Running the Application
+
+Start Django development server
 bash
 python manage.py runserver
-Configuration
-
-Document Types and Entities
-
-Define document types in Django admin:
-
-Go to /admin
-Navigate to Dashboard > Document Types
-Add document types with their extraction entities
-Example for Bill of Lading:
-
-json
-{
-  "shipment_onboard_date": "",
-  "shipper_name": "",
-  "shipper_address": "",
-  "consignee_name": "",
-  "transport_document_number": ""
-}
-VLM Service Setup
-
-The system requires a running VLM (Vision-Language Model) service. By default, it expects the service at http://localhost:5000/extract.
-
-To set up the VLM service:
-
-Clone and install MiniCPM-VLM
-Start the service:
+(Optional) Start VLM service
 bash
-python -m minicpmv.serve --model path/to/model
-Usage
-
-Web Interface
-
-Create a Project:
-Navigate to /dashboard
-Click "Create Project"
-Select document types for the project
-Upload Documents:
-Go to project detail page
-Click "Upload Document"
-Select a document image (PNG, JPG)
-Review Extracted Data:
-After processing completes, click "Review"
-Verify and edit extracted entities
-Save reviewed data
-API Endpoints
-
-The system provides these main API endpoints:
-
-Document Upload:
-text
-POST /dashboard/upload_document/<project_id>/
-Document Processing Status:
-text
-POST /dashboard/check_document_status/
-Body: {"document_ids": [1, 2, 3]}
-Document Review:
-text
-POST /dashboard/submit_review/<document_id>/
+# Start your VLM service on port 5000
+Access the application
+Main application: http://localhost:8000
+Admin interface: http://localhost:8000/admin
 Project Structure
 
 text
 trade-document-processor/
-├── dashboard/              # Main application
-│   ├── migrations/         # Database migrations
-│   ├── templates/          # HTML templates
-│   ├── models.py           # Database models
-│   ├── views.py            # Application views
-│   └── urls.py             # Application URLs
-├── ocr_extract/            # OCR processing module
-│   ├── services/
-│   │   └── ocr_processor.py # Document processing logic
-│   ├── tasks.py            # Background task management
-│   └── process_document.py # Document processing script
-├── media/                  # Uploaded files
-├── static/                 # Static assets
-├── trade_document_processor/ # Project configuration
-│   ├── settings.py         # Django settings
-│   ├── urls.py             # Project URLs
-│   └── wsgi.py             # WSGI configuration
-├── .env                    # Environment variables
-├── manage.py               # Django management script
-└── requirements.txt        # Python dependencies
-Customization
+├── dashboard/               # Main application for UI and document management
+│   ├── migrations/          # Database migrations
+│   ├── templates/           # HTML templates
+│   ├── models.py            # Database models
+│   ├── views.py             # Application views
+│   └── urls.py              # Application URL routes
+├── ocr_extract/             # OCR processing module
+│   ├── services/            # Business logic services
+│   │   └── ocr_processor.py # OCR processing class
+│   ├── tasks.py             # Background processing tasks
+│   └── process_document.py  # Document processing script
+├── media/                   # Uploaded files (created automatically)
+├── paddle_models/           # OCR model files
+├── trade_processor/         # Django project configuration
+├── .env                     # Environment variables
+├── manage.py                # Django management script
+└── requirements.txt         # Python dependencies
+Configuration
 
-Adding New Document Types
-
-Create a new Document Type in Django admin
-Define the entities to extract in JSON format
-Add any domain-specific knowledge to the knowledge base field
-Modifying Extraction Logic
-
-Edit ocr_processor.py:
+Key Settings (settings.py)
 
 python
-class DocumentProcessor:
-    # ...
-    
-    def create_prompt(self, doc_type: str) -> str:
-        # Customize extraction prompts here
-        if doc_type == 'custom_document':
-            return "Custom extraction instructions..."
+# Document types and extraction settings
+DOCUMENT_TYPES = {
+    'bill_of_lading': {
+        'entities': [
+            "shipment onboard date",
+            "shipper name",
+            "shipper address",
+            # ... other entities
+        ],
+        'prompt': "Extraction instructions..."
+    }
+}
+
+# File storage
+MEDIA_URL = '/media/'
+MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
+
+# OCR Configuration
+PADDLE_MODELS_DIR = os.path.join(BASE_DIR, 'paddle_models')
+Usage Workflow
+
+Create a project
+Define document types
+Configure entities to extract
+Upload documents
+Upload scanned documents via web interface
+Documents are queued for processing
+Review extracted data
+View extracted entities
+Verify and correct information
+Save reviewed results
+Export data
+Export structured data in JSON format
+Download processed documents
 Troubleshooting
 
-Issue: "No module named 'dashboard'" in background processing
-Solution: Ensure Django environment is properly set in process_document.py
+Common Issues
 
-Issue: OCR models not found
-Solution: Verify models are in paddle_models/ and paths are correct
+Missing OCR models
+text
+Error: Model files not found in paddle_models/
+Solution: Run the model download script
+Database migration issues
+text
+django.db.utils.OperationalError: no such table
+Solution: Run python manage.py migrate
+File permission errors
+text
+PermissionError: [Errno 13] Permission denied
+Solution: Set proper permissions on media/ directory
+Debugging Tips
 
-Issue: VLM service connection failed
-Solution: Check if VLM service is running at VLM_API_URL
-
-Issue: File not found during processing
-Solution: Verify MEDIA_ROOT setting and file permissions
-
-License
-
-This project is licensed under the MIT License - see the LICENSE file for details.
-
+Check logs in document_processing.log
+Verify VLM service is running on port 5000
+Test OCR processing manually:
+bash
+python ocr_extract/process_document.py <document_id>
 Contributing
 
 Contributions are welcome! Please follow these steps:
 
 Fork the repository
-Create a feature branch (git checkout -b feature/your-feature)
-Commit your changes (git commit -am 'Add some feature')
-Push to the branch (git push origin feature/your-feature)
-Open a pull request
-Developed by [Your Name]
-Contact: your.email@example.com
-Version: 1.0.0
+Create a new feature branch
+Make your changes
+Submit a pull request
+License
+
+This project is licensed under the MIT License - see the LICENSE file for details.
+
+Contact
+
+For support or inquiries, contact your.name@example.com
+
+text
+
+This README provides comprehensive documentation for your Trade Document Processing System. It includes:
+
+1. Project overview and key features
+2. Technology stack information
+3. Step-by-step installation guide
+4. Project structure explanation
+5. Configuration details
+6. Usage workflow
+7. Troubleshooting section
+8. Contribution guidelines
+
+You can directly copy this markdown content into your project's README.md file. The placeholder image URL can be replaced with an actual architecture diagram when available.
