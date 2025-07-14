@@ -1,1 +1,488 @@
-SSLError: HTTPSConnectionPool(host='fntestcs.uk.standardchartered.com', port=446): Max retries exceeded with url: /ECMServices/core/ecm/v4/token (Caused by SSLError(SSLCertVerificationError(1, '[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: certificate has expired (_ssl.c:1000)')))
+1. Offline Data Processing
+1.1 Unstructured Data Ingestion from external sources
+
+Unstructured data (such as PDFs, Powerpoint or Word files) can be ingested into a Delta Lake table in binary format
+Ingestion can use Databricks Autoloader to incrementally ingest new files from cloud storage in various data formats 
+What is Auto Loader? | Databricks Documentation
+If your unstructured documents are not in cloud storage but  in another system such as Sharepoint, you can also explore the options offered by Lakeflow pipelines to connect to different external sources in a simpler way compared to low-level Structured Streaming pipelines
+Load data with Lakeflow Declarative Pipelines - Azure Databricks | Microsoft Learn
+This code example uses Autoloader to load PDFs from cloud storage into a Databricks UC Volume, and then loads the raw PDFs from a UC Volume into a Delta Lake table for subsequent data processing
+
+Autoloader provides several benefits
+
+Autoloader only loads new and updated files and does not re-process files that have already been ingested and processed, saving processing time and cost. 
+If files do not arrive continuously, but in regular intervals, for example, once a day, you can set the Trigger.AvailableNow as an option to create a StructuredStreaming job that you can schedule to run when new files are expected to arrive. https://learn.microsoft.com/en-us/azure/databricks/ingestion/cloud-object-storage/auto-loader/faq#if-my-data-files-do-not-arrive-continuously-but-in-regular-intervals-for-example-once-a-day-should-i-still-use-this-source-and-are-there-any-benefits
+You do not have to configure your own file notification service to notify when new files arrive in your cloud storage bucket. 
+Autoloader only loads new and updated files and does not re-process files that have already been ingested and processed, saving processing time and cost. 
+df = (spark.readStream
+        .format('cloudFiles') # use Autoloader
+        .option('cloudFiles.format', 'BINARYFILE')
+        .option("pathGlobFilter", "*.pdf") # filter volume for files ending in .pdf
+.option('cloudFiles.allowOverwrites', true) # allow autoloader to detect when files have been updated
+        .load('dbfs:'+volume_folder+"/databricks-pdf"))# Write the data as a Delta table
+
+(df.writeStream
+  .trigger(availableNow=True)
+  .option("checkpointLocation", f'dbfs:{volume_folder}/checkpoints/raw_docs')
+  .table('pdf_raw').awaitTermination())
+
+* Note: Autoloader is designed for append-only data ingestion workflows. Therefore it does not natively handle file deletes. If you expect file deletions in your unstructured data processing workflow, to detect and propagate file deletions, you can lean on the change data feeds from external systems for example having a Lambda Function that triggers off of the s3:ObjectRemoved:* events to remove files meant for deletion
+
+1.2 Unstructured data processing 
+
+1.2.1 Using the medallion architecture
+
+Databricks recommends using the medallion architecture for data processing pipelines. A medallion architecture is a data design pattern used to logically organize data in a lakehouse, with the goal of incrementally and progressively improving the structure and quality of data as it flows through each layer of the architecture (from Bronze ⇒ Silver ⇒ Gold layer tables). Medallion architectures are sometimes also referred to as "multi-hop" architectures. 
+
+What is a Medallion Architecture?
+1.2.2 Data processing logic
+
+1.2.2.1 Information extraction with Python libraries
+
+From the previous step, we have ingested our documents from UC Volumes into the bronze Delta Lake layer. Following the ingestion step, we will extract text from our PDF documents and store the extracted text content into our Silver Delta layer. We have the flexibility to implement any data extraction library that fits our needs, for example PyPDF, Azure Document Intelligence, or VLMs to extract information from multi-modal sources.
+
+PDF text extraction example:
+
+
+from PyPDF2 import PdfReader
+import io
+
+def extract_text_from_pdf(pdf_content):  # helper function
+    try:
+        pdf_file = io.BytesIO(pdf_content)
+        reader = PdfReader(pdf_file)
+        text_content = ""
+
+        for page in reader.pages:
+            text_content += page.extract_text() + "\n"
+        return text_content.strip()
+    except Exception as r:
+        return f"Error processing PDF: {str(e)}"
+
+1.2.2.2 Information extraction with LLMs using AI Functions
+
+Databricks also supports scalable information extraction using LLMs prompts. Example use cases include extracting Named Entities such as Person, Names and Country from unstructured text. Information extraction using this method relies on Databricks AI Functions, which are SQL functions designed to run in a distributed manner in batch mode. These functions are suitable for processing large amounts of text
+
+AI Functions come in a few forms
+
+task-specific AI Functions such ai_classify, ai_analyze_sentiment and ai_translate
+Apply AI on data using Databricks AI Functions | Databricks Documentation
+General AI Functions that take in a general prompt and can return structured outputs
+Perform batch LLM inference using AI Functions | Databricks Documentation
+1.2.2.3 Information extraction from multi-modal data
+
+There are multiple model options available for processing multi-modal data 
+
+Option 1: (recommended for general use cases) Use Databricks Foundation Model API model endpoints such as databricks-claude-3-7-sonnet. The OpenAI client can be used to query the FMAPI endpoints
+
+
+
+from openai import OpenAI
+import base64
+import httpx
+
+client = OpenAI(
+    api_key="dapi-your-databricks-token",
+    base_url="https://example.staging.cloud.databricks.com/serving-endpoints"
+)
+
+# encode image
+image_url = "https://upload.wikimedia.org/wikipedia/commons/a/a7/Camponotus_flavomarginatus_ant.jpg"
+image_data = base64.standard_b64encode(httpx.get(image_url).content).decode("utf-8")
+
+# OpenAI request
+completion = client.chat.completions.create(
+    model="databricks-claude-3-7-sonnet",
+    messages=[
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "what's in this image?"},
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:image/jpeg;base64,{image_data}"},
+                },
+            ],
+        }
+    ],
+)
+
+print(completion.choices[0].message.content)
+
+
+Option 2: (recommended for custom use cases) Use a model available from HuggingFace Hub 
+
+Example notebook: Unite your Patient’s Data with Multi-Modal RAG | Databricks Blog
+
+Huggingface models need to be available within Databricks Unity Catalog (UC). Use MLflow to load models from Huggingface and to register them. Then, we can deploy the model to a model-serving endpoint. 
+
+import torch
+from colpali_engine.models import ColQwen2_5, ColQwen2_5_Processor
+
+class ColQwenInferenceModel(PythonModel):
+    def load_context(self, context):
+        # adding the configuration in the context so that model serving has
+        self.current_device = "cuda:0" if torch.cuda.is_available() else "cpu"
+        self.model_name = "nomic-ai/colnomic-embed-multimodal-7b"
+        
+        # download the model from your CACHE which should be saved to a volume in the cell before
+        self.model = ColQwen2_5.from_pretrained(
+            self.model_name,
+            torch_dtype=torch.bfloat16,
+            device_map=self.current_device,
+            attn_implementation="flash_attention_2" if is_flash_attn_2_available() else None,            cache_dir=context.artifacts["cache"],  # this is how you refer to mlflow logged artifacts
+        ).eval()
+        
+        self.processor = ColQwen2_5_Processor.from_pretrained(
+            self.model_name,
+            cache_dir=context.artifacts["cache"],
+        )
+Gaining Insight From Image Data in Databricks Using Multi-Modal Foundation Model API - Data + AI Summit 2025 | Databricks
+
+1.2.3 Change data management
+
+Change data feed allows Databricks to track row-level changes between versions of a Delta table. When enabled on a Delta table, the runtime records change events for all the data written into the table. This includes the row data along with metadata indicating whether the specified row was inserted, deleted, or updated.
+
+Use Delta Lake change data feed on Databricks | Databricks Documentation
+We recommend implementing CDF on the bronze table, and using MERGE and UPSERT features to propagate the change data feed to the silver table before implementing data processing logic from the silver table onwards using Lakeflow Declarative Pipelines (Section 1.2.4) 
+
+ALTER TABLE myDeltaTable SET TBLPROPERTIES (delta.enableChangeDataFeed = true)
+
+Use Delta Lake change data feed on Databricks | Databricks Documentation
+MERGE INTO | Databricks Documentation
+MERGE INTO target USING source ON target.key = source.key WHEN MATCHED AND target.updated_at < source.updated_at THEN UPDATE SET *
+
+
+
+* Note: Autoloader is designed for append-only data ingestion workflows. Therefore it does not natively handle file deletes. If you expect file deletions in your unstructured data processing workflow, in order to detect and propagate file deletions from the ingestion layer to the bronze layer, you can lean on the change data feeds from external systems. For example, having a Lambda Function that triggers off of the s3:ObjectRemoved:* events to remove files meant for deletion
+
+1.2.4 Scalable and production-ready data processing pipelines
+
+You can use Lakeflow Declarative Pipelines for production-ready pipelines. Lakeflow Declarative Pipelines extends functionality in Apache Spark Structured Streaming and allows you to write just a few lines of declarative Python or SQL to obtain features needed for a production deployment:
+
+Autoscaling compute infrastructure for cost savings
+Data quality checks with expectations
+Automatic schema evolution handling
+Monitoring via metrics in the event log
+Transform data with pipelines - Azure Databricks | Microsoft Learn
+
+Example: To use the PDF extraction example above, we define an expectation that we want the extracted text content length to be > 0. To make the data processing code scalable across multiple Spark nodes, we wrap the original extracted_pdf_text content into a UDF. Subsequently, we add the dlt.table decorator which will configure autoscaling, and monitoring and logging for us out-of-the-box. 
+
+from PyPDF2 import PdfReader
+from pyspark.sql.types import StringType
+import pyspark.sql.functions as F
+import io
+
+
+
+@dlt.table(
+        comment="Extract text content from PDF files",
+        table_properties={"quality": "silver"}
+)
+@dlt.expect_or_drop("valid_text_content", "length(extracted_text) > 0")
+def extracted_pdf_text():
+    def extract_text_from_pdf(pdf_content):
+        try:
+            pdf_file = io.BytesIO(pdf_content)
+            reader = PdfReader(pdf_file)
+            text_content = ""
+
+            for page in reader.pages:
+                text_content += page.extract_text() + "\n"
+            return text_content.strip()
+        except Exception as r:
+            return f"Error processing PDF: {str(e)}"
+
+    # register  UDF
+    extract_text_udf = F.udf(extract_text_from_pdf, StringType())
+    return (
+        dlt.read_stream("raw_pdf_files")
+        .select(
+            F.col("file_path"),
+            extract_text_udf(F.col("pdf_content")).alias("extracted_text"),
+            F.col("file_modified_time"),
+            F.col("ingestion_time"),
+            F.current_timestamp().alias("processing_time")
+        )
+    )
+
+from PyPDF2 import PdfReader
+from pyspark.sql.types import StringType
+import pyspark.sql.functions as F
+import io
+
+
+
+@dlt.table(
+        comment="Extract text content from PDF files",
+        table_properties={"quality": "silver"}
+)
+@dlt.expect_or_drop("valid_text_content", "length(extracted_text) > 0")
+def extracted_pdf_text():
+    def extract_text_from_pdf(pdf_content):
+        try:
+            pdf_file = io.BytesIO(pdf_content)
+            reader = PdfReader(pdf_file)
+            text_content = ""
+
+            for page in reader.pages:
+                text_content += page.extract_text() + "\n"
+            return text_content.strip()
+        except Exception as r:
+            return f"Error processing PDF: {str(e)}"
+
+    # register  UDF
+    extract_text_udf = F.udf(extract_text_from_pdf, StringType())
+    return (
+        dlt.read_stream("raw_pdf_files")
+        .select(
+            F.col("file_path"),
+            extract_text_udf(F.col("pdf_content")).alias("extracted_text"),
+            F.col("file_modified_time"),
+            F.col("ingestion_time"),
+            F.current_timestamp().alias("processing_time")
+        )
+    )
+
+
+1.2.1 Monitoring and observability
+
+The observability logs from  Lakeflow Declarative pipelines will be available as query logs in Delta. 
+There is also a dashboard to monitor the progress of the pipeline and the number of records that have passed / failed a quality check
+Monitor Lakeflow Declarative Pipelines - Azure Databricks | Microsoft Learn
+
+
+For a full walkthrough of the ETL capabilities offered by Databricks, refer to this documentation link. The same principles applied to classical Data Engineering are transferable to Generative AI and machine learning
+
+Tutorials | Databrick
+
+1.3 Databricks Vector Search indexing
+
+You create a vector search index from a Delta table. The index includes embedded data with metadata. You can then query the index using a REST API to identify the most similar vectors and return the associated documents. You can structure the index to automatically sync when the underlying Delta table is updated. For how to create, update and query a vector index, refer to this documentation link
+
+How to create and query a vector search index | Databricks Documentation
+There are a few types of indexes. However, Delta Sync Index is the option recommended because the automatic updates features reduces the effort needed to maintain up-to-date Vector indexes
+
+Delta Sync Index automatically syncs with a source Delta Table, automatically and incrementally updating the index as the underlying data in the Delta Table changes.
+Direct Vector Access Index supports direct read and write of vectors and metadata. The user is responsible for updating this table using the REST API or the Python SDK. This type of index cannot be created using the UI. You must use the REST API or the SDK.
+Embedding source: you can indicate if you want Databricks to compute embeddings for a text column in the Delta table (Compute embeddings), or if your Delta table contains precomputed embeddings (Use existing embedding column).
+
+Sync mode: Continuous keeps the index in sync with seconds of latency. However, it has a higher cost associated with it since a compute cluster is provisioned to run the continuous sync streaming pipeline. For standard endpoints, both Continuous and Triggered perform incremental updates, so only data that has changed since the last sync is processed. For storage-optimized endpoints, every sync fully rebuilds the vector search index. See Storage-optimized endpoints limitations.
+
+1.3.2 Metadata filtering
+
+Non-text columns in the source Delta table can be used as metadata filters during the search process
+
+How to create and query a vector search index | Databricks Documentation
+
+1.3.3 Search techniques
+
+Databricks Vector Search supports the following:
+
+Hybrid keyword-similarity search.
+Filtering based on metadata columns
+Similarity search using Euclidean distance
+Mosaic AI Vector Search | Databricks Documentation
+1.3.4 Reranking
+
+Custom rerankers can be implemented as part of a Gen AI framework pipeline such as Langchain. This option offers the flexibility to choose a reranker specialised to your use case
+
+As of July 2025, Databricks also offers an out-of-the-box reranker in preview 
+
+2. Online Chatbot Flow
+2.1.1. Evaluation
+Agent Evaluation is designed to be consistent between your development (offline) and production (online) environments. This design enables a smooth transition from development to production, allowing you to quickly iterate, evaluate, deploy, and monitor high-quality agentic applications.
+
+The main difference between development and production is that in production, you do not have ground-truth labels, while in development, you may optionally use ground-truth labels. Using ground-truth labels allows Agent Evaluation to compute additional quality metrics.
+
+2.1.1.1. Offline evaluation (development)
+
+
+In development, your requests and expected_responses come from an evaluation set.
+
+Building MLflow Evaluation Datasets | Databricks Documentation
+An evaluation can be generated in a number of ways:
+
+Create from existing MLflow Traces logs
+Create from domain expert labels
+Create from importing existing evaluations or building from scratch
+Create from synthetic data
+2.1.1.2. Online evaluation (production)
+Similar to offline evaluation, we collect inputs outputs from our Gen AI application via Inference Tables that are configured automatically for every Gen AI application deployed via a Databricks Model Serving endpoint. Unlike offline evaluation however, we do not have expected outputs. Expected outputs can be added to an Evaluation Set through domain experts interacting with a Review App (see below for more information on the Review app). 
+
+
+
+When you deploy agents authored with ChatAgent or ChatModel using agents.deploy, basic monitoring is automatically set up. This includes:
+
+Request volume tracking
+Latency metrics
+Error logging
+This automatic monitoring doesn't include specific evaluation metrics like guideline adherence or safety, but provides essential telemetry to track your agent's usage and performance.
+
+How online monitoring works:
+
+
+
+For more information on how monitoring works, refer to the documentation's instructions:
+
+Monitor apps deployed using Agent Framework (MLflow 2) | Databricks Documentation
+2.1.1.3.  MLflow Traces
+Traces are the basis for evaluating the quality of a Gen AI application. Tracing in the context of machine learning (ML) refers to the detailed tracking and recording of the data flow and processing steps during the execution of an ML model. It provides transparency and insights into each stage of the model's operation, from data input to prediction output. This detailed tracking is crucial for debugging, optimizing, and understanding the performance of ML models. 
+
+Tracing a GenAI App | Databricks Documentation
+MLflow Traces data model
+
+Tracing Data Model | Databricks Documentation
+MLflow Traces can be queried using a query syntax. This is useful when you need to troubleshoot a subset of queries, or when you want to filter for traces to add to an Evaluation Set
+
+Search and analyze traces | Databricks Documentation
+2.1.1.4.  Human Feedback
+Databricks provides a Review app UI as part of deploying a Generative AI app. The Review App allows you to: 
+
+Give your stakeholders the ability to chat with a pre-production generative AI app and give feedback.
+Create an evaluation dataset, backed by a Delta table in Unity Catalog.
+Leverage SMEs to expand and iterate on that evaluation dataset.
+Leverage SMEs to label production traces to understand quality of your gen AI app.
+2.1.2.  Prompt Management
+2.1.2.1.  Prompt registry
+MLflow offers a prompt registry for users to log, edit and optimize their prompts. Users can also log prompts along with their models for tracking purposes. 
+
+Example of registering a new prompt:
+
+#Register a new prompt
+
+prompt = mlflow.genai.register_prompt( name=f"{uc_schema}.{prompt_name}", template=initial_template, # all parameters below are optional commit_message="Initial version of summarization prompt", tags={ "author": "data-science-team@company.com", "use_case": "document_summarization", "task": "summarization", "language": "en", "model_compatibility": "gpt-4" } )
+
+Users can then reference prompt using a uri that can be tracked as part of MLflow Tracking 
+
+prompts:/{catalog}.{schema}.{prompt_name}@{alias}
+
+For the full workflow of how to use the MLflow prompt registry, refer to these documentation links
+
+Create and edit prompts - Azure Databricks | Microsoft Learn
+Evaluate prompts - Azure Databricks | Microsoft Learn
+Track prompt versions alongside application versions - Azure Databricks | Microsoft Learn
+Use prompts in deployed applications - Azure Databricks | Microsoft Learn
+MLflow Prompt Optimization (beta) - Azure Databricks | Microsoft Learn
+2.1.2.2.  Automated prompt optimization
+MLflow offers users the ability to automate prompt optimization using state-of-the-art techniques such as MIPRO V2
+
+DSPy programs are logged into MLflow as models and can be deployed in the same way as other MLflow models flavors
+
+https://mlflow.org/docs/3.0.0rc0/llms/dspy/notebooks/dspy_quickstart
+2.1.3. Memory
+Conversation memory can be implemented using Databricks Lakebase (managed Postgres).
+
+Lakebase allows you to create an OLTP database on Databricks, and integrate OLTP workloads with your Lakehouse. This OLTP database enables you to create and manage databases stored in Databricks-managed storage.
+
+Using an OLTP database in conjunction with the Databricks platform significantly reduces application complexity. Lakebase is well integrated with Feature management, SQL warehouses, and Databricks Apps. Using sync tables provides a simple and performant way to sync data between OLTP and online analytical processing (OLAP) workloads.
+
+What is Lakebase? | Databricks Documentation
+1.2.2.1 Lakebase setup
+
+i. Setup a Lakebase setup on from the Compute UI or via programmatically via Databricks Terraform
+
+ii. Setup Postgres roles based on Databricks identities. Users need CREATE, UPDATE and INSERT permissions on Lakebase table
+
+Create and manage a database instance | Databricks Documentation
+Create and manage Postgres roles for Databricks identities | Databricks Documentation
+1.2.2.2 Connecting to Lakebase within an MLflow Chat Agent
+
+        from databricks.sdk import WorkspaceClient
+
+        import os
+
+        from pyscopg import Connection
+
+       CLIENT_ID = os.getenv("DATABRICKS_CLIENT_ID")
+       CLIENT_SECRET = os.getenv("DATABRICKS_CLIENT_SECRET")
+       w = WorkspaceClient(client_id=CLIENT_ID, client_secret=CLIENT_SECRET)
+       instance_name = instance_name or "jeannelb"
+       instance = w.database.get_database_instance(name=instance_name)
+       try:
+                cred = w.database.generate_database_credential(
+                    request_id=str(uuid.uuid4()), 
+                    instance_names=[instance_name]
+                )
+                host = instance.read_write_dns
+                port = 5432
+                database = "databricks_postgres"
+                password = cred.token
+                connection_pool = Connection.connect(
+                    f"postgresql://{user}:{password}@{host}:{port}/{database}",
+                    autocommit=True
+                )
+
+1.2.2.3 Use with Langgraph PostgresSaver
+
+from langgraph.checkpoint.postgres import PostgresSaver
+
+with connection_pool as conn:
+         checkpointer = PostgresSaver(conn)
+
+2.1.4. RAG pipeline logic
+RAG pipeline modules (query extraction, query rewriting, query validation etc. can be implemented using any framework of choice such as Langchain, Langgraph or LllamaIndex. In order to deploy the RAG pipeline as a Databricks Model Serving endpoint, wrap this RAG pipeline implementation inside the MLflow ChatAgent wrapper, implementing the return types and predict method of the ChatAgent
+
+Author AI agents in code | Databricks Documentation
+Full example notebook https://docs.databricks.com/aws/en/notebooks/source/generative-ai/langgraph-tool-calling-agent.html
+Code Snippet example:
+
+from mlflow.types.agent import (
+     ChatAgentChunk,
+     ChatAgentMessage,
+     ChatAgentResponse,
+     ChatContext,
+ )
+from mlflow.pyfunc import ChatAgent
+
+class LangGraphChatAgent(ChatAgent):
+     def __init__(self, agent: CompiledStateGraph):
+         self.agent = agent
+
+
+     def predict(
+         self,
+         messages: list[ChatAgentMessage],
+         context: Optional[ChatContext] = None,
+         custom_inputs: Optional[dict[str, Any]] = None,
+     ) -> ChatAgentResponse:
+         request = {"messages": self._convert_messages_to_dict(messages)}
+
+         messages = []
+         for event in self.agent.stream(request, stream_mode="updates"):
+             for node_data in event.values():
+                 messages.extend(
+                     ChatAgentMessage(**msg) for msg in node_data.get("messages", [])
+                 )
+         return ChatAgentResponse(messages=messages)
+
+     def predict_stream(
+         self,
+         messages: list[ChatAgentMessage],
+         context: Optional[ChatContext] = None,
+         custom_inputs: Optional[dict[str, Any]] = None,
+     ) -> Generator[ChatAgentChunk, None, None]:
+         request = {"messages": self._convert_messages_to_dict(messages)}
+         for event in self.agent.stream(request, stream_mode="updates"):
+             for node_data in event.values():
+                 yield from (
+                     ChatAgentChunk(**{"delta": msg}) for msg in node_data["messages"]
+                 )
+
+
+ # Create the agent object, and specify it as the agent object to use when
+ # loading the agent back for inference via mlflow.models.set_model()
+ mlflow.langchain.autolog()
+ agent = create_tool_calling_agent(llm, tools, system_prompt)
+ AGENT = LangGraphChatAgent(agent)
+ mlflow.models.set_model(AGENT)
+
+2.1.5. RAG model lifecycle
+Log AI agents using Mosaic AI Agent Framework. Logging an agent is the basis of the development process. Logging captures a “point in time” of the agent's code and configuration so you can evaluate the quality of the configuration.
+
+Log and register AI agents | Databricks Documentation
+Deploy agents to Databricks Model Serving endpoints to make the RAG MLflow pipeline available to downstream apps such as Databricks Apps or internal applications
+
+Deploy an agent for generative AI applications | Databricks Documentation
+Query a deployed Mosaic AI agent | Databricks Documentation
+Build and share a chat UI with Databricks Apps | Databricks Documentation
