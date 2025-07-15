@@ -1,33 +1,114 @@
-Use Case Onboarding	 	 	 	 	 	 
- 	 	 	 	 	 	 	 
-Activity	Input	Output	Platform	Integration	AI Services & Templates	Users (Squads)	Governance
-Submit use-case manifest via ADO	Use-case requirements, LLM model selection, chunking technique, embedding model	Completed manifest (JSON/YAML)	C	C	R	A	I
-Provision infra & workspace	ADO ticket with manifest	Databricks workspace, cluster, secret scopes	A	I	C	R	I
-AKV Secret update for credentials	Access keys / tokens	Updated Key Vault	A	R	I	I	C
-Enable Gateway access control	User/service accounts, roles	Role-based API access setup	R	I	A	C	C
-File upload to Filenet or data source	Source documents	Data available in source	I	A	I	R	C
-Configure tfvars for data pipeline	Input parameters for Terraform	tfvars.json or equivalent	R	C	A	C	I
-Trigger pipeline job in Databricks	tfvars, Terraform module	Vectorized data indexed	R	C	A	C	I
-Document onboarding guide	Reusable onboarding steps	Published onboarding document	I	I	A	C	R
+from typing import List
+from utils.get_config_tfvars import CHUNK_SIZE
+from data_pipeline.chunk_manager.custom_text_splitter import structure_aware_split
+from data_pipeline.chunk_manager.nltk_textsplitter import split_sentences
+from data_pipeline.chunk_manager.merge_chunks import merge_chunks
 
 
-Core RAG Development	 	 	 	 	 	 
- 	 	 	 	 	 	 	 
-Activity	Input	Output	Platform	Integration	AI Services & Templates	Users (Squads)	Governance
-Define RAG core architecture	Use-case categories, model capabilities	Modular RAG components	C	C	A	I	R
-Develop RAG components(chunking, embedding, retrieval, reranking, generation)	LLM, embeddings, retriever, reranker configs	RAG core repo (open-sourced)	I	I	A	C	R
-Enable persistent memory store	Design pattern	Vector DB + memory adapter	I	R	A	C	I
-Incorporate multiple chunking techniques	Document types	Enhanced retrieval quality	I	I	A	C	I
-Separate core from TF infra	Infra dependency in dev flow	Clean separation in repo	R	C	A	I	R
-Add observability to chat flows	Logging & tracing specs	Logs, dashboards, metrics	R	I	A	I	C
+def chunk_text(text: str) -> List[str]:
+    """Main chunking process"""
+    print("##1")
+    pre_chunks = structure_aware_split(text)
+    sentence_chunks = []
+    print("##2")
+    for chunk in pre_chunks:
+        if len(chunk) > float(CHUNK_SIZE) * 1.5:
+            sentence_chunks.extend(split_sentences(chunk))
+        else:
+            sentence_chunks.append(chunk)
+    print("##3")
+    return merge_chunks(sentence_chunks)
 
-Inference Pipeline Execution	 	 	 	 	 	 
- 	 	 	 	 	 	 	 
-Activity	Input	Output	Platform	Integration	AI Services & Templates	Users (Squads)	Governance
-Create serving endpoint for RAG Chat	RAG chat pipeline	Databricks REST API endpoint	R	I	A	I	C
-Author OpenAPI/Swagger spec	Endpoint parameters, auth method	API documentation	I	I	A	I	R
-Support UI integration (if applicable)	UI template / spec	Optional chat UI	I	I	C	A	I
-API trigger from application	Token + payload	Chat response	I	I	I	A	I
-Run and validate inference	Sample payloads	Responses with context	I	I	C	A	I
-Add reranking & response refinement	Multi-document context	Ranked final response	I	I	A	C	I
-Log chat interactions for audit	Inference metadata	Telemetry & audit logs	R	I	A	I	A
+
+from typing import List
+from data_pipeline import PATTERNS
+
+def structure_aware_split(text: str) -> List[str]:
+    """Structure-aware pre-splitting"""
+    chunks = []
+    current_chunk = []
+
+    for line in text.split('\n'):
+        line = line.strip()
+        if not line:
+            continue
+
+        # Handle section headers
+        if PATTERNS['section_header'].match(line):
+            if current_chunk:
+                chunks.append(' '.join(current_chunk))
+                current_chunk = []
+            chunks.append(line)
+            continue
+
+        # Handle list items
+        if PATTERNS['list_item'].match(line):
+            if current_chunk and not PATTERNS['list_item'].match(current_chunk[-1]):
+                chunks.append(' '.join(current_chunk))
+                current_chunk = []
+            current_chunk.append(line)
+            continue
+
+        current_chunk.append(line)
+
+    if current_chunk:
+        chunks.append(' '.join(current_chunk))
+
+    return chunks
+
+
+from typing import List
+from utils.get_config_tfvars import CHUNK_SIZE, CHUNK_OVERLAP
+
+
+def merge_chunks(chunks: List[str]) -> List[str]:
+    """Dynamic window merging algorithm"""
+    merged_chunks = []
+    current_chunk = []
+    current_length = 0
+    overlap_buffer = []
+
+    for chunk in chunks:
+        chunk_len = len(chunk)
+
+        while current_length + chunk_len > int(CHUNK_SIZE):
+            remaining = int(CHUNK_SIZE) - current_length
+            if remaining > 50:
+                current_chunk.append(chunk[:remaining])
+                merged_chunks.append(" ".join(current_chunk).strip())
+
+                overlap_buffer = current_chunk[-int(CHUNK_OVERLAP) // 50 :]
+                current_chunk = overlap_buffer.copy()
+                current_length = sum(len(c) for c in current_chunk)
+                chunk = chunk[remaining:]
+                chunk_len = len(chunk)
+            else:
+                break
+
+        current_chunk.append(chunk)
+        current_length += chunk_len
+
+        if current_length >= int(CHUNK_SIZE):
+            merged_chunks.append(" ".join(current_chunk).strip())
+            overlap_buffer = current_chunk[-int(CHUNK_OVERLAP) // 50 :]
+            current_chunk = overlap_buffer.copy()
+            current_length = sum(len(c) for c in current_chunk)
+
+    if current_chunk:
+        merged_chunks.append(" ".join(current_chunk).strip())
+
+    return merged_chunks
+
+
+import nltk
+from typing import List
+
+from utils.get_config_tfvars import NLTK_PATH
+
+nltk.data.path.append(NLTK_PATH)
+nltk.data.find("tokenizers/punkt")
+
+
+def split_sentences(text: str) -> List[str]:
+    """Use nltk to split sentences"""
+    return nltk.sent_tokenize(text)
