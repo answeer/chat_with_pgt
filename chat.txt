@@ -1,114 +1,202 @@
-from typing import List
-from utils.get_config_tfvars import CHUNK_SIZE
-from data_pipeline.chunk_manager.custom_text_splitter import structure_aware_split
-from data_pipeline.chunk_manager.nltk_textsplitter import split_sentences
-from data_pipeline.chunk_manager.merge_chunks import merge_chunks
-
-
-def chunk_text(text: str) -> List[str]:
-    """Main chunking process"""
-    print("##1")
-    pre_chunks = structure_aware_split(text)
-    sentence_chunks = []
-    print("##2")
-    for chunk in pre_chunks:
-        if len(chunk) > float(CHUNK_SIZE) * 1.5:
-            sentence_chunks.extend(split_sentences(chunk))
-        else:
-            sentence_chunks.append(chunk)
-    print("##3")
-    return merge_chunks(sentence_chunks)
-
-
-from typing import List
-from data_pipeline import PATTERNS
-
-def structure_aware_split(text: str) -> List[str]:
-    """Structure-aware pre-splitting"""
-    chunks = []
-    current_chunk = []
-
-    for line in text.split('\n'):
-        line = line.strip()
-        if not line:
-            continue
-
-        # Handle section headers
-        if PATTERNS['section_header'].match(line):
-            if current_chunk:
-                chunks.append(' '.join(current_chunk))
-                current_chunk = []
-            chunks.append(line)
-            continue
-
-        # Handle list items
-        if PATTERNS['list_item'].match(line):
-            if current_chunk and not PATTERNS['list_item'].match(current_chunk[-1]):
-                chunks.append(' '.join(current_chunk))
-                current_chunk = []
-            current_chunk.append(line)
-            continue
-
-        current_chunk.append(line)
-
-    if current_chunk:
-        chunks.append(' '.join(current_chunk))
-
-    return chunks
-
-
-from typing import List
-from utils.get_config_tfvars import CHUNK_SIZE, CHUNK_OVERLAP
-
-
-def merge_chunks(chunks: List[str]) -> List[str]:
-    """Dynamic window merging algorithm"""
-    merged_chunks = []
-    current_chunk = []
-    current_length = 0
-    overlap_buffer = []
-
-    for chunk in chunks:
-        chunk_len = len(chunk)
-
-        while current_length + chunk_len > int(CHUNK_SIZE):
-            remaining = int(CHUNK_SIZE) - current_length
-            if remaining > 50:
-                current_chunk.append(chunk[:remaining])
-                merged_chunks.append(" ".join(current_chunk).strip())
-
-                overlap_buffer = current_chunk[-int(CHUNK_OVERLAP) // 50 :]
-                current_chunk = overlap_buffer.copy()
-                current_length = sum(len(c) for c in current_chunk)
-                chunk = chunk[remaining:]
-                chunk_len = len(chunk)
-            else:
-                break
-
-        current_chunk.append(chunk)
-        current_length += chunk_len
-
-        if current_length >= int(CHUNK_SIZE):
-            merged_chunks.append(" ".join(current_chunk).strip())
-            overlap_buffer = current_chunk[-int(CHUNK_OVERLAP) // 50 :]
-            current_chunk = overlap_buffer.copy()
-            current_length = sum(len(c) for c in current_chunk)
-
-    if current_chunk:
-        merged_chunks.append(" ".join(current_chunk).strip())
-
-    return merged_chunks
-
-
+from typing import List, Callable, Optional
+import re
 import nltk
-from typing import List
+from utils.get_config_tfvars import CHUNK_SIZE, CHUNK_OVERLAP, NLTK_PATH
 
-from utils.get_config_tfvars import NLTK_PATH
-
+# 确保nltk数据路径正确
 nltk.data.path.append(NLTK_PATH)
 nltk.data.find("tokenizers/punkt")
 
+class ChunkingStrategy:
+    @staticmethod
+    def structure_aware(text: str) -> List[str]:
+        """现有结构感知分块方法（保留原逻辑）"""
+        # 您的原始实现代码
+        pass
 
-def split_sentences(text: str) -> List[str]:
-    """Use nltk to split sentences"""
-    return nltk.sent_tokenize(text)
+    @staticmethod
+    def fixed_size(text: str, 
+                  chunk_size: int = CHUNK_SIZE, 
+                  overlap: int = CHUNK_OVERLAP) -> List[str]:
+        """
+        固定大小分块（带重叠）
+        适用于：通用文本、日志文件等无结构文本
+        优点：处理速度快，内存占用低
+        """
+        chunks = []
+        start = 0
+        
+        while start < len(text):
+            end = min(start + chunk_size, len(text))
+            
+            # 确保不截断单词
+            if end < len(text) and not text[end].isspace():
+                # 回溯到最近的空格
+                adjust_pos = text.rfind(' ', start, end)
+                if adjust_pos > start:
+                    end = adjust_pos
+            
+            chunk = text[start:end].strip()
+            if chunk:
+                chunks.append(chunk)
+            
+            # 应用重叠（确保不超过文本边界）
+            start = end - overlap if end - overlap > start else end
+            start = max(start, 0)
+            
+        return chunks
+
+    @staticmethod
+    def sliding_window(text: str, 
+                      window_size: int = CHUNK_SIZE, 
+                      stride: int = CHUNK_SIZE - CHUNK_OVERLAP) -> List[str]:
+        """
+        滑动窗口分块
+        适用于：需要保留上下文连续性的场景（如技术文档）
+        优点：保持上下文连贯性
+        """
+        chunks = []
+        tokens = text.split()
+        total_tokens = len(tokens)
+        
+        for i in range(0, total_tokens, stride):
+            window = tokens[i:i + window_size]
+            if len(window) < window_size // 2:  # 丢弃过小的块
+                continue
+            chunks.append(" ".join(window))
+        return chunks
+
+    @staticmethod
+    def semantic(text: str, 
+                max_chars: int = CHUNK_SIZE, 
+                min_chars: int = CHUNK_SIZE // 3) -> List[str]:
+        """
+        基于语义的分块（句子感知）
+        适用于：自然语言文本（报告、文章）
+        优点：保持语义完整性
+        """
+        sentences = nltk.sent_tokenize(text)
+        chunks = []
+        current_chunk = []
+        current_length = 0
+        
+        for sent in sentences:
+            sent_length = len(sent)
+            # 如果当前句子超过最大尺寸，单独成块
+            if sent_length > max_chars:
+                if current_chunk:
+                    chunks.append(" ".join(current_chunk))
+                    current_chunk = []
+                    current_length = 0
+                chunks.append(sent)
+                continue
+                
+            # 检查添加后是否超限
+            if current_length + sent_length <= max_chars:
+                current_chunk.append(sent)
+                current_length += sent_length
+            else:
+                if current_chunk:
+                    chunks.append(" ".join(current_chunk))
+                current_chunk = [sent]
+                current_length = sent_length
+                
+        # 添加最后一块
+        if current_chunk:
+            final_chunk = " ".join(current_chunk)
+            if len(final_chunk) >= min_chars:
+                chunks.append(final_chunk)
+                
+        return chunks
+
+    @staticmethod
+    def hierarchical(text: str) -> List[str]:
+        """
+        分层分块策略（结构感知+语义分块）
+        适用于：混合结构文档（HTML/Markdown等）
+        优点：兼顾文档结构和语义完整性
+        """
+        # 第一步：结构感知分块
+        structural_chunks = ChunkingStrategy.structure_aware(text)
+        
+        # 第二步：对每个大块进行语义分块
+        final_chunks = []
+        for chunk in structural_chunks:
+            if len(chunk) > CHUNK_SIZE * 1.5:
+                final_chunks.extend(ChunkingStrategy.semantic(chunk))
+            else:
+                final_chunks.append(chunk)
+                
+        return final_chunks
+
+    @staticmethod
+    def code_aware(text: str) -> List[str]:
+        """
+        代码感知分块（带语法结构保留）
+        适用于：源代码文件、技术文档
+        优点：保持代码结构完整性
+        """
+        chunks = []
+        current_chunk = []
+        current_length = 0
+        
+        # 按代码结构分割（函数/类/块）
+        for line in text.split('\n'):
+            line = line.rstrip()
+            if not line:
+                continue
+                
+            # 检测代码块边界（基于缩进和关键词）
+            if re.match(r'^(def |class |\}|\]|\))', line):
+                if current_chunk:
+                    chunks.append("\n".join(current_chunk))
+                    current_chunk = []
+                    current_length = 0
+                    
+            current_chunk.append(line)
+            current_length += len(line)
+            
+            # 长度检查
+            if current_length >= CHUNK_SIZE:
+                chunks.append("\n".join(current_chunk))
+                current_chunk = []
+                current_length = 0
+                
+        if current_chunk:
+            chunks.append("\n".join(current_chunk))
+            
+        return chunks
+
+def chunk_text(
+    text: str, 
+    strategy: str = "hierarchical",
+    custom_strategy: Optional[Callable[[str], List[str]] = None
+) -> List[str]:
+    """
+    分块入口函数
+    
+    参数:
+        text: 输入文本
+        strategy: 分块策略选择 
+            - 'fixed': 固定大小分块
+            - 'sliding': 滑动窗口分块
+            - 'semantic': 语义分块
+            - 'hierarchical': 分层分块（默认）
+            - 'structure': 结构感知分块
+            - 'code': 代码感知分块
+        custom_strategy: 自定义分块函数
+    """
+    strategy_map = {
+        "fixed": ChunkingStrategy.fixed_size,
+        "sliding": ChunkingStrategy.sliding_window,
+        "semantic": ChunkingStrategy.semantic,
+        "hierarchical": ChunkingStrategy.hierarchical,
+        "structure": ChunkingStrategy.structure_aware,
+        "code": ChunkingStrategy.code_aware
+    }
+    
+    if custom_strategy:
+        return custom_strategy(text)
+        
+    selected_strategy = strategy_map.get(strategy, ChunkingStrategy.hierarchical)
+    return selected_strategy(text)
