@@ -1,7 +1,13 @@
 from typing import List, Callable, Optional
 import re
 import nltk
-from utils.get_config_tfvars import CHUNK_SIZE, CHUNK_OVERLAP, NLTK_PATH
+from langchain.text_splitter import (
+    RecursiveCharacterTextSplitter,
+    Language,
+    PythonTextSplitter,
+    MarkdownTextSplitter
+)
+from utils.get_config_tfvars import NLTK_PATH
 
 # 确保nltk数据路径正确
 nltk.data.path.append(NLTK_PATH)
@@ -10,167 +16,120 @@ nltk.data.find("tokenizers/punkt")
 class ChunkingStrategy:
     @staticmethod
     def structure_aware(text: str) -> List[str]:
-        """现有结构感知分块方法（保留原逻辑）"""
-        # 您的原始实现代码
-        pass
-
-    @staticmethod
-    def fixed_size(text: str, 
-                  chunk_size: int = CHUNK_SIZE, 
-                  overlap: int = CHUNK_OVERLAP) -> List[str]:
-        """
-        固定大小分块（带重叠）
-        适用于：通用文本、日志文件等无结构文本
-        优点：处理速度快，内存占用低
-        """
-        chunks = []
-        start = 0
-        
-        while start < len(text):
-            end = min(start + chunk_size, len(text))
-            
-            # 确保不截断单词
-            if end < len(text) and not text[end].isspace():
-                # 回溯到最近的空格
-                adjust_pos = text.rfind(' ', start, end)
-                if adjust_pos > start:
-                    end = adjust_pos
-            
-            chunk = text[start:end].strip()
-            if chunk:
-                chunks.append(chunk)
-            
-            # 应用重叠（确保不超过文本边界）
-            start = end - overlap if end - overlap > start else end
-            start = max(start, 0)
-            
-        return chunks
-
-    @staticmethod
-    def sliding_window(text: str, 
-                      window_size: int = CHUNK_SIZE, 
-                      stride: int = CHUNK_SIZE - CHUNK_OVERLAP) -> List[str]:
-        """
-        滑动窗口分块
-        适用于：需要保留上下文连续性的场景（如技术文档）
-        优点：保持上下文连贯性
-        """
-        chunks = []
-        tokens = text.split()
-        total_tokens = len(tokens)
-        
-        for i in range(0, total_tokens, stride):
-            window = tokens[i:i + window_size]
-            if len(window) < window_size // 2:  # 丢弃过小的块
-                continue
-            chunks.append(" ".join(window))
-        return chunks
-
-    @staticmethod
-    def semantic(text: str, 
-                max_chars: int = CHUNK_SIZE, 
-                min_chars: int = CHUNK_SIZE // 3) -> List[str]:
-        """
-        基于语义的分块（句子感知）
-        适用于：自然语言文本（报告、文章）
-        优点：保持语义完整性
-        """
-        sentences = nltk.sent_tokenize(text)
+        """结构感知分块（基于正则规则）"""
         chunks = []
         current_chunk = []
-        current_length = 0
         
-        for sent in sentences:
-            sent_length = len(sent)
-            # 如果当前句子超过最大尺寸，单独成块
-            if sent_length > max_chars:
+        # 改进的分割模式
+        patterns = {
+            'section_header': re.compile(r'^(#+\s+|==+\s?|--+\s?|\d+\.\s+[A-Z])'),
+            'list_item': re.compile(r'^(\s*[\-\*•]\s+|\s*\d+\.\s+)'),
+            'code_block': re.compile(r'^```\w*$')
+        }
+        
+        for line in text.split('\n'):
+            line = line.strip()
+            if not line:
+                continue
+
+            # 检测代码块边界
+            if patterns['code_block'].match(line):
                 if current_chunk:
-                    chunks.append(" ".join(current_chunk))
+                    chunks.append('\n'.join(current_chunk))
                     current_chunk = []
-                    current_length = 0
-                chunks.append(sent)
+                chunks.append(line)
                 continue
                 
-            # 检查添加后是否超限
-            if current_length + sent_length <= max_chars:
-                current_chunk.append(sent)
-                current_length += sent_length
-            else:
+            # 处理章节标题
+            if patterns['section_header'].match(line):
                 if current_chunk:
-                    chunks.append(" ".join(current_chunk))
-                current_chunk = [sent]
-                current_length = sent_length
-                
-        # 添加最后一块
+                    chunks.append('\n'.join(current_chunk))
+                    current_chunk = []
+                chunks.append(line)
+                continue
+
+            # 处理列表项
+            if patterns['list_item'].match(line):
+                if current_chunk and not patterns['list_item'].match(current_chunk[-1]):
+                    chunks.append('\n'.join(current_chunk))
+                    current_chunk = []
+                current_chunk.append(line)
+                continue
+
+            current_chunk.append(line)
+
         if current_chunk:
-            final_chunk = " ".join(current_chunk)
-            if len(final_chunk) >= min_chars:
-                chunks.append(final_chunk)
-                
+            chunks.append('\n'.join(current_chunk))
+
         return chunks
+
+    @staticmethod
+    def semantic_split(text: str) -> List[str]:
+        """基于语义的分块（句子级分割）"""
+        return nltk.sent_tokenize(text)
+
+    @staticmethod
+    def recursive_character(text: str) -> List[str]:
+        """LangChain递归字符分割器"""
+        splitter = RecursiveCharacterTextSplitter(
+            separators=["\n\n", "\n", ". ", " ", ""],
+            keep_separator=True
+        )
+        return splitter.split_text(text)
+
+    @staticmethod
+    def markdown_aware(text: str) -> List[str]:
+        """Markdown结构感知分块"""
+        splitter = MarkdownTextSplitter()
+        return splitter.split_text(text)
+
+    @staticmethod
+    def python_code(text: str) -> List[str]:
+        """Python代码分割器"""
+        splitter = PythonTextSplitter()
+        return splitter.split_text(text)
 
     @staticmethod
     def hierarchical(text: str) -> List[str]:
         """
-        分层分块策略（结构感知+语义分块）
-        适用于：混合结构文档（HTML/Markdown等）
-        优点：兼顾文档结构和语义完整性
-        """
-        # 第一步：结构感知分块
-        structural_chunks = ChunkingStrategy.structure_aware(text)
-        
-        # 第二步：对每个大块进行语义分块
-        final_chunks = []
-        for chunk in structural_chunks:
-            if len(chunk) > CHUNK_SIZE * 1.5:
-                final_chunks.extend(ChunkingStrategy.semantic(chunk))
-            else:
-                final_chunks.append(chunk)
-                
-        return final_chunks
-
-    @staticmethod
-    def code_aware(text: str) -> List[str]:
-        """
-        代码感知分块（带语法结构保留）
-        适用于：源代码文件、技术文档
-        优点：保持代码结构完整性
+        分层分块策略
+        1. 首先使用结构感知分块
+        2. 对过大块使用语义分块
         """
         chunks = []
-        current_chunk = []
-        current_length = 0
+        structural_chunks = ChunkingStrategy.structure_aware(text)
         
-        # 按代码结构分割（函数/类/块）
-        for line in text.split('\n'):
-            line = line.rstrip()
-            if not line:
-                continue
+        for chunk in structural_chunks:
+            # 对过大的文本块进行句子级分割
+            if len(chunk) > 1500:
+                chunks.extend(ChunkingStrategy.semantic_split(chunk))
+            else:
+                chunks.append(chunk)
                 
-            # 检测代码块边界（基于缩进和关键词）
-            if re.match(r'^(def |class |\}|\]|\))', line):
-                if current_chunk:
-                    chunks.append("\n".join(current_chunk))
-                    current_chunk = []
-                    current_length = 0
-                    
-            current_chunk.append(line)
-            current_length += len(line)
-            
-            # 长度检查
-            if current_length >= CHUNK_SIZE:
-                chunks.append("\n".join(current_chunk))
-                current_chunk = []
-                current_length = 0
-                
-        if current_chunk:
-            chunks.append("\n".join(current_chunk))
-            
         return chunks
+
+    @staticmethod
+    def auto_detect(text: str) -> List[str]:
+        """自动检测内容类型并选择分块策略"""
+        # 检测代码内容
+        if re.search(r'(def |class |import |\{|//|/\*)', text):
+            return ChunkingStrategy.python_code(text)
+        
+        # 检测Markdown内容
+        if re.search(r'(^#+\s+|\[.*\]\(.*\)|!\[.*\]\(.*\))', text):
+            return ChunkingStrategy.markdown_aware(text)
+        
+        # 检测结构化文本
+        if re.search(r'^\s*(\d+\.\s+|[\-\*•]\s+)', text, re.MULTILINE):
+            return ChunkingStrategy.structure_aware(text)
+        
+        # 默认使用分层策略
+        return ChunkingStrategy.hierarchical(text)
 
 def chunk_text(
     text: str, 
-    strategy: str = "hierarchical",
-    custom_strategy: Optional[Callable[[str], List[str]] = None
+    strategy: str = "auto_detect",
+    custom_strategy: Optional[Callable[[str], List[str]]] = None
 ) -> List[str]:
     """
     分块入口函数
@@ -178,25 +137,27 @@ def chunk_text(
     参数:
         text: 输入文本
         strategy: 分块策略选择 
-            - 'fixed': 固定大小分块
-            - 'sliding': 滑动窗口分块
+            - 'auto_detect': 自动检测内容类型（默认）
+            - 'hierarchical': 分层分块
             - 'semantic': 语义分块
-            - 'hierarchical': 分层分块（默认）
             - 'structure': 结构感知分块
-            - 'code': 代码感知分块
+            - 'markdown': Markdown感知分块
+            - 'code': Python代码分块
+            - 'recursive': LangChain递归分割
         custom_strategy: 自定义分块函数
     """
     strategy_map = {
-        "fixed": ChunkingStrategy.fixed_size,
-        "sliding": ChunkingStrategy.sliding_window,
-        "semantic": ChunkingStrategy.semantic,
+        "auto_detect": ChunkingStrategy.auto_detect,
         "hierarchical": ChunkingStrategy.hierarchical,
+        "semantic": ChunkingStrategy.semantic_split,
         "structure": ChunkingStrategy.structure_aware,
-        "code": ChunkingStrategy.code_aware
+        "markdown": ChunkingStrategy.markdown_aware,
+        "code": ChunkingStrategy.python_code,
+        "recursive": ChunkingStrategy.recursive_character
     }
     
     if custom_strategy:
         return custom_strategy(text)
         
-    selected_strategy = strategy_map.get(strategy, ChunkingStrategy.hierarchical)
+    selected_strategy = strategy_map.get(strategy, ChunkingStrategy.auto_detect)
     return selected_strategy(text)
