@@ -9,3 +9,25 @@ File upload to Filenet or data source	Source documents	Data available in source	
 Configure tfvars for data pipeline	Input parameters for Terraform	tfvars.json or equivalent	R	C	A	C	I
 Trigger pipeline job in Databricks	tfvars, Terraform module	Vectorized data indexed	R	C	A	C	I
 Document onboarding guide	Reusable onboarding steps	Published onboarding document	I	I	A	C	R
+
+
+Core RAG Development	 	 	 	 	 	 
+ 	 	 	 	 	 	 	 
+Activity	Input	Output	Platform	Integration	AI Services & Templates	Users (Squads)	Governance
+Define RAG core architecture	Use-case categories, model capabilities	Modular RAG components	C	C	A	I	R
+Develop RAG components(chunking, embedding, retrieval, reranking, generation)	LLM, embeddings, retriever, reranker configs	RAG core repo (open-sourced)	I	I	A	C	R
+Enable persistent memory store	Design pattern	Vector DB + memory adapter	I	R	A	C	I
+Incorporate multiple chunking techniques	Document types	Enhanced retrieval quality	I	I	A	C	I
+Separate core from TF infra	Infra dependency in dev flow	Clean separation in repo	R	C	A	I	R
+Add observability to chat flows	Logging & tracing specs	Logs, dashboards, metrics	R	I	A	I	C
+
+Inference Pipeline Execution	 	 	 	 	 	 
+ 	 	 	 	 	 	 	 
+Activity	Input	Output	Platform	Integration	AI Services & Templates	Users (Squads)	Governance
+Create serving endpoint for RAG Chat	RAG chat pipeline	Databricks REST API endpoint	R	I	A	I	C
+Author OpenAPI/Swagger spec	Endpoint parameters, auth method	API documentation	I	I	A	I	R
+Support UI integration (if applicable)	UI template / spec	Optional chat UI	I	I	C	A	I
+API trigger from application	Token + payload	Chat response	I	I	I	A	I
+Run and validate inference	Sample payloads	Responses with context	I	I	C	A	I
+Add reranking & response refinement	Multi-document context	Ranked final response	I	I	A	C	I
+Log chat interactions for audit	Inference metadata	Telemetry & audit logs	R	I	A	I	A
