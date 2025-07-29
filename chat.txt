@@ -1,18 +1,1 @@
-Page not found (404)
-Request Method:	GET
-Request URL:	http://10.23.113.37:8000/
-Using the URLconf defined in synthetic_data.urls, Django tried these URL patterns, in this order:
-
-admin/
-v1/heartbeat [name='heartbeat']
-v1/getschemalist [name='getschemas']
-v1/gettablelist [name='gettables']
-v1/gettableinfo [name='getcolumns']
-v1/submitrequest [name='submitrequest']
-v1/getstatus [name='getjoblist']
-v1/getdata [name='getdata']
-v1/submitschemarequest [name='submitschema']
-v1/getdatawithtable [name='gettabledata']
-The empty path didn’t match any of these.
-
-You’re seeing this error because you have DEBUG = True in your Django settings file. Change that to False, and Django will display a standard 404 page.
+[29/Jul/2025 04:35:27] "GET /v1/submitschemarequest HTTP/1.1" 405 40
