@@ -1,1 +1,709 @@
-[29/Jul/2025 04:35:27] "GET /v1/submitschemarequest HTTP/1.1" 405 40
+from rest_framework import status
+from rest_framework.renderers import JSONRenderer
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from datetime import datetime
+import psycopg2.extras as extras
+import os, traceback,sys,json,base64
+from synthetic_data_api.logger.logger import logger
+import psycopg2
+from django.conf import settings
+import uuid
+import pandas as pd
+import re
+from django.http import FileResponse
+from synthetic_data_api.utils.visualization import Visualization
+#from src.data_generator_table_info import get_table_info,generate_data,get_faker_functions
+from synthetic_data_api.src.without_data.data_generator_table_info import get_table_info,generate_data,get_faker_functions
+from synthetic_data_api.src.with_data.data_generator import SyntheticDataGenerator
+from threading import Thread
+import csv
+from synthetic_data_api.src.without_data.data_generator_table_info import update_DB
+
+# Create your views here.
+
+bow_path = os.path.join(settings.BASE_DIR,'synthetic_data_api','configs','PII_BOW.xlsx')
+#input_path = os.path.join(settings.BASE_DIR,'synthetic_data_api','input')
+input_path = os.path.join(settings.CONFIG.get("output_file_path","/swoosh/synthetic_data_test"),'synthetic_data_api','input')
+titanic_path = os.path.join(settings.BASE_DIR,'synthetic_data_api','configs','titanic.csv')
+#metrics_path = os.path.join(settings.BASE_DIR,'synthetic_data_api','metrics')
+metrics_path = os.path.join(settings.CONFIG.get("output_file_path","/swoosh/synthetic_data_test"),'synthetic_data_api','metrics')
+if not os.path.exists(metrics_path):
+    os.makedirs(metrics_path,mode=0o777)
+
+if not os.path.exists(input_path):
+    os.makedirs(input_path,mode=0o777)
+output_path = os.path.join(settings.CONFIG.get("output_file_path","/swoosh/synthetic_data_test"),'synthetic_data_api','output')
+
+if not os.path.exists(output_path):
+    os.makedirs(output_path,mode=0o777)
+
+class HeartBeat(APIView):
+    def get(self,request):
+        logger.info("heart beat function called")
+        return Response({"status":"200","msg":"Success"},status=status.HTTP_200_OK)
+
+
+
+def create_table(columns_info,table_name):
+    try:
+        logger.info("Table create method started")
+        conn = psycopg2.connect(database=settings.DB_NAME, user=settings.DB_USER, password=settings.DB_PASS,
+                                  host=settings.DB_HOST, port=settings.DB_PORT)
+        cursor = conn.cursor()
+        logger.info("there %s columns",len(columns_info))
+        s=''
+        l = []
+
+        for data in columns_info:
+                # s+=data['column']+" "+data['datatype']
+                # if data['datatype']=='ARRAY' or 'tim':
+                #     s=s[:-5]+"text, "
+                # elif data['columnsize']=='' or data['columnsize']=='None':
+                #     s+=", "
+                # else:
+                #     s+="("+data['columnsize']+")"+", "
+            if data['column'] not in l:
+                s += data['column'] +" "
+                l.append(data['column'])
+                if data['datatype'] == 'ARRAY' or 'time' in data['datatype'] or 'date' in data['datatype']:
+                    s +=  "text, "
+                elif data['columnsize'] == '' or data['columnsize'] == 'None':
+                        s += data['datatype']+", "
+                else:
+                        s += data['datatype']+"(" + data['columnsize'] + ")" + ", "
+        s = s[:-2]
+        logger.info("@@@@@@######!!!!!$$$$$%%%%%")
+        logger.info("string:%s",s)
+        query = 'CREATE TABLE IF NOT EXISTS '+table_name+" ("+s+")"
+        cursor.execute(query)
+        conn.commit()
+        logger.info("Table:%s created",table_name)
+        return table_name
+    except Exception as e:
+        logger.error("An error occurred during the execution of creating tables, error:%s, reason:%s", str(e),
+                     "".join(traceback.format_exception(*sys.exc_info())))
+        return ''
+
+def db_update(values,query,cursor,conn):
+    try:
+        logger.info("updating the DB")
+        cursor.execute(query,values)
+        logger.info("DB updated completed")
+        conn.commit()
+        return True
+    except Exception as e:
+        logger.error("AN error occurred during the execution of DB update method, error:%s, reason:%s", str(e),
+                     "".join(traceback.format_exception(*sys.exc_info())))
+        return False
+
+class getSchemas(APIView):
+    renderer_classes = [JSONRenderer]
+    def get(self,request):
+        try:
+            logger.info("Get Schema method started")
+            logger.info("Connecting to DB")
+            connection = psycopg2.connect(database=settings.DB_NAME,user=settings.DB_USER,password=settings.DB_PASS,host=settings.DB_HOST,port=settings.DB_PORT)
+            cursor = connection.cursor()
+            logger.info("DB connection success")
+            logger.info("Getting schemas")
+            query = "select schema_name from information_schema.schemata"
+            cursor.execute(query)
+            schemas = []
+            for i in cursor.fetchall():
+                schemas.append(i[0])
+            logger.info('Retrived schemas are:%s',schemas)
+            return Response({'status':'Success','schemas':schemas,'msg':"Done"},status=status.HTTP_200_OK)
+        except Exception as e:
+            logger.error("AN error occurred during the execution of get schema method, error:%s, reason:%s",str(e),"".join(traceback.format_exception(*sys.exc_info())))
+            return Response({'status':'Error','schemas':[],'msg':str(e)},status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        finally:
+            cursor.close()
+            connection.close()
+
+class getTables(APIView):
+    renderer_classes = [JSONRenderer]
+    def get(self,request):
+        try:
+            logger.info("Get tables method started")
+            schema = request.query_params.get('schema','')
+            logger.info("schema requested is :%s",schema)
+            logger.info("Connecting to DB")
+            conn = psycopg2.connect(database=settings.DB_NAME,user=settings.DB_USER,password=settings.DB_PASS,host=settings.DB_HOST,port=settings.DB_PORT)
+            cursor = conn.cursor()
+            query = "select table_name from information_schema.tables where table_schema='" +schema+ "'"
+            logger.info("query:%s",query)
+            cursor.execute(query)
+            tables = []
+            for i in cursor.fetchall():
+                tables.append(i[0])
+            logger.info("Retrived tables are:%s",tables)
+            return Response({'status':"Success",'tables':tables,'msg':'Done'},status=status.HTTP_200_OK)
+        except Exception as e:
+            logger.error("An error occurred during the execution of get table mathod, error:%s, reason:%s",str(e),"".join(traceback.format_exception(*sys.exc_info())))
+            return Response({'status':'Error','tables':[],'msg':str(e)},status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        finally:
+            cursor.close()
+            conn.close()
+
+class getcolumns(APIView):
+    renderer_classes = [JSONRenderer]
+    def get(self,request):
+        try:
+            logger.info("Get columns method started")
+            table = request.query_params.get('table','')
+            logger.info("schema requested is :%s",table)
+            logger.info("Connecting to DB")
+            conn = psycopg2.connect(database=settings.DB_NAME,user=settings.DB_USER,password=settings.DB_PASS,host=settings.DB_HOST,port=settings.DB_PORT)
+            cursor = conn.cursor()
+            query = "select column_name,data_type,character_maximum_length from information_schema.columns where table_name='" +table+ "'"
+            logger.info("query:%s",query)
+            cursor.execute(query)
+            columns = []
+            for i in cursor.fetchall():
+                #temp={'Column':i[0],'DataType':i[1],'MaxLength':str(i[2]),'Potential_PII':''}
+                temp = {'column': i[0], 'datatype': i[1], 'columnsize': str(i[2])}
+                columns.append(temp)
+            logger.info("Retrived columns are:%s",columns)
+            logger.info("bow_path:%s",bow_path)
+            results = get_table_info(columns,bow_path)
+            return Response({'status':"Success",'tables':columns,'msg':'Done'},status=status.HTTP_200_OK)
+        except Exception as e:
+            logger.error("An error occurred during the execution of get column mathod, error:%s, reason:%s",str(e),"".join(traceback.format_exception(*sys.exc_info())))
+            return Response({'status':'Error','tables': {},'msg':str(e)},status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        finally:
+            cursor.close()
+            conn.close()
+
+class submitRequest(APIView):
+    renderer_classes = [JSONRenderer]
+    def post(self,request):
+        try:
+            job_id = "JID-" + str(uuid.uuid4())
+            logger.info("Submit request method started",extra={'jobid':job_id})
+            data = request.data
+            schema = data.get('dbschema','')
+            table = data.get('tablename','')
+            pii_cols = data.get('tableinfo','')
+            sample_data = data.get('refersampledata','')
+            columns = data.get('tableinfo','')
+            use_case = data.get('usecasetype','')
+            no_rows = data.get('numberofrecords','')
+            action_required = data.get('actionrequired','')
+            if no_rows=='':
+                no_rows = int(settings.CONFIG.get('no_rows',200))
+            else:
+                no_rows = int(no_rows)
+            logger.info("Received request for schema:%s, table:%s,pii_cols:%s,sample_data:%s",schema,table,pii_cols,sample_data,extra={'jobid':job_id})
+            conn = psycopg2.connect(database=settings.DB_NAME,user=settings.DB_USER,password=settings.DB_PASS,port=settings.DB_PORT,host=settings.DB_HOST)
+            logger.info("Connected to DB",extra={'jobid':job_id})
+            cursor = conn.cursor()
+            logger.info("Inserting to DB")
+            query = """ INSERT INTO swoosh.synthetic_data_api(job_id, schem_name, tabl_name, pii_columns, status, created_date, updated_date,output_path,usecase,action,dest_table) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)"""
+            values = (job_id, schema, table, '', "Pending", datetime.now(),datetime.now(),'',use_case,action_required,'')
+            cursor.execute(query,values)
+            conn.commit()
+            logger.info("Inserted to DB")
+
+            table_name = schema+"."+table
+            query = "select * from " +table_name +" limit "+str(no_rows)
+            # creating DF
+            cursor.execute(query)
+            rows = cursor.fetchall()
+            logger.info("Total records are :%s",len(rows),extra={'jobid':job_id})
+            db_cols = []
+            for i in cursor.description:
+                db_cols.append(i[0])
+            df = pd.DataFrame(rows,columns=db_cols)
+            file = os.path.join(input_path,job_id+".csv")
+            df.to_csv(file,index=False)
+            logger.info("Data frame created:%s",df, extra={'jobid': job_id})
+            if len(df)==0:
+                update_DB(job_id,'',"Error")
+                return Response(
+                    {'status': "Success", 'job_ref_id': job_id, 'msg': 'Request has been submitted for processing'},status=status.HTTP_200_OK)
+
+            #call seige
+            if sample_data.lower()=='no':
+                # query = "select column_name,data_type,character_maximum_length from information_schema.columns where table_name='" + table + "'"
+                # logger.info("query:%s", query)
+                # cursor.execute(query)
+                # columns = []
+                # for i in cursor.fetchall():
+                #     # temp={'Column':i[0],'DataType':i[1],'MaxLength':str(i[2]),'Potential_PII':''}
+                #     temp = {'column': i[0], 'datatype': i[1], 'columnsize': str(i[2])}
+                #     columns.append(temp)
+                table_info, matched_words_dict = get_table_info(columns, bow_path)
+                faker_functions = get_faker_functions(bow_path)
+                logger.info("#####################")
+                logger.info(columns)
+                logger.info("THREAD execution being initiated", extra={'jobid': job_id})
+                thread = Thread(target=generate_data, daemon=True,
+                                args=(
+                                columns, faker_functions, matched_words_dict,no_rows,job_id,schema,table))
+                thread.start()
+                # synthetic_data = generate_data(table_info, faker_functions, matched_words_dict, num_rows)
+            else:
+                df = pd.read_csv(file)
+                data_generator = SyntheticDataGenerator(df,pii_cols,schema,table,file,job_id,action_required)
+                if use_case.lower() == 'ml':
+                    thread = Thread(target=data_generator.generate_synthetic_data, daemon=True,
+                                    args=(no_rows,))
+                    thread.start()
+                    #syn_data = data_generator.generate_synthetic_data(num_rows=no_rows)
+                else:
+                    thread = Thread(target=data_generator.generate_synthetic_data, daemon=True,
+                                    args=(no_rows,settings.CONFIG.get('stats_synthesizer','GaussianCopula')))
+                    thread.start()
+                    #syn_data = data_generator.generate_synthetic_data(num_rows=no_rows, generation_type='GaussianCopula')
+                # if action_required.lower()=='generate synthetic data':
+                #     thread = Thread(target=data_generator.apply_custom_pii_settings, daemon=True,
+                #                     args=(syn_data, job_id, 'Synthetic'))
+                #     thread.start()
+                #     #pii_df = data_generator.apply_custom_pii_settings(syn_data,job_id, masking_technique='Synthetic')
+                # elif action_required.lower() =='mask':
+                #     thread = Thread(target=data_generator.apply_custom_pii_settings, daemon=True,
+                #                     args=(syn_data, job_id, 'Masking'))
+                #     thread.start()
+                #
+                #     #pii_df = data_generator.apply_custom_pii_settings(syn_data,job_id, masking_technique='Masking')
+                # elif action_required.lower() == 'redact':
+                #     thread = Thread(target=data_generator.apply_custom_pii_settings, daemon=True,
+                #                     args=(syn_data, job_id, 'Redaction'))
+                #     thread.start()
+                #     #pii_df = data_generator.apply_custom_pii_settings(syn_data,job_id, masking_technique='Redaction')
+            logger.info("Sent for thread",extra={'jobid': job_id})
+            return Response({'status':"Success",'job_ref_id':job_id,'msg':'Request has been submitted for processing'},status=status.HTTP_200_OK)
+        except Exception as e:
+            logger.error("An error occurred during the execution of submit request, error:%s, reason:%s", str(e),
+                         "".join(traceback.format_exception(*sys.exc_info())))
+            return Response({'status': 'Error', 'job_ref_id':job_id, 'msg': str(e)},status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        finally:
+            cursor.close()
+            conn.close()
+
+class getJobsList(APIView):
+    renderer_classes = [JSONRenderer]
+    def get(self,request):
+        try:
+            logger.info("Get Jobs list method started")
+            logger.info("connecting to DB")
+            conn = psycopg2.connect(database=settings.DB_NAME, user=settings.DB_USER, password=settings.DB_PASS,port=settings.DB_PORT, host=settings.DB_HOST)
+            logger.info("Connected to DB")
+            cursor = conn.cursor()
+            query = 'select job_id,schem_name,tabl_name,status,created_date from swoosh.synthetic_data_api order by id desc limit 50'
+            cursor.execute(query)
+            df = []
+            already = []
+            updated = []
+            for i in cursor.fetchall():
+                temp ={}
+                if i[0] not in already:
+                    temp = {"id":i[0],"schema":i[1],'table':i[2],'status':i[3],'created_time':i[4]}
+                    already.append(i[0])
+                    df.append(temp)
+                else:
+                    if i[0] not in updated:
+                        updated.append(i[0])
+                        for d in df:
+                            for key,val in d.items():
+                                if val==i[0]:
+                                    d['table'] = ''
+            logger.info("Result:%s",df)
+            return Response({'status':"Success",'jobs':df,'msg':'Done'},status=status.HTTP_200_OK)
+        except Exception as e:
+            logger.error("An error occurred during the execution of get jobs method, error:%s, reason:%s",str(e),"".join(traceback.format_exception(*sys.exc_info())))
+            return Response({'status': "Error", 'jobs': [], 'msg': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        finally:
+            cursor.close()
+            conn.close()
+
+
+class getData(APIView):
+    renderer_classes = [JSONRenderer]
+    def get(self,request):
+        try:
+            logger.info('Get Data method started')
+            job_id = request.query_params.get('jobid','')
+            r1_data = []
+            r2_data = []
+            i_data = ''
+            m_data = []
+            mj_data = []
+            flag = 'no'
+            plt_data = []
+            k_data = []
+            first_df = []
+            cor_img = ''
+            associate_img = ''
+            group_data = []
+            cat_data = []
+            if job_id=='':
+                return Response({"status":'Success','data':[],'msg':"Job is empty"},status=status.HTTP_200_OK)
+            conn = psycopg2.connect(database=settings.DB_NAME, user=settings.DB_USER, password=settings.DB_PASS,
+                                port=settings.DB_PORT, host=settings.DB_HOST)
+            logger.info("Connected to DB")
+            cursor = conn.cursor()
+            query = "select output_path,status,tabl_name from swoosh.synthetic_data_api where job_id='"+job_id+"'"
+            cursor.execute(query)
+            query_result = cursor.fetchone()
+            path = query_result[0]
+            state = query_result[1]
+            first_table = query_result[2]
+            try:
+                q_val = cursor.fetchall()
+                q_val = q_val + [query_result]
+            except Exception as e:
+                logger.info("Error:%s",str(e))
+            if len(q_val)>1:
+                with open(path, newline='') as csvfile:
+                    reader = csv.DictReader(csvfile)
+                    data = [row for row in reader]
+                tables = []
+                for row in q_val:
+                    tables.append(row[2])
+                tables = tables
+                logger.info("tablessss:%s", tables)
+
+                return Response(
+                    {"status": "Success", "syn_data": data,'tables':tables,'display_table':first_table, "synthetic_metric": r1_data, "base_response": r2_data,
+                     "ws_data": m_data, "ks_data": k_data, "no_ref_metric": mj_data, "image": i_data,
+                     'first_df': first_df, 'cor_img': cor_img, 'associate_img': associate_img, 'group_data': group_data,
+                     'cat_data': cat_data, 'plt': plt_data, 'flag': flag, 'msg': "Done"}, status=status.HTTP_200_OK)
+
+            if state.lower() == 'error':
+                return Response(
+                    {"status": "Success", "syn_data": 'No data/rows available in the specified db table to use as sample data', "synthetic_metric": r1_data, "base_response": r2_data,
+                     "ws_data": m_data, "ks_data": k_data, "no_ref_metric": mj_data, "image": i_data, 'plt': plt_data,
+                     'flag': flag, 'msg': "Done"}, status=status.HTTP_200_OK)
+
+            with open(path, newline='') as csvfile:
+                reader = csv.DictReader(csvfile)
+                data = [row for row in reader]
+            data = data[:101]
+            logger.info("type:%s,len:%s",type(data),len(data))
+            r1_path = os.path.join(metrics_path,job_id+"_r1.csv")
+            r2_path = os.path.join(metrics_path, job_id + "_r2.csv")
+            m_path = os.path.join(metrics_path, job_id + "ws_.csv")
+            k_path = os.path.join(metrics_path, job_id + "ks_.csv")
+            mj_path = os.path.join(metrics_path, job_id + ".json")
+            first_df_path = os.path.join(metrics_path, job_id + "_dtype.csv")
+            cor_img_path = os.path.join(metrics_path, job_id + "_spearmans.png")
+            associate_img_path = os.path.join(metrics_path, job_id + "_nominal.png")
+            group_path = os.path.join(settings.CONFIG.get("output_file_path", "/swoosh/synthetic_data_test"),
+                            'synthetic_data_api', 'output', job_id + "_group.csv")
+            cat_path = path = os.path.join(settings.CONFIG.get("output_file_path", "/swoosh/synthetic_data_test"),
+                            'synthetic_data_api', 'output', job_id + "_group_cat.csv")
+
+            if os.path.exists(first_df_path):
+                try:
+                    with open(first_df_path, newline='') as csvfile:
+                        reader = csv.DictReader(csvfile)
+                        first_df = [row for row in reader]
+                except Exception as e:
+                    logger.info(str(e))
+
+            if os.path.exists(cor_img_path):
+                with open(cor_img_path, mode='rb') as file:
+                    img = file.read()
+
+                cor_img = base64.b64encode(img)
+
+            if os.path.exists(associate_img_path):
+                with open(associate_img_path, mode='rb') as file:
+                    img = file.read()
+
+                associate_img = base64.b64encode(img)
+
+            if os.path.exists(group_path) and os.path.exists(cat_path):
+                with open(group_path, newline='') as csvfile:
+                    reader = csv.DictReader(csvfile)
+                    group_data = [row for row in reader]
+
+                with open(cat_path, newline='') as csvfile:
+                    reader = csv.DictReader(csvfile)
+                    cat_data = [row for row in reader]
+
+            if os.path.exists(r1_path) and os.path.exists(r2_path) and os.path.exists(k_path):
+                with open(r1_path, newline='') as csvfile:
+                    reader = csv.DictReader(csvfile)
+                    r1_data = [row for row in reader]
+
+                with open(r2_path, newline='') as csvfile:
+                    reader = csv.DictReader(csvfile)
+                    r2_data = [row for row in reader]
+                if os.path.exists(m_path):
+                    with open(m_path, newline='') as csvfile:
+                        reader = csv.DictReader(csvfile)
+                        m_data = [row for row in reader]
+
+                with open(k_path, newline='') as csvfile:
+                    reader = csv.DictReader(csvfile)
+                    k_data = [row for row in reader]
+                k_pop = []
+                for kd in k_data:
+                    temp ={}
+                    for key in kd.keys():
+                        if key =='statistic_location' or key =='statistic_sign':
+                            continue
+                        else:
+                            temp[key] = kd[key]
+                    k_pop.append(temp)
+                k_data = k_pop
+
+                i_path = os.path.join(metrics_path, job_id + ".png")
+                with open(i_path, mode='rb') as file:
+                    img = file.read()
+
+                i_data = base64.b64encode(img)
+                flag = 'yes'
+            # i_path = os.path.join(metrics_path,job_id+".png")
+            # img = open(i_path)
+            #
+            # response = FileResponse(img)
+
+            #"metric_data":m_data,"image":response
+            elif os.path.exists(mj_path):
+                flag = 'yes'
+                with open(mj_path, 'r') as f:
+                    #mj_data = f.read()
+                    mj_data = json.load(f)
+                i_path = os.path.join(metrics_path, job_id+"_plt.png")
+                with open(i_path, mode='rb') as file:
+                    img = file.read()
+                plt_data = base64.b64encode(img)
+                # full_data = pd.read_csv(path)
+                # vis = Visualization(full_data)
+                # plt = vis.heatmap()
+                # plt.show()
+
+            return Response({"status":"Success","syn_data":data,'tables':[],'display_table':'',"synthetic_metric":r1_data,"base_response":r2_data,"ws_data":m_data,"ks_data":k_data,"no_ref_metric":mj_data,"image":i_data,'first_df':first_df,'cor_img':cor_img,'associate_img':associate_img,'group_data':group_data,'cat_data':cat_data,'plt':plt_data,'flag':flag,'msg':"Done"},status=status.HTTP_200_OK)
+        except Exception as e:
+            logger.error("An error occurred during the execution of get jobs method, error:%s, reason:%s", str(e),
+                         "".join(traceback.format_exception(*sys.exc_info())))
+            return Response({'status': "Error", 'data': [], 'msg': str(e)},status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        finally:
+            cursor.close()
+            conn.close()
+
+def get_conn_cursor():
+    try:
+        logger.info("Connecting to DB")
+        conn = psycopg2.connect(database=settings.DB_NAME, user=settings.DB_USER, password=settings.DB_PASS,
+                                host=settings.DB_HOST, port=settings.DB_PORT)
+        cursor = conn.cursor()
+        return conn,cursor
+    except Exception as e:
+        logger.error("An error occurred during the connecting to DB connection, error:%s, reason:%s", str(e),
+                     "".join(traceback.format_exception(*sys.exc_info())))
+        return '',''
+
+def apply_constraints(const,table_name):
+    try:
+        logger.info("Constarint apply method started")
+        conn,cursor = get_conn_cursor()
+        for k, v in const.items():
+            query = "alter table " + table_name + " add " + str(v)
+            try:
+                logger.info("constraint query:%s", query)
+                cursor.execute(query)
+            except Exception as e:
+                logger.error("an error occurred during execution of dump db constraint update,error:%s", str(e))
+        conn.commit()
+    except Exception as e:
+        logger.error("An error occurred during the execution of apply constraint method, error:%s, reason:%s", str(e),
+                     "".join(traceback.format_exception(*sys.exc_info())))
+
+
+
+
+class submitSchemaRequest(APIView):
+    renderer_classes = [JSONRenderer]
+    def post(self,request):
+        try:
+            job_id = "JID-" + str(uuid.uuid4())
+            logger.info("Submit schema request method started",extra={'jobid':job_id})
+            src_schema = request.data.get('source_dbschema','')
+            dest_schema = request.data.get('dest_dbschema','')
+            action = request.data.get('actionrequired','')
+            logger.info("Requested source_schema:%s, action:%s, destination_schema:%s",src_schema,action,dest_schema,extra={'jobid':job_id})
+            conn,cursor = get_conn_cursor()
+            try:
+                query = "CREATE SCHEMA IF NOT EXISTS "+str(dest_schema)
+                cursor.execute(query)
+                conn.commit()
+                logger.info("schema created",extra={'jobid':job_id})
+            except Exception as e:
+                logger.error("Error while creating schema,error:%s",str(e),extra={'jobid':job_id})
+            query = "select table_name from information_schema.tables where table_schema='" + src_schema + "'"
+            logger.info("query:%s", query,extra={'jobid':job_id})
+            cursor.execute(query)
+            tables = []
+            for i in cursor.fetchall():
+                tables.append(i[0])
+            logger.info("Retrived tables, no_of_tables:%s, are:%s, ",len(tables), tables,extra={'jobid':job_id})
+
+            #audit update an table create
+            created_tables = []
+            for table in tables:
+                query = """ INSERT INTO swoosh.synthetic_data_api(job_id, schem_name, tabl_name, pii_columns, status, created_date, updated_date,output_path,usecase,action,dest_table) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)"""
+                values = (job_id, src_schema, table, '', "Pending", datetime.now(), datetime.now(), '', '', action, '')
+                cursor.execute(query, values)
+                conn.commit()
+
+                query = "select column_name,data_type,character_maximum_length from information_schema.columns where table_schema ='" + src_schema + "' and table_name='" + table + "'"
+                logger.info("query:%s", query,extra={'jobid':job_id})
+                cursor.execute(query)
+                columns = []
+                for i in cursor.fetchall():
+                    temp = {'column': i[0], 'datatype': i[1], 'columnsize': str(i[2])}
+                    columns.append(temp)
+                logger.info("Retrived columns are:%s", columns,extra={'jobid':job_id})
+                logger.info("bow_path:%s", bow_path,extra={'jobid':job_id})
+                results = get_table_info(columns, bow_path)
+                logger.info("updated columns are:%s", results,extra={'jobid':job_id})
+                logger.info("Calling create table",extra={'jobid':job_id})
+                sec = (str(datetime.now())[11:19])
+                date = (str(datetime.now())[:11])
+                date = date[:4] + date[5:7] + date[8:10] + "_" + sec[:2] + "_" + sec[3:5] + "_" + sec[6:]
+                # if action.lower().startswith('mas'):
+                #     table_name = "data_protect_test" + ".synth_" + table + str(date)
+                # elif action.lower().startswith('un'):
+                #     table_name = "data_unprotect_test" + ".synth_" + table + str(date)
+                table_name = dest_schema+ ".synth_" + table + str(date)
+                ret = create_table(columns, table_name)
+                created_tables.append(ret)
+            logger.info("created tables are:%s",created_tables)
+            #applying constraints
+            for table in tables:
+                logger.info("Trying to get the constraints",extra={'jobid':job_id})
+                tab_name = src_schema + "." + table
+                query = "SELECT conname,pg_catalog.pg_get_constraintdef(r.oid, true) as condef FROM pg_catalog.pg_constraint r WHERE r.conrelid='" + tab_name + "'::regclass AND (r.contype = \'f\' or r.contype = \'p\' or r.contype = \'u\') ORDER BY 1"
+                cursor.execute(query)
+                con_values = cursor.fetchall()
+                logger.info("the constraints are:%s", con_values, extra={'jobid': job_id})
+                const = {}
+                for row in con_values:
+                    res = re.findall(r'\(.*?\)', row[1])
+                    logger.info("actual contraint:%s",row)
+                    logger.info("----->%s,%s", type(res), res)
+                    # const.append(res[0][1:-1])
+                    if row[1].lower().startswith('pr'):
+                        const['pk'] = row[1]
+                    elif row[1].lower().startswith('for'):
+                        f_key = ''
+                        f_table = ''
+                        j = 0
+                        met = False
+                        metmet=False
+                        for i in range(len(row[1])-2,-1,-1):
+                            if row[1][i]!="(" and met==False:
+                                f_key+=row[1][i]
+                                j = i
+                            elif row[1][i]!="." and metmet == False:
+                                f_table += row[1][i]
+                                met=True
+                            else:
+                                f_table = f_table[::-1]
+                                f_table = f_table[:-1]
+                                f_key = f_key[::-1]
+                                break
+                        splitted = row[1].split(" ")[:-1]
+                        logger.info("splits are:%s",splitted)
+                        splitted = " ".join(splitted)
+                        logger.info("splits are:%s", splitted)
+                        for t in created_tables:
+                            if f_table in t:
+                                splitted +=" "+t+"("+f_key+")"
+
+                                logger.info("***********************: %s and :%s, %s",f_key,f_table,splitted)
+                                const['fk'] = splitted
+                    logger.info("dict :%s", const, extra={'jobid': job_id})
+                for t in created_tables:
+                    if table in t:
+                        apply_constraints(const,t)
+                        logger.info("Constarint applied", extra={'jobid': job_id})
+                        break
+
+            #actual process
+            for table in tables:
+
+                query = "select column_name,data_type,character_maximum_length from information_schema.columns where table_schema ='" + src_schema + "' and table_name='" + table + "'"
+                logger.info("query:%s", query, extra={'jobid': job_id})
+                cursor.execute(query)
+                columns = []
+                for i in cursor.fetchall():
+                    temp = {'column': i[0], 'datatype': i[1], 'columnsize': str(i[2])}
+                    columns.append(temp)
+                logger.info("Retrived columns are:%s", columns, extra={'jobid': job_id})
+                logger.info("bow_path:%s", bow_path, extra={'jobid': job_id})
+                results = get_table_info(columns, bow_path)
+                logger.info("updated columns are:%s", results, extra={'jobid': job_id})
+
+
+                table_name = src_schema + "." + table
+                query = "select * from " + table_name
+                # creating DF
+                cursor.execute(query)
+                rows = cursor.fetchall()
+                logger.info("Total records are :%s", len(rows), extra={'jobid': job_id})
+                db_cols = []
+                for i in cursor.description:
+                    db_cols.append(i[0])
+                df = pd.DataFrame(rows, columns=db_cols)
+                file = os.path.join(input_path, job_id+"_"+table + ".csv")
+                df.to_csv(file, index=False)
+                df = pd.read_csv(file)
+                data_generator = SyntheticDataGenerator(df, columns, src_schema, table, file, job_id, action)
+                logger.info("generator initiated", extra={'jobid': job_id})
+                use = ''
+                for t in created_tables:
+                    if table in t:
+                        use = t
+                        break
+                if action.lower().startswith('un'):
+                    resp = data_generator.apply_custom_pii_settings(df, job_id, const,masking_technique='Unmask',called_from='decrypt',table_name = use)
+                else:
+                    resp = data_generator.apply_custom_pii_settings(df, job_id,const, masking_technique='Mask',called_from='encrypt',table_name = use)
+
+
+
+            return Response(
+                {"status": "Success", 'job_ref_id':job_id,'msg': "Done"}, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            return Response(
+                {"status": "Error", 'msg': str(e)}, status=status.HTTP_200_OK)
+        finally:
+            cursor.close()
+            conn.close()
+
+
+class getTableData(APIView):
+    def get(self,request):
+        try:
+            logger.info('Get Data with table method started')
+            job_id = request.query_params.get('jobid', '')
+            table = request.query_params.get('table', '')
+            conn,cursor = get_conn_cursor()
+            query = "select output_path,status,tabl_name from swoosh.synthetic_data_api where job_id='" + job_id + "' and tabl_name='" + table + "'"
+            cursor.execute(query)
+            query_result = cursor.fetchone()
+            path = query_result[0]
+            data = []
+            with open(path, newline='') as csvfile:
+                reader = csv.DictReader(csvfile)
+                data = [row for row in reader]
+
+            return Response(
+                {"status": "Success", "syn_data": data, 'msg': "Done"},
+                status=status.HTTP_200_OK)
+
+        except Exception as e:
+            logger.error(str(e))
+            return Response(
+                {"status": "Success", "syn_data": data, 'msg': "Done"},
+                status=status.HTTP_200_OK)
+        finally:
+            cursor.close()
+            conn.close()
