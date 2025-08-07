@@ -1,257 +1,123 @@
-import requests
-import json
-import time
-import csv
-import os
-import matplotlib.pyplot as plt
-from io import BytesIO
-import base64
+from presidio_analyzer import AnalyzerEngine, PatternRecognizer
+from presidio_anonymizer import AnonymizerEngine
+from presidio_anonymizer.entities import OperatorConfig
+import uuid
+import re
 
-# API基础配置
-BASE_URL = "http://localhost:8000"  # 根据实际部署修改
-API_ENDPOINTS = {
-    "heartbeat": "/heartbeat/",
-    "schemas": "/get_schemas/",
-    "tables": "/get_tables/",
-    "columns": "/get_columns/",
-    "submit": "/submit_request/",
-    "jobs": "/get_jobs_list/",
-    "data": "/get_data/",
-    "schema_submit": "/submit_schema_request/",
-    "table_data": "/get_table_data/"
-}
-
-# 输出目录配置
-OUTPUT_DIR = "synthetic_data_output"
-os.makedirs(OUTPUT_DIR, exist_ok=True)
-
-class SyntheticDataClient:
-    def __init__(self, base_url=BASE_URL):
-        self.base_url = base_url
-    
-    def check_service(self):
-        """检查服务是否可用"""
-        url = self.base_url + API_ENDPOINTS["heartbeat"]
-        try:
-            response = requests.get(url)
-            return response.status_code == 200
-        except requests.exceptions.ConnectionError:
-            return False
-    
-    def get_schemas(self):
-        """获取数据库schema列表"""
-        url = self.base_url + API_ENDPOINTS["schemas"]
-        response = requests.get(url)
-        return self._handle_response(response)
-    
-    def get_tables(self, schema):
-        """获取指定schema中的表"""
-        url = self.base_url + API_ENDPOINTS["tables"]
-        params = {"schema": schema}
-        response = requests.get(url, params=params)
-        return self._handle_response(response)
-    
-    def get_columns(self, table):
-        """获取表的列信息"""
-        url = self.base_url + API_ENDPOINTS["columns"]
-        params = {"table": table}
-        response = requests.get(url, params=params)
-        return self._handle_response(response)
-    
-    def submit_request(self, data):
-        """提交数据生成请求"""
-        url = self.base_url + API_ENDPOINTS["submit"]
-        headers = {"Content-Type": "application/json"}
-        response = requests.post(url, data=json.dumps(data), headers=headers)
-        return self._handle_response(response)
-    
-    def get_jobs_list(self):
-        """获取作业列表"""
-        url = self.base_url + API_ENDPOINTS["jobs"]
-        response = requests.get(url)
-        return self._handle_response(response)
-    
-    def get_job_data(self, job_id):
-        """获取作业结果数据"""
-        url = self.base_url + API_ENDPOINTS["data"]
-        params = {"jobid": job_id}
-        response = requests.get(url, params=params)
-        return self._handle_response(response)
-    
-    def submit_schema_request(self, data):
-        """提交整个schema处理请求"""
-        url = self.base_url + API_ENDPOINTS["schema_submit"]
-        headers = {"Content-Type": "application/json"}
-        response = requests.post(url, data=json.dumps(data), headers=headers)
-        return self._handle_response(response)
-    
-    def get_table_data(self, job_id, table_name):
-        """获取特定表的数据"""
-        url = self.base_url + API_ENDPOINTS["table_data"]
-        params = {"jobid": job_id, "table": table_name}
-        response = requests.get(url, params=params)
-        return self._handle_response(response)
-    
-    def _handle_response(self, response):
-        """统一处理API响应"""
-        if response.status_code == 200:
-            return response.json()
-        else:
-            return {
-                "error": f"API request failed with status {response.status_code}",
-                "details": response.text
-            }
-    
-    def save_data(self, data, filename):
-        """保存数据到CSV文件"""
-        filepath = os.path.join(OUTPUT_DIR, filename)
-        if isinstance(data, list) and len(data) > 0:
-            keys = data[0].keys()
-            with open(filepath, 'w', newline='') as f:
-                writer = csv.DictWriter(f, fieldnames=keys)
-                writer.writeheader()
-                writer.writerows(data)
-            return filepath
-        return None
-    
-    def save_image(self, base64_str, filename):
-        """保存Base64编码的图像"""
-        if base64_str:
-            filepath = os.path.join(OUTPUT_DIR, filename)
-            try:
-                image_data = base64.b64decode(base64_str)
-                with open(filepath, 'wb') as f:
-                    f.write(image_data)
-                return filepath
-            except Exception as e:
-                print(f"Error saving image: {str(e)}")
-        return None
-    
-    def display_image(self, base64_str):
-        """显示Base64编码的图像"""
-        if base64_str:
-            try:
-                image_data = base64.b64decode(base64_str)
-                image = BytesIO(image_data)
-                img = plt.imread(image)
-                plt.imshow(img)
-                plt.axis('off')
-                plt.show()
-            except Exception as e:
-                print(f"Error displaying image: {str(e)}")
-
-def main():
-    client = SyntheticDataClient()
-    
-    # 检查服务状态
-    if not client.check_service():
-        print("Service is not available. Please check if the Django server is running.")
-        return
-    
-    print("1. 获取数据库schemas")
-    schemas = client.get_schemas()
-    print(f"Available schemas: {schemas.get('schemas', [])}")
-    
-    if not schemas.get('schemas'):
-        print("No schemas found. Exiting.")
-        return
-    
-    # 选择第一个schema
-    selected_schema = schemas['schemas'][0]
-    print(f"\n2. 获取schema '{selected_schema}'中的表")
-    tables = client.get_tables(selected_schema)
-    print(f"Available tables: {tables.get('tables', [])}")
-    
-    if not tables.get('tables'):
-        print("No tables found. Exiting.")
-        return
-    
-    # 选择第一个表
-    selected_table = tables['tables'][0]
-    print(f"\n3. 获取表 '{selected_table}'的列信息")
-    columns = client.get_columns(selected_table)
-    print(f"Table columns: {columns.get('tables', [])}")
-    
-    # 提交数据生成请求
-    print("\n4. 提交数据生成请求")
-    request_data = {
-        "dbschema": selected_schema,
-        "tablename": selected_table,
-        "tableinfo": columns.get('tables', []),
-        "refersampledata": "yes",
-        "usecasetype": "ml",
-        "numberofrecords": 1000,
-        "actionrequired": "generate synthetic data"
-    }
-    
-    submit_response = client.submit_request(request_data)
-    job_id = submit_response.get('job_ref_id', '')
-    
-    if not job_id:
-        print("Failed to submit request")
-        print(submit_response)
-        return
-    
-    print(f"Job submitted successfully. Job ID: {job_id}")
-    
-    # 等待作业完成
-    print("\n5. 等待作业完成...")
-    max_attempts = 20
-    attempt = 0
-    job_status = "Pending"
-    
-    while attempt < max_attempts and job_status != "Completed":
-        attempt += 1
-        time.sleep(10)  # 每10秒检查一次
+class PIIGuardRails:
+    def __init__(self, custom_entities=None):
+        """
+        初始化GuardRails模块
+        :param custom_entities: 自定义实体识别规则，格式：[{"name": "实体名", "regex": r"正则表达式", "score": 置信度}]
+        """
+        # 创建分析器
+        self.analyzer = AnalyzerEngine()
         
-        jobs = client.get_jobs_list()
-        for job in jobs.get('jobs', []):
-            if job['id'] == job_id:
-                job_status = job['status']
-                print(f"Job status: {job_status} (Attempt {attempt}/{max_attempts})")
-                if job_status == "Completed":
-                    break
-                elif job_status == "Error":
-                    print("Job failed. Exiting.")
-                    return
-    
-    if job_status != "Completed":
-        print("Job processing timed out. Exiting.")
-        return
-    
-    # 获取作业结果
-    print("\n6. 获取作业结果")
-    job_data = client.get_job_data(job_id)
-    
-    if 'syn_data' in job_data:
-        # 保存合成数据
-        csv_file = client.save_data(job_data['syn_data'], f"{job_id}_synthetic.csv")
-        if csv_file:
-            print(f"Saved synthetic data to: {csv_file}")
+        # 添加自定义实体识别
+        if custom_entities:
+            for entity in custom_entities:
+                pattern_recognizer = PatternRecognizer(
+                    supported_entity=entity["name"],
+                    patterns=[entity["regex"]],
+                    context=[],
+                    deny_list=[],
+                    supported_language="en"
+                )
+                self.analyzer.registry.add_recognizer(pattern_recognizer)
         
-        # 保存并显示可视化图像
-        if job_data.get('image'):
-            image_file = client.save_image(job_data['image'], f"{job_id}_visualization.png")
-            if image_file:
-                print(f"Saved visualization to: {image_file}")
+        # 创建匿名化引擎
+        self.anonymizer = AnonymizerEngine()
+        
+        # 存储反掩码映射关系
+        self.unmask_mapping = {}
+
+    def mask_text(self, text: str, mask_char: str = "*") -> str:
+        """
+        对文本中的敏感信息进行掩码处理
+        :param text: 原始文本
+        :param mask_char: 掩码字符
+        :return: 掩码后的文本
+        """
+        # 检测敏感实体
+        results = self.analyzer.analyze(text=text, language="en")
+        
+        # 生成掩码配置
+        operators = {}
+        for result in results:
+            entity_type = result.entity_type
             
-            # 显示图像
-            client.display_image(job_data['image'])
+            # 为每个实体生成唯一标识符用于后续反掩码
+            placeholder = f"[{entity_type}_{uuid.uuid4().hex[:6]}]"
+            
+            # 存储原始值与掩码占位符的映射
+            original_value = text[result.start:result.end]
+            self.unmask_mapping[placeholder] = original_value
+            
+            # 配置替换操作符
+            operators[entity_type] = OperatorConfig(
+                operator_name="replace",
+                params={"new_value": placeholder}
+            )
         
-        # 保存评估指标
-        if job_data.get('synthetic_metric'):
-            metric_file = client.save_data(job_data['synthetic_metric'], f"{job_id}_metrics.csv")
-            if metric_file:
-                print(f"Saved metrics to: {metric_file}")
-    
-    print("\n7. 批量处理整个schema示例")
-    schema_request = {
-        "source_dbschema": "public",
-        "dest_dbschema": "protected_data",
-        "actionrequired": "mask"
-    }
-    schema_response = client.submit_schema_request(schema_request)
-    print(f"Schema processing job submitted: {schema_response}")
+        # 执行掩码操作
+        anonymized_result = self.anonymizer.anonymize(
+            text=text,
+            analyzer_results=results,
+            operators=operators
+        )
+        
+        # 二次处理：用掩码字符替换占位符
+        masked_text = anonymized_result.text
+        for placeholder in self.unmask_mapping:
+            masked_text = masked_text.replace(
+                placeholder, 
+                mask_char * len(self.unmask_mapping[placeholder])
+        
+        return masked_text
+
+    def unmask_text(self, masked_text: str) -> str:
+        """
+        将掩码后的文本恢复为原始文本
+        :param masked_text: 掩码后的文本
+        :return: 原始文本
+        """
+        unmasked_text = masked_text
+        for placeholder, original_value in self.unmask_mapping.items():
+            # 创建匹配占位符的正则模式（考虑可能的转义）
+            pattern = re.escape(placeholder)
+            unmasked_text = re.sub(pattern, original_value, unmasked_text)
+        return unmasked_text
+
+    def reset_mapping(self):
+        """清除存储的映射关系"""
+        self.unmask_mapping = {}
+
 
 if __name__ == "__main__":
-    main()
+    # 示例配置
+    custom_entities = [
+        {
+            "name": "CUSTOM_ID",
+            "regex": r"\b[A-Z]{2}-\d{4}\b",  # 匹配类似 AB-1234 的ID
+            "score": 0.9
+        }
+    ]
+    
+    # 初始化GuardRails
+    guardrails = PIIGuardRails(custom_entities=custom_entities)
+    
+    # 原始文本
+    sample_text = "John Doe's phone is 555-123-4567 and his ID is AB-1234."
+    
+    # 执行掩码
+    masked_text = guardrails.mask_text(sample_text)
+    print("Masked Text:", masked_text)
+    # 输出: **** ****'s phone is ************ and his ID is ********.
+    
+    # 执行反掩码
+    unmasked_text = guardrails.unmask_text(masked_text)
+    print("Unmasked Text:", unmasked_text)
+    # 输出: John Doe's phone is 555-123-4567 and his ID is AB-1234.
+    
+    # 重置映射（可选）
+    guardrails.reset_mapping()
