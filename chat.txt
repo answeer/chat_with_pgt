@@ -1,97 +1,178 @@
 import json
 import os
+import uuid
+import re
 
 import yaml
 from presidio_analyzer import AnalyzerEngine, Pattern, PatternRecognizer
 from presidio_analyzer.nlp_engine import NlpEngineProvider
 from presidio_anonymizer import AnonymizerEngine
+from presidio_anonymizer.entities import OperatorConfig
 
 from ecer.common.custom_logger import logger
 from .config import RULES_FILE_PATH
 
 
-# Load configurations from YAML
-def load_configurations(yaml_file):
-    with open(yaml_file, "r") as file:
-        data = yaml.load(file, Loader=yaml.FullLoader)
-        return data["rules"], data.get("inclusions", []), data.get("exclusions", [])
-
-
-# Initialize the Presidio Analyzer engine with the default NLP engine and default recognizers
-try:
-    logger.info("Microsoft-Presidio Analyzer Loading")
-    logger.info("Microsoft-Presidio Analyzer Loaded")
-except Exception as e:
-    logger.error(f"Error in Loading Presidio Engines! {e}")
-
-    def pii_detector_masked(text):
-        response = {"count": 0, "masked_data": json.dumps("")}
-        return {"status": "Success", "response": response, "error_code": ""}
-
-else:
-    # Create an instance of the Presidio anonymizer
-    anonymizer = AnonymizerEngine()
-
-    def pii_detector_masked(text, chat_info): 
-        try:
-            # Define your text content and Add custom recognizers based on YAML rules
-            rules, inclusions, exclusions = load_configurations(RULES_FILE_PATH)
-            analysis_results = []
-            for rule in rules:
-                # Define the regex pattern in a Presidio `Pattern` object:
-                regex_pattern = Pattern(
-                    name=rule["name"], regex=rule["regex"], score=rule["score"]
-                )
-
-                # Define the recognizer with one or more patterns
-                regex_recognizer = PatternRecognizer(
-                    supported_entity=rule["name"], patterns=[regex_pattern]
-                )
-
-                regex_result = regex_recognizer.analyze(
-                    text=text, entities=[rule["name"]]
-                )
-                analysis_results.extend(regex_result)
-
-            # Filter results to exclude specified entity types and include specified inclusions
-            filtered_results = [
-                result
-                for result in analysis_results
-                if result.entity_type not in exclusions
-                and (result.entity_type in inclusions or not inclusions)
-            ]
-
-            # Count the number of unique PII entities detected
-            unique_pii_entities = set(result.entity_type for result in filtered_results)
-
-            # Anonymize the PII in the text
-            anonymized_text = anonymizer.anonymize(
-                text=text, analyzer_results=filtered_results
+class PIIGuardRails:
+    def __init__(self, rules_file_path=RULES_FILE_PATH):
+        """
+        初始化GuardRails模块
+        :param rules_file_path: YAML规则文件路径
+        """
+        # 加载配置
+        self.rules_file_path = rules_file_path
+        self.rules, self.inclusions, self.exclusions = self.load_configurations()
+        
+        # 创建分析器
+        self.analyzer = AnalyzerEngine()
+        
+        # 添加自定义实体识别
+        self._add_custom_recognizers()
+        
+        # 创建匿名化引擎
+        self.anonymizer = AnonymizerEngine()
+        
+        # 存储反掩码映射关系
+        self.unmask_mapping = {}
+    
+    def load_configurations(self):
+        """加载YAML配置"""
+        with open(self.rules_file_path, "r") as file:
+            data = yaml.load(file, Loader=yaml.FullLoader)
+            return data["rules"], data.get("inclusions", []), data.get("exclusions", [])
+    
+    def _add_custom_recognizers(self):
+        """添加自定义识别器"""
+        for rule in self.rules:
+            regex_pattern = Pattern(
+                name=rule["name"], regex=rule["regex"], score=rule["score"]
             )
+            regex_recognizer = PatternRecognizer(
+                supported_entity=rule["name"], patterns=[regex_pattern]
+            )
+            self.analyzer.registry.add_recognizer(regex_recognizer)
+    
+    def detect_pii(self, text: str):
+        """检测文本中的PII实体"""
+        # 分析文本
+        results = self.analyzer.analyze(text=text, language="en")
+        
+        # 过滤结果
+        filtered_results = [
+            result
+            for result in results
+            if result.entity_type not in self.exclusions
+            and (result.entity_type in self.inclusions or not self.inclusions)
+        ]
+        
+        # 提取唯一实体类型
+        unique_entities = set(result.entity_type for result in filtered_results)
+        
+        return filtered_results, list(unique_entities)
+    
+    def mask_text(self, text: str, mask_char: str = "*") -> str:
+        """
+        对文本中的敏感信息进行掩码处理
+        :param text: 原始文本
+        :param mask_char: 掩码字符
+        :return: 掩码后的文本
+        """
+        # 检测PII实体
+        results, _ = self.detect_pii(text)
+        
+        # 生成掩码配置
+        operators = {}
+        for result in results:
+            entity_type = result.entity_type
+            
+            # 为每个实体生成唯一标识符用于后续反掩码
+            placeholder = f"[{entity_type}_{uuid.uuid4().hex[:6]}]"
+            
+            # 存储原始值与掩码占位符的映射
+            original_value = text[result.start:result.end]
+            self.unmask_mapping[placeholder] = original_value
+            
+            # 配置替换操作符
+            operators[entity_type] = OperatorConfig(
+                operator_name="replace",
+                params={"new_value": placeholder}
+            )
+        
+        # 执行掩码操作
+        anonymized_result = self.anonymizer.anonymize(
+            text=text,
+            analyzer_results=results,
+            operators=operators
+        )
+        
+        # 二次处理：用掩码字符替换占位符
+        masked_text = anonymized_result.text
+        for placeholder in self.unmask_mapping:
+            masked_text = masked_text.replace(
+                placeholder, 
+                mask_char * len(self.unmask_mapping[placeholder])
+            )
+        
+        return masked_text
+    
+    def unmask_text(self, masked_text: str) -> str:
+        """
+        将掩码后的文本恢复为原始文本
+        :param masked_text: 掩码后的文本
+        :return: 原始文本
+        """
+        unmasked_text = masked_text
+        for placeholder, original_value in self.unmask_mapping.items():
+            # 创建匹配占位符的正则模式（考虑可能的转义）
+            pattern = re.escape(placeholder)
+            unmasked_text = re.sub(pattern, original_value, unmasked_text)
+        return unmasked_text
+    
+    def reset_mapping(self):
+        """清除存储的映射关系"""
+        self.unmask_mapping = {}
 
-            if len(unique_pii_entities) == 0:
-                response = {"count": 0, "masked_data": json.dumps("")}
-            else:
-                logger.info(
-                    json.dumps(
-                        {
-                            "number_of_pii_entities": len(unique_pii_entities),
-                            "masked_text": anonymized_text.text,
-                            "pii_entities": list(unique_pii_entities)
-                        }
-                    ),
-                    extra=chat_info
-                )
-                response = {
-                    "count": len(unique_pii_entities),
-                    "masked_data": json.dumps(anonymized_text.text),
-                    "pii_entities": list(unique_pii_entities)
-                }
 
+# 保持原有函数接口的兼容性
+def pii_detector_masked(text, chat_info):
+    try:
+        # 创建GuardRails实例
+        guardrails = PIIGuardRails()
+        
+        # 检测PII实体
+        results, entities = guardrails.detect_pii(text)
+        
+        if not entities:
+            response = {"count": 0, "masked_data": json.dumps("")}
             return {"status": "Success", "response": response, "error_code": ""}
-
-        except Exception as e:
-            logger.error("Error in PII Detector Function")
-            return {
-                "status": "Error",
-                "response": str(e),}
+        
+        # 执行掩码
+        masked_text = guardrails.mask_text(text)
+        
+        # 记录日志
+        logger.info(
+            json.dumps(
+                {
+                    "number_of_pii_entities": len(entities),
+                    "masked_text": masked_text,
+                    "pii_entities": entities
+                }
+            ),
+            extra=chat_info
+        )
+        
+        # 构建响应
+        response = {
+            "count": len(entities),
+            "masked_data": json.dumps(masked_text),
+            "pii_entities": entities
+        }
+        
+        return {"status": "Success", "response": response, "error_code": ""}
+    
+    except Exception as e:
+        logger.error(f"Error in PII Detector Function: {str(e)}", extra=chat_info)
+        return {
+            "status": "Error",
+            "response": str(e),
+        }
