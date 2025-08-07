@@ -1,178 +1,396 @@
 import json
-import os
-import uuid
 import re
+import uuid
+from typing import Dict, List, Tuple, Any, Optional
 
 import yaml
-from presidio_analyzer import AnalyzerEngine, Pattern, PatternRecognizer
+from presidio_analyzer import AnalyzerEngine, Pattern, PatternRecognizer, RecognizerResult
 from presidio_analyzer.nlp_engine import NlpEngineProvider
 from presidio_anonymizer import AnonymizerEngine
 from presidio_anonymizer.entities import OperatorConfig
 
+# Import logger and configuration path from your project
 from ecer.common.custom_logger import logger
 from .config import RULES_FILE_PATH
 
-
-class PIIGuardRails:
-    def __init__(self, rules_file_path=RULES_FILE_PATH):
-        """
-        初始化GuardRails模块
-        :param rules_file_path: YAML规则文件路径
-        """
-        # 加载配置
-        self.rules_file_path = rules_file_path
-        self.rules, self.inclusions, self.exclusions = self.load_configurations()
+class PIIDetector:
+    """
+    PII Detection and Masking/Unmasking Service
+    
+    This class provides:
+    - PII detection using regex patterns from configuration
+    - Masking of detected PII with unique placeholders
+    - Unmasking to restore original values using session ID
+    
+    Usage:
+    1. Initialize with configuration path
+    2. Use mask() to detect and mask PII
+    3. Use unmask() to restore original values
+    
+    Example:
+        pii_detector = PIIDetector()
+        mask_result = pii_detector.mask("My phone is 555-1234")
+        print(mask_result.masked_text)  # "My phone is [PHONE_5f3a7b]"
         
-        # 创建分析器
+        unmask_result = pii_detector.unmask(
+            mask_result.session_id, 
+            mask_result.masked_text
+        )
+        print(unmask_result.original_text)  # "My phone is 555-1234"
+    """
+    
+    def __init__(self, config_path: str = RULES_FILE_PATH, use_persistent_storage: bool = False):
+        """
+        Initialize the PII detector
+        
+        Args:
+            config_path: Path to YAML configuration file
+            use_persistent_storage: Flag to use persistent storage instead of memory
+        """
+        self.config_path = config_path
+        self.use_persistent_storage = use_persistent_storage
+        
+        # Initialize engines
+        logger.info("Initializing Microsoft Presidio Analyzer...")
         self.analyzer = AnalyzerEngine()
-        
-        # 添加自定义实体识别
-        self._add_custom_recognizers()
-        
-        # 创建匿名化引擎
         self.anonymizer = AnonymizerEngine()
+        logger.info("Microsoft Presidio Analyzer successfully loaded")
         
-        # 存储反掩码映射关系
-        self.unmask_mapping = {}
+        # Load configuration
+        self.rules, self.inclusions, self.exclusions = self._load_configurations()
+        self.recognizers = self._create_custom_recognizers()
+        
+        # Storage for mask mappings (in-memory by default)
+        self.mask_mapping_store: Dict[str, Dict[str, str]] = {}
+        
+        # If using persistent storage, initialize here
+        if use_persistent_storage:
+            self._init_persistent_storage()
     
-    def load_configurations(self):
-        """加载YAML配置"""
-        with open(self.rules_file_path, "r") as file:
-            data = yaml.load(file, Loader=yaml.FullLoader)
-            return data["rules"], data.get("inclusions", []), data.get("exclusions", [])
+    def _init_persistent_storage(self):
+        """Initialize persistent storage (e.g., database connection)"""
+        # Placeholder for actual implementation
+        logger.info("Using persistent storage for mask mappings")
+        # Example: self.storage = RedisStorage(host='localhost', port=6379)
     
-    def _add_custom_recognizers(self):
-        """添加自定义识别器"""
+    def _load_configurations(self) -> Tuple[List[Dict], List[str], List[str]]:
+        """Load PII detection rules from configuration file"""
+        try:
+            with open(self.config_path, "r") as file:
+                data = yaml.load(file, Loader=yaml.FullLoader)
+                return data["rules"], data.get("inclusions", []), data.get("exclusions", [])
+        except Exception as e:
+            logger.error(f"Error loading configuration: {str(e)}")
+            raise RuntimeError(f"Configuration loading failed: {str(e)}")
+    
+    def _create_custom_recognizers(self) -> List[PatternRecognizer]:
+        """Create custom recognizers based on configuration rules"""
+        recognizers = []
         for rule in self.rules:
             regex_pattern = Pattern(
-                name=rule["name"], regex=rule["regex"], score=rule["score"]
+                name=rule["name"],
+                regex=rule["regex"],
+                score=rule["score"]
             )
-            regex_recognizer = PatternRecognizer(
-                supported_entity=rule["name"], patterns=[regex_pattern]
+            recognizer = PatternRecognizer(
+                supported_entity=rule["name"],
+                patterns=[regex_pattern]
             )
-            self.analyzer.registry.add_recognizer(regex_recognizer)
+            recognizers.append(recognizer)
+        return recognizers
     
-    def detect_pii(self, text: str):
-        """检测文本中的PII实体"""
-        # 分析文本
-        results = self.analyzer.analyze(text=text, language="en")
-        
-        # 过滤结果
-        filtered_results = [
-            result
-            for result in results
-            if result.entity_type not in self.exclusions
-            and (result.entity_type in self.inclusions or not self.inclusions)
-        ]
-        
-        # 提取唯一实体类型
-        unique_entities = set(result.entity_type for result in filtered_results)
-        
-        return filtered_results, list(unique_entities)
-    
-    def mask_text(self, text: str, mask_char: str = "*") -> str:
+    def mask(self, text: str, chat_info: Dict = None) -> Dict[str, Any]:
         """
-        对文本中的敏感信息进行掩码处理
-        :param text: 原始文本
-        :param mask_char: 掩码字符
-        :return: 掩码后的文本
-        """
-        # 检测PII实体
-        results, _ = self.detect_pii(text)
+        Detect and mask PII entities in text
         
-        # 生成掩码配置
-        operators = {}
-        for result in results:
-            entity_type = result.entity_type
+        Args:
+            text: Input text to process
+            chat_info: Additional context for logging
             
-            # 为每个实体生成唯一标识符用于后续反掩码
-            placeholder = f"[{entity_type}_{uuid.uuid4().hex[:6]}]"
-            
-            # 存储原始值与掩码占位符的映射
-            original_value = text[result.start:result.end]
-            self.unmask_mapping[placeholder] = original_value
-            
-            # 配置替换操作符
-            operators[entity_type] = OperatorConfig(
-                operator_name="replace",
-                params={"new_value": placeholder}
-            )
-        
-        # 执行掩码操作
-        anonymized_result = self.anonymizer.anonymize(
-            text=text,
-            analyzer_results=results,
-            operators=operators
-        )
-        
-        # 二次处理：用掩码字符替换占位符
-        masked_text = anonymized_result.text
-        for placeholder in self.unmask_mapping:
-            masked_text = masked_text.replace(
-                placeholder, 
-                mask_char * len(self.unmask_mapping[placeholder])
-            )
-        
-        return masked_text
-    
-    def unmask_text(self, masked_text: str) -> str:
+        Returns:
+            Dictionary with:
+            - status: "Success" or "Error"
+            - session_id: Unique ID for unmasking
+            - masked_text: Text with PII replaced
+            - pii_entities: List of detected PII types
+            - count: Number of PII entities found
         """
-        将掩码后的文本恢复为原始文本
-        :param masked_text: 掩码后的文本
-        :return: 原始文本
-        """
-        unmasked_text = masked_text
-        for placeholder, original_value in self.unmask_mapping.items():
-            # 创建匹配占位符的正则模式（考虑可能的转义）
-            pattern = re.escape(placeholder)
-            unmasked_text = re.sub(pattern, original_value, unmasked_text)
-        return unmasked_text
-    
-    def reset_mapping(self):
-        """清除存储的映射关系"""
-        self.unmask_mapping = {}
-
-
-# 保持原有函数接口的兼容性
-def pii_detector_masked(text, chat_info):
-    try:
-        # 创建GuardRails实例
-        guardrails = PIIGuardRails()
-        
-        # 检测PII实体
-        results, entities = guardrails.detect_pii(text)
-        
-        if not entities:
-            response = {"count": 0, "masked_data": json.dumps("")}
-            return {"status": "Success", "response": response, "error_code": ""}
-        
-        # 执行掩码
-        masked_text = guardrails.mask_text(text)
-        
-        # 记录日志
-        logger.info(
-            json.dumps(
-                {
-                    "number_of_pii_entities": len(entities),
-                    "masked_text": masked_text,
-                    "pii_entities": entities
+        try:
+            results = []
+            
+            # Analyze text with each recognizer
+            for recognizer in self.recognizers:
+                # Process included entities or all supported entities
+                entities_to_check = self.inclusions if self.inclusions else recognizer.supported_entities
+                for entity in entities_to_check:
+                    # Skip excluded entities
+                    if entity in self.exclusions:
+                        continue
+                    # Analyze text for specific entity type
+                    analysis_result = recognizer.analyze(text=text, entities=[entity])
+                    results.extend(analysis_result)
+            
+            # If no PII detected, return original text
+            if not results:
+                return {
+                    "status": "Success",
+                    "session_id": "",
+                    "masked_text": text,
+                    "pii_entities": [],
+                    "count": 0
                 }
-            ),
-            extra=chat_info
-        )
+            
+            # Generate unique session ID
+            session_id = str(uuid.uuid4())
+            mapping = {}
+            
+            # Create operator configurations for anonymization
+            operator_configs = {}
+            for result in results:
+                # Generate unique identifier
+                unique_id = f"{result.entity_type}_{uuid.uuid4().hex[:8]}"
+                original_value = text[result.start:result.end]
+                
+                # Store mapping relationship
+                mapping[unique_id] = original_value
+                
+                # Configure replacement operator
+                operator_configs[result.entity_type] = OperatorConfig(
+                    "replace",
+                    {"new_value": f"[{unique_id}]"}
+                )
+            
+            # Perform anonymization
+            anonymized_result = self.anonymizer.anonymize(
+                text=text,
+                analyzer_results=results,
+                operator_configs=operator_configs
+            )
+            
+            # Store mapping
+            self._store_mapping(session_id, mapping)
+            
+            # Get unique PII entity types
+            pii_entities = list(set(r.entity_type for r in results))
+            
+            # Log operation
+            if chat_info:
+                logger.info(
+                    json.dumps({
+                        "session_id": session_id,
+                        "pii_count": len(results),
+                        "pii_entities": pii_entities,
+                        "action": "masking"
+                    }),
+                    extra=chat_info
+                )
+            
+            return {
+                "status": "Success",
+                "session_id": session_id,
+                "masked_text": anonymized_result.text,
+                "pii_entities": pii_entities,
+                "count": len(results)
+            }
         
-        # 构建响应
-        response = {
-            "count": len(entities),
-            "masked_data": json.dumps(masked_text),
-            "pii_entities": entities
-        }
-        
-        return {"status": "Success", "response": response, "error_code": ""}
+        except Exception as e:
+            logger.error(f"PII masking error: {str(e)}")
+            return {
+                "status": "Error",
+                "message": f"Masking failed: {str(e)}"
+            }
     
-    except Exception as e:
-        logger.error(f"Error in PII Detector Function: {str(e)}", extra=chat_info)
-        return {
-            "status": "Error",
-            "response": str(e),
-        }
+    def _store_mapping(self, session_id: str, mapping: Dict[str, str]):
+        """Store mapping in appropriate storage"""
+        if self.use_persistent_storage:
+            # Placeholder for persistent storage implementation
+            # Example: self.storage.set(session_id, mapping, ttl=3600)
+            logger.debug(f"Storing mapping for {session_id} in persistent storage")
+        else:
+            self.mask_mapping_store[session_id] = mapping
+    
+    def _retrieve_mapping(self, session_id: str) -> Optional[Dict[str, str]]:
+        """Retrieve mapping from storage"""
+        if self.use_persistent_storage:
+            # Placeholder for persistent storage implementation
+            # Example: return self.storage.get(session_id)
+            logger.debug(f"Retrieving mapping for {session_id} from persistent storage")
+            return None
+        else:
+            return self.mask_mapping_store.get(session_id)
+    
+    def _delete_mapping(self, session_id: str):
+        """Delete mapping from storage"""
+        if self.use_persistent_storage:
+            # Placeholder for persistent storage implementation
+            # Example: self.storage.delete(session_id)
+            logger.debug(f"Deleting mapping for {session_id} from persistent storage")
+        elif session_id in self.mask_mapping_store:
+            del self.mask_mapping_store[session_id]
+    
+    def unmask(self, session_id: str, masked_text: str) -> Dict[str, Any]:
+        """
+        Restore original values in masked text
+        
+        Args:
+            session_id: ID from original masking operation
+            masked_text: Text containing placeholders
+            
+        Returns:
+            Dictionary with:
+            - status: "Success" or "Error"
+            - original_text: Text with original values
+            - session_id: The session ID used
+        """
+        try:
+            # Retrieve mapping
+            mapping = self._retrieve_mapping(session_id)
+            
+            if not mapping:
+                return {
+                    "status": "Error",
+                    "message": "Invalid session ID or mapping expired"
+                }
+            
+            # Restore original values
+            unmasked_text = masked_text
+            for unique_id, original_value in mapping.items():
+                placeholder = f"[{unique_id}]"
+                unmasked_text = unmasked_text.replace(placeholder, original_value)
+            
+            # Clean up mapping
+            self._delete_mapping(session_id)
+            
+            return {
+                "status": "Success",
+                "original_text": unmasked_text,
+                "session_id": session_id
+            }
+        
+        except Exception as e:
+            logger.error(f"PII unmasking error: {str(e)}")
+            return {
+                "status": "Error",
+                "message": f"Unmasking failed: {str(e)}"
+            }
+    
+    def masked(self, text: str, chat_info: Dict = None) -> Dict[str, Any]:
+        """
+        Compatibility method for legacy API
+        
+        Returns:
+            Dictionary with legacy format:
+            {
+                "status": "Success",
+                "response": {
+                    "count": 0,
+                    "masked_data": "",
+                    "pii_entities": []
+                },
+                "error_code": ""
+            }
+        """
+        try:
+            mask_result = self.mask(text, chat_info)
+            
+            if mask_result["status"] != "Success":
+                return {
+                    "status": "Error",
+                    "response": mask_result.get("message", "Masking failed"),
+                    "error_code": "MASKING_ERROR"
+                }
+            
+            # Format response for legacy compatibility
+            return {
+                "status": "Success",
+                "response": {
+                    "count": mask_result["count"],
+                    "masked_data": json.dumps(mask_result["masked_text"]),
+                    "pii_entities": mask_result["pii_entities"]
+                },
+                "error_code": ""
+            }
+        
+        except Exception as e:
+            return {
+                "status": "Error",
+                "response": str(e),
+                "error_code": "UNHANDLED_EXCEPTION"
+            }
+
+    def analyze_without_masking(self, text: str) -> List[Dict[str, Any]]:
+        """
+        Analyze text for PII without performing masking
+        
+        Returns:
+            List of detected PII entities with details:
+            [{
+                "entity_type": "PHONE",
+                "start": 12,
+                "end": 20,
+                "score": 0.95,
+                "value": "555-1234"
+            }]
+        """
+        try:
+            results = []
+            
+            for recognizer in self.recognizers:
+                entities_to_check = self.inclusions if self.inclusions else recognizer.supported_entities
+                for entity in entities_to_check:
+                    if entity in self.exclusions:
+                        continue
+                    analysis_result = recognizer.analyze(text=text, entities=[entity])
+                    for result in analysis_result:
+                        results.append({
+                            "entity_type": result.entity_type,
+                            "start": result.start,
+                            "end": result.end,
+                            "score": result.score,
+                            "value": text[result.start:result.end]
+                        })
+            
+            return results
+        
+        except Exception as e:
+            logger.error(f"PII analysis error: {str(e)}")
+            return []
+
+
+
+# Import the detector class
+from your_module.pii_detector import PIIDetector
+
+# Initialize the detector
+pii_detector = PIIDetector()
+
+# Example 1: Basic masking
+text = "My phone is 555-1234 and my email is john@example.com"
+mask_result = pii_detector.mask(text)
+
+if mask_result["status"] == "Success":
+    print(f"Masked text: {mask_result['masked_text']}")
+    print(f"Session ID: {mask_result['session_id']}")
+    print(f"Detected PII types: {mask_result['pii_entities']}")
+
+# Example 2: Unmasking
+if mask_result["status"] == "Success":
+    unmask_result = pii_detector.unmask(
+        session_id=mask_result["session_id"],
+        masked_text=mask_result["masked_text"]
+    )
+    
+    if unmask_result["status"] == "Success":
+        print(f"Original text restored: {unmask_result['original_text']}")
+
+# Example 3: Using the legacy API
+legacy_result = pii_detector.masked("My SSN is 123-45-6789")
+if legacy_result["status"] == "Success":
+    print(f"Legacy masked data: {legacy_result['response']['masked_data']}")
+
+# Example 4: Analysis without masking
+analysis_result = pii_detector.analyze_without_masking(
+    "Contact me at 555-1234 or john@example.com"
+)
+for entity in analysis_result:
+    print(f"Found {entity['entity_type']}: {entity['value']} at position {entity['start']}-{entity['end']}")
