@@ -1,88 +1,88 @@
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+import json
+import yaml
+from presidio_analyzer import Pattern, PatternRecognizer
+from presidio_anonymizer import AnonymizerEngine
+from ecer.common.custom_logger import logger
+from .config import RULES_FILE_PATH
+
+class PIIDetector:
+    def __init__(self, rules_file_path):
+        self.rules_file_path = rules_file_path
+        self.anonymizer = AnonymizerEngine()
+        self.rules, self.inclusions, self.exclusions = self.load_configurations()
+
+    def load_configurations(self):
+        with open(self.rules_file_path, "r") as file:
+            data = yaml.load(file, Loader=yaml.FullLoader)
+            return data["rules"], data.get("inclusions", []), data.get("exclusions", [])
+
+    def mask(self, text, chat_info=None):
+        try:
+            analysis_results = self.analyze_text(text)
+            filtered_results = self.filter_results(analysis_results)
+            unique_pii_entities = set(result.entity_type for result in filtered_results)
+
+            anonymized_text = self.anonymizer.anonymize(
+                text=text, analyzer_results=filtered_results
+            )
+
+            if len(unique_pii_entities) == 0:
+                response = {"count": 0, "masked_data": json.dumps("")}
+            else:
+                logger.info(
+                    json.dumps(
+                        {
+                            "number_of_pii_entities": len(unique_pii_entities),
+                            "masked_text": anonymized_text.text,
+                            "pii_entities": list(unique_pii_entities)
+                        }
+                    ),
+                    extra=chat_info
+                )
+                response = {
+                    "count": len(unique_pii_entities),
+                    "masked_data": json.dumps(anonymized_text.text),
+                    "pii_entities": list(unique_pii_entities)
+                }
+
+            return {"status": "Success", "response": response, "error_code": ""}
+
+        except Exception as e:
+            logger.error("Error in PII Detector Function")
+            return {
+                "status": "Error",
+                "response": str(e),
+            }
+
+    def unmask(self, masked_text):
+        # Implement unmasking logic if applicable
+        # This is a placeholder as unmasking typically requires a mapping or key
+        return masked_text
+
+    def analyze_text(self, text):
+        analysis_results = []
+        for rule in self.rules:
+            regex_pattern = Pattern(
+                name=rule["name"], regex=rule["regex"], score=rule["score"]
+            )
+            regex_recognizer = PatternRecognizer(
+                supported_entity=rule["name"], patterns=[regex_pattern]
+            )
+            regex_result = regex_recognizer.analyze(
+                text=text, entities=[rule["name"]]
+            )
+            analysis_results.extend(regex_result)
+        return analysis_results
+
+    def filter_results(self, analysis_results):
+        return [
+            result
+            for result in analysis_results
+            if result.entity_type not in self.exclusions
+            and (result.entity_type in self.inclusions or not self.inclusions)
+        ]
+
+# Usage
+pii_detector = PIIDetector(RULES_FILE_PATH)
+masked_result = pii_detector.mask("Your text here", chat_info={"user": "example"})
+print(masked_result)
