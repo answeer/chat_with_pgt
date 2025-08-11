@@ -1,88 +1,67 @@
+import os
+import re
 import json
-import yaml
-from presidio_analyzer import Pattern, PatternRecognizer
-from presidio_anonymizer import AnonymizerEngine
-from ecer.common.custom_logger import logger
-from .config import RULES_FILE_PATH
+import time
+import requests
+from django.conf import settings
 
-class PIIDetector:
-    def __init__(self, rules_file_path):
-        self.rules_file_path = rules_file_path
-        self.anonymizer = AnonymizerEngine()
-        self.rules, self.inclusions, self.exclusions = self.load_configurations()
+class DocumentProcessor:
+    
+    def __init__(self, model="miniCPM"):
+        self.model = model
+        self.vlm_url = settings.VLM_API_URL
 
-    def load_configurations(self):
-        with open(self.rules_file_path, "r") as file:
-            data = yaml.load(file, Loader=yaml.FullLoader)
-            return data["rules"], data.get("inclusions", []), data.get("exclusions", [])
-
-    def mask(self, text, chat_info=None):
+    def process_document(self, image_path: str) -> dict:
         try:
-            analysis_results = self.analyze_text(text)
-            filtered_results = self.filter_results(analysis_results)
-            unique_pii_entities = set(result.entity_type for result in filtered_results)
-
-            anonymized_text = self.anonymizer.anonymize(
-                text=text, analyzer_results=filtered_results
+            start = time.time()
+            doc_type = self.classify_document(image_path)
+            extraction_results = self.extract_with_vlm(image_path, doc_type)
+            final_results = self.clean_json_output(
+                extraction_results['results']
             )
-
-            if len(unique_pii_entities) == 0:
-                response = {"count": 0, "masked_data": json.dumps("")}
-            else:
-                logger.info(
-                    json.dumps(
-                        {
-                            "number_of_pii_entities": len(unique_pii_entities),
-                            "masked_text": anonymized_text.text,
-                            "pii_entities": list(unique_pii_entities)
-                        }
-                    ),
-                    extra=chat_info
-                )
-                response = {
-                    "count": len(unique_pii_entities),
-                    "masked_data": json.dumps(anonymized_text.text),
-                    "pii_entities": list(unique_pii_entities)
-                }
-
-            return {"status": "Success", "response": response, "error_code": ""}
-
-        except Exception as e:
-            logger.error("Error in PII Detector Function")
             return {
-                "status": "Error",
-                "response": str(e),
+                "success": True,
+                "processing_time": round(time.time() - start, 2),
+                "doc_type": doc_type,
+                "results": final_results
+            }
+        except Exception as e:
+            return {
+                "success": False,
+                "error": str(e)
             }
 
-    def unmask(self, masked_text):
-        # Implement unmasking logic if applicable
-        # This is a placeholder as unmasking typically requires a mapping or key
-        return masked_text
+    def classify_document(self, image_path: str) -> str:
+        prompt = """
+        Classify this document: BOL, aadhar, or other, Use the Knowledgebase for the context . Please return only the document type.
+## Knowledgebase 
+BOL: It is a bill of lading , It's a crucial legal document in shipping and international trade. It acts as a receipt for goods being shipped, a contract of carriage between the shipper and carrier, and a document of title for the goods.
+aadhar : An Aadhaar document is a 12-digit unique identification number issued by the Unique Identification Authority of India (UIDAI) to residents of India. It serves as proof of identity and address for various purposes, including financial transactions, government benefits, and other services .
+"""
+        response = self.call_vlm(image_path, prompt)
+        return response['results'].strip().lower()
 
-    def analyze_text(self, text):
-        analysis_results = []
-        for rule in self.rules:
-            regex_pattern = Pattern(
-                name=rule["name"], regex=rule["regex"], score=rule["score"]
-            )
-            regex_recognizer = PatternRecognizer(
-                supported_entity=rule["name"], patterns=[regex_pattern]
-            )
-            regex_result = regex_recognizer.analyze(
-                text=text, entities=[rule["name"]]
-            )
-            analysis_results.extend(regex_result)
-        return analysis_results
+    def extract_with_vlm(self, image_path, doc_type: str) -> dict:
+        prompt = self.create_prompt(doc_type)
+        print(prompt)
+        return self.call_vlm(image_path, prompt)
 
-    def filter_results(self, analysis_results):
-        return [
-            result
-            for result in analysis_results
-            if result.entity_type not in self.exclusions
-            and (result.entity_type in self.inclusions or not self.inclusions)
-        ]
+    def create_prompt(self, doc_type: str) -> str:
+        from dashboard.models import DocumentType
+        doc_type_obj = DocumentType.objects.get(name__iexact=doc_type)
+        entities = json.dumps(doc_type_obj.entities_to_extract)
+        structured_entities = {item['entity_name']: "" for item in json.loads(entities)}
+        knowledgebase = doc_type_obj.knowledgebase
+        return f"{structured_entities}\n{knowledgebase}"
 
-# Usage
-pii_detector = PIIDetector(RULES_FILE_PATH)
-masked_result = pii_detector.mask("Your text here", chat_info={"user": "example"})
-print(masked_result)
+    def call_vlm(self, image_path, prompt: str) -> str:
+        files = {'image': open(image_path, 'rb')}
+        data = {'prompt': prompt}
+        response = requests.post(self.vlm_url, files=files, data=data)
+        response.raise_for_status()
+        return response.json()
+
+    def clean_json_output(self, raw_output: str) -> dict:
+        cleaned = re.sub(r'^```json\s*|\s*```$', '', raw_output, flags=re.MULTILINE)
+        entities_data = json.loads(cleaned.strip())
+        return entities_data
