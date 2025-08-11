@@ -4,25 +4,47 @@ import json
 import time
 import requests
 from django.conf import settings
+from paddleocr import PaddleOCR  # 轻量级OCR模型
 
 class DocumentProcessor:
     
     def __init__(self, model="miniCPM"):
         self.model = model
         self.vlm_url = settings.VLM_API_URL
+        
+        # 初始化轻量级OCR模型（使用移动端优化模型）
+        self.ocr = PaddleOCR(
+            use_angle_cls=False,  # 不使用方向分类
+            lang='en',             # 英语识别
+            rec_model_dir=os.path.join(settings.BASE_DIR, 'models/ocr/rec/mobile'),
+            det_model_dir=os.path.join(settings.BASE_DIR, 'models/ocr/det/mobile'),
+            use_gpu=False          # 使用CPU以保持轻量化
+        )
 
     def process_document(self, image_path: str) -> dict:
         try:
             start = time.time()
+            
+            # 第一步：运行OCR获取文本和坐标
+            ocr_results = self.run_ocr(image_path)
+            
+            # 第二步：文档分类
             doc_type = self.classify_document(image_path)
+            
+            # 第三步：使用VLM提取实体
             extraction_results = self.extract_with_vlm(image_path, doc_type)
-            final_results = self.clean_json_output(
-                extraction_results['results']
+            
+            # 第四步：清理JSON输出并匹配坐标
+            final_results = self.clean_and_match_coordinates(
+                extraction_results['results'],
+                ocr_results
             )
+            
             return {
                 "success": True,
                 "processing_time": round(time.time() - start, 2),
                 "doc_type": doc_type,
+                "ocr_results": ocr_results,  # 原始OCR结果可用于调试
                 "results": final_results
             }
         except Exception as e:
@@ -31,7 +53,44 @@ class DocumentProcessor:
                 "error": str(e)
             }
 
+    def run_ocr(self, image_path: str) -> list:
+        """执行OCR识别，返回文本及其坐标"""
+        # PaddleOCR返回格式: [文本框坐标, 文本, 置信度]
+        result = self.ocr.ocr(image_path, cls=False)
+        
+        # 简化OCR结果结构
+        ocr_data = []
+        for line in result:
+            if line is None:
+                continue
+            for word_info in line:
+                if word_info is None:
+                    continue
+                text = word_info[1][0]
+                confidence = word_info[1][1]
+                points = word_info[0]
+                
+                # 转换为[x, y, width, height]格式
+                xs = [p[0] for p in points]
+                ys = [p[1] for p in points]
+                x_min, x_max = min(xs), max(xs)
+                y_min, y_max = min(ys), max(ys)
+                
+                ocr_data.append({
+                    "text": text,
+                    "confidence": float(confidence),
+                    "bbox": {
+                        "x": x_min,
+                        "y": y_min,
+                        "width": x_max - x_min,
+                        "height": y_max - y_min
+                    }
+                })
+        
+        return ocr_data
+
     def classify_document(self, image_path: str) -> str:
+        # 保持不变
         prompt = """
         Classify this document: BOL, aadhar, or other, Use the Knowledgebase for the context . Please return only the document type.
 ## Knowledgebase 
@@ -42,11 +101,13 @@ aadhar : An Aadhaar document is a 12-digit unique identification number issued b
         return response['results'].strip().lower()
 
     def extract_with_vlm(self, image_path, doc_type: str) -> dict:
+        # 保持不变
         prompt = self.create_prompt(doc_type)
         print(prompt)
         return self.call_vlm(image_path, prompt)
 
     def create_prompt(self, doc_type: str) -> str:
+        # 保持不变
         from dashboard.models import DocumentType
         doc_type_obj = DocumentType.objects.get(name__iexact=doc_type)
         entities = json.dumps(doc_type_obj.entities_to_extract)
@@ -55,13 +116,64 @@ aadhar : An Aadhaar document is a 12-digit unique identification number issued b
         return f"{structured_entities}\n{knowledgebase}"
 
     def call_vlm(self, image_path, prompt: str) -> str:
+        # 保持不变
         files = {'image': open(image_path, 'rb')}
         data = {'prompt': prompt}
         response = requests.post(self.vlm_url, files=files, data=data)
         response.raise_for_status()
         return response.json()
 
-    def clean_json_output(self, raw_output: str) -> dict:
+    def clean_and_match_coordinates(self, raw_output: str, ocr_results: list) -> dict:
+        """清理JSON输出并匹配OCR坐标"""
+        # 清理JSON字符串
         cleaned = re.sub(r'^```json\s*|\s*```$', '', raw_output, flags=re.MULTILINE)
         entities_data = json.loads(cleaned.strip())
-        return entities_data
+        
+        # 为每个实体匹配坐标
+        matched_results = []
+        for entity in entities_data:
+            entity_name = entity.get("entity_name", "")
+            entity_value = entity.get("value", "")
+            
+            # 在OCR结果中查找匹配的文本
+            matched_bboxes = self.find_matching_bboxes(entity_value, ocr_results)
+            
+            matched_results.append({
+                "entity_name": entity_name,
+                "value": entity_value,
+                "bboxes": matched_bboxes  # 可能匹配多个区域
+            })
+        
+        return matched_results
+
+    def find_matching_bboxes(self, text: str, ocr_results: list) -> list:
+        """在OCR结果中查找匹配文本的边界框"""
+        if not text:
+            return []
+        
+        # 小优化：对长文本使用部分匹配
+        search_text = text.lower()
+        max_length = 50
+        if len(search_text) > max_length:
+            search_text = search_text[:max_length] + "..."  # 截断长文本
+        
+        matched_bboxes = []
+        
+        # 简单匹配策略：检查OCR文本是否包含目标文本
+        for ocr_item in ocr_results:
+            ocr_text = ocr_item["text"].lower()
+            if search_text in ocr_text:
+                matched_bboxes.append(ocr_item["bbox"])
+        
+        # 如果没有找到完整匹配，尝试部分匹配
+        if not matched_bboxes:
+            words = search_text.split()
+            if len(words) > 1:
+                # 尝试匹配前几个词
+                partial_match = " ".join(words[:min(3, len(words))])
+                for ocr_item in ocr_results:
+                    ocr_text = ocr_item["text"].lower()
+                    if partial_match in ocr_text:
+                        matched_bboxes.append(ocr_item["bbox"])
+        
+        return matched_bboxes
