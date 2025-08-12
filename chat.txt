@@ -1,3 +1,4 @@
+import yaml
 from presidio_analyzer import AnalyzerEngine, RecognizerResult
 from presidio_anonymizer import AnonymizerEngine, DeanonymizeEngine, OperatorConfig
 from presidio_anonymizer.entities import OperatorResult, EngineResult
@@ -6,27 +7,39 @@ from typing import Dict, List, Optional
 from pprint import pprint
 import secrets
 import string
+import os
 
 class InstanceCounterAnonymizer(Operator):
-    """Anonymizer which replaces PII with entity-type counters"""
+    """
+    Anonymizer that replaces PII entities with incremental counters
+    Format: <ENTITY_TYPE_INDEX>
+    """
     REPLACING_FORMAT = "<{entity_type}_{index}>"
 
     def operate(self, text: str, params: Dict = None) -> str:
-        entity_type: str = params["entity_type"]
-        entity_mapping: Dict = params["entity_mapping"]
+        """Replace original text with entity counter format"""
+        entity_type = params["entity_type"]
+        entity_mapping = params["entity_mapping"]
         
+        # Initialize mapping for new entity types
         if entity_type not in entity_mapping:
             entity_mapping[entity_type] = {}
         
+        # Return existing mapping if available
         if text in entity_mapping[entity_type]:
             return entity_mapping[entity_type][text]
         
+        # Create new counter-based replacement
         new_index = len(entity_mapping[entity_type])
-        new_text = self.REPLACING_FORMAT.format(entity_type=entity_type, index=new_index)
+        new_text = self.REPLACING_FORMAT.format(
+            entity_type=entity_type, 
+            index=new_index
+        )
         entity_mapping[entity_type][text] = new_text
         return new_text
 
     def validate(self, params: Dict = None) -> None:
+        """Validate required parameters"""
         if "entity_mapping" not in params:
             raise ValueError("Missing `entity_mapping` parameter")
         if "entity_type" not in params:
@@ -39,14 +52,18 @@ class InstanceCounterAnonymizer(Operator):
         return OperatorType.Anonymize
 
 class InstanceCounterDeanonymizer(Operator):
-    """Deanonymizer which restores original values from entity-type counters"""
+    """Deanonymizer that restores original values from entity counters"""
+    
     def operate(self, text: str, params: Dict = None) -> str:
-        entity_type: str = params["entity_type"]
-        entity_mapping: Dict = params["entity_mapping"]
+        """Restore original text from entity counter format"""
+        entity_type = params["entity_type"]
+        entity_mapping = params["entity_mapping"]
         
+        # Validate entity type exists in mapping
         if entity_type not in entity_mapping:
             raise ValueError(f"Entity type {entity_type} not found")
             
+        # Find original value for the masked text
         for original, masked in entity_mapping[entity_type].items():
             if masked == text:
                 return original
@@ -54,6 +71,7 @@ class InstanceCounterDeanonymizer(Operator):
         raise ValueError(f"Masked value {text} not found for {entity_type}")
 
     def validate(self, params: Dict = None) -> None:
+        """Validate required parameters"""
         if "entity_mapping" not in params:
             raise ValueError("Missing `entity_mapping` parameter")
         if "entity_type" not in params:
@@ -66,44 +84,121 @@ class InstanceCounterDeanonymizer(Operator):
         return OperatorType.Deanonymize
 
 class PIIHandler:
-    def __init__(self, config: Dict):
-        self.config = config["pii_detection"]
-        self.entity_mapping = {}
+    """
+    PII (Personally Identifiable Information) Handling System
+    Provides masking and unmasking capabilities based on configuration
+    
+    Features:
+    - Reads configuration from YAML file
+    - Auto-generates cryptographic keys
+    - Customizable PII detection sensitivity
+    - Entity-based counter anonymization
+    """
+    
+    def __init__(self, config_path: str = None, config_dict: Dict = None):
+        """
+        Initialize PII Handler
         
-        # 自动生成32字节的crypto_key (AES256需要32字节密钥)
+        Args:
+            config_path: Path to YAML configuration file
+            config_dict: Configuration dictionary (alternative to file path)
+        
+        Raises:
+            ValueError: If neither config_path nor config_dict is provided
+            FileNotFoundError: If config file doesn't exist
+        """
+        # Load configuration
+        if config_path:
+            self.config = self._load_config_from_file(config_path)
+        elif config_dict:
+            self.config = config_dict
+        else:
+            raise ValueError("Must provide either config_path or config_dict")
+        
+        # Extract PII detection configuration
+        self.pii_config = self.config.get("guardrails", {}).get("pii_detection", {})
+        
+        # Generate secure cryptographic key
         self.crypto_key = self._generate_crypto_key() 
         
-        # 初始化引擎
+        # Initialize Presidio engines
         self.analyzer = AnalyzerEngine()
         self.anonymizer = AnonymizerEngine()
         self.deanonymizer = DeanonymizeEngine()
         
-        # 注册自定义操作器
+        # Register custom operators
         self.anonymizer.add_anonymizer(InstanceCounterAnonymizer)
         self.deanonymizer.add_deanonymizer(InstanceCounterDeanonymizer)
+        
+        # Entity mapping storage (reset per mask operation)
+        self.entity_mapping = {}
+    
+    def _load_config_from_file(self, config_path: str) -> Dict:
+        """
+        Load YAML configuration from file
+        
+        Args:
+            config_path: Path to configuration file
+            
+        Returns:
+            Parsed configuration dictionary
+            
+        Raises:
+            FileNotFoundError: If file doesn't exist
+        """
+        if not os.path.exists(config_path):
+            raise FileNotFoundError(f"Config file not found: {config_path}")
+        
+        with open(config_path, 'r') as f:
+            return yaml.safe_load(f)
     
     def _generate_crypto_key(self, length: int = 32) -> str:
-        """生成安全的随机加密密钥"""
+        """
+        Generate secure random cryptographic key
+        
+        Args:
+            length: Key length in characters (default: 32)
+        
+        Returns:
+            Randomly generated key string
+        """
         alphabet = string.ascii_letters + string.digits + string.punctuation
         return ''.join(secrets.choice(alphabet) for _ in range(length))
     
     def mask(self, text: str) -> Dict:
-        """匿名化处理文本"""
-        if not self.config["enabled"]:
+        """
+        Mask PII entities in text based on configuration
+        
+        Args:
+            text: Input text containing potential PII
+            
+        Returns:
+            Dictionary containing:
+            - masked_text: Text with PII replaced
+            - entity_mapping: Mapping of original to masked values
+            - crypto_key: Generated cryptographic key
+        """
+        # Return original text if PII handling is disabled
+        if not self.pii_config.get("enabled", False):
             return {
                 "masked_text": text,
                 "entity_mapping": {},
                 "crypto_key": self.crypto_key
             }
         
-        # 获取配置中指定的PII类型
-        entities = self.config.get("pii_types", [])
+        # Get configured PII types
+        entities = self.pii_config.get("pii_types", [])
         
-        # 根据敏感度调整阈值
-        sensitivity = self.config.get("sensitivity", "medium")
-        threshold = 0.5 if sensitivity == "low" else 0.7
+        # Map sensitivity levels to detection thresholds
+        sensitivity = self.pii_config.get("sensitivity", "medium").lower()
+        threshold_map = {
+            "low": 0.5,
+            "medium": 0.7,
+            "high": 0.9
+        }
+        threshold = threshold_map.get(sensitivity, 0.7)
         
-        # 执行PII检测
+        # Detect PII entities in text
         analyzer_results = self.analyzer.analyze(
             text=text,
             language="en",
@@ -111,10 +206,10 @@ class PIIHandler:
             score_threshold=threshold
         )
         
-        # 重置映射
+        # Reset mapping for new operation
         self.entity_mapping = {}
         
-        # 执行匿名化
+        # Anonymize detected PII entities
         anonymized_result = self.anonymizer.anonymize(
             text,
             analyzer_results,
@@ -133,11 +228,20 @@ class PIIHandler:
         }
     
     def unmask(self, masked_text: str) -> str:
-        """去匿名化恢复原始文本"""
-        if not self.config["enabled"]:
+        """
+        Restore original text from masked version
+        
+        Args:
+            masked_text: Text with masked PII entities
+            
+        Returns:
+            Original text with PII restored
+        """
+        # Return as-is if PII handling is disabled
+        if not self.pii_config.get("enabled", False):
             return masked_text
         
-        # 创建伪识别结果（实际使用映射数据）
+        # Create placeholder detection results for deanonymization
         items = [
             OperatorResult(
                 start=0,
@@ -148,7 +252,7 @@ class PIIHandler:
             for entity_type in self.entity_mapping.keys()
         ]
         
-        # 执行去匿名化
+        # Restore original values
         deanonymized_result = self.deanonymizer.deanonymize(
             masked_text,
             items,
@@ -162,35 +266,47 @@ class PIIHandler:
         
         return deanonymized_result.text
 
-# 使用示例
+# Example usage
 if __name__ == "__main__":
-    config = {
-        "guardrails": {
-            "pii_detection": {
-                "enabled": True,
-                "sensitivity": "low",
-                "pii_types": [
-                    "PERSON",
-                    "LOCATION"
-                ]
-            }
-        }
-    }
+    # Sample YAML configuration
+    config_content = """
+guardrails:
+    pii_detection:
+      enabled: true
+      sensitivity: low
+      pii_types:
+        - PERSON
+        - LOCATION
+    """
     
-    handler = PIIHandler(config["guardrails"])
+    # Create temporary config file
+    with open("config.yaml", "w") as f:
+        f.write(config_content)
     
-    text = "Peter gave his book to Heidi which later gave it to Nicole. Peter lives in London and Nicole lives in Tashkent."
-    
-    # 匿名化处理
-    masked_data = handler.mask(text)
-    print("Masked Text:")
-    pprint(masked_data["masked_text"])
-    print("\nEntity Mapping:")
-    pprint(masked_data["entity_mapping"])
-    print("\nCrypto Key:")
-    print(masked_data["crypto_key"])
-    
-    # 去匿名化处理
-    unmasked_text = handler.unmask(masked_data["masked_text"])
-    print("\nUnmasked Text:")
-    pprint(unmasked_text)
+    try:
+        # Initialize handler with config file
+        handler = PIIHandler(config_path="config.yaml")
+        
+        sample_text = (
+            "Peter gave his book to Heidi which later gave it to Nicole. "
+            "Peter lives in London and Nicole lives in Tashkent."
+        )
+        
+        # Mask sensitive information
+        masked_data = handler.mask(sample_text)
+        print("Masked Text:")
+        pprint(masked_data["masked_text"])
+        print("\nEntity Mapping:")
+        pprint(masked_data["entity_mapping"])
+        print("\nCrypto Key:")
+        print(masked_data["crypto_key"])
+        
+        # Unmask to restore original
+        unmasked_text = handler.unmask(masked_data["masked_text"])
+        print("\nUnmasked Text:")
+        pprint(unmasked_text)
+        
+    finally:
+        # Clean up temporary file
+        if os.path.exists("config.yaml"):
+            os.remove("config.yaml")
