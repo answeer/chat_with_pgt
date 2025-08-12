@@ -1,114 +1,66 @@
-from cryptography.fernet import Fernet
-import json
-import yaml
-from presidio_analyzer import Pattern, PatternRecognizer
-from presidio_anonymizer import AnonymizerEngine
-# from ecer.common.custom_logger import logger
-# from .config import RULES_FILE_PATH
-from custom_logger import logger
-RULES_FILE_PATH = "guardrails_demo\pii_rules.yaml"  # Update with your actual path
+from presidio_anonymizer import AnonymizerEngine, DeanonymizeEngine
+from presidio_anonymizer.entities import RecognizerResult, OperatorResult, OperatorConfig
+from presidio_anonymizer.operators import Decrypt
 
-class PIIDetector:
-    def __init__(self, rules_file_path, encryption_key):
-        self.rules_file_path = rules_file_path
-        self.anonymizer = AnonymizerEngine()
-        self.rules, self.inclusions, self.exclusions = self.load_configurations()
-        self.cipher = Fernet(encryption_key)
 
-    def load_configurations(self):
-        with open(self.rules_file_path, "r") as file:
-            data = yaml.load(file, Loader=yaml.FullLoader)
-            return data["rules"], data.get("inclusions", []), data.get("exclusions", [])
+crypto_key = "WmZq4t7w!z%C&F)J"
 
-    def mask(self, text, chat_info=None):
-        try:
-            analysis_results = self.analyze_text(text)
-            filtered_results = self.filter_results(analysis_results)
-            unique_pii_entities = set(result.entity_type for result in filtered_results)
 
-            anonymized_text = self.anonymizer.anonymize(
-                text=text, analyzer_results=filtered_results
-            )
+engine = AnonymizerEngine()
 
-            if len(unique_pii_entities) == 0:
-                response = {"count": 0, "masked_data": json.dumps("")}
-            else:
-                logger.info(
-                    json.dumps(
-                        {
-                            "number_of_pii_entities": len(unique_pii_entities),
-                            "masked_text": anonymized_text.text,
-                            "pii_entities": list(unique_pii_entities)
-                        }
-                    ),
-                    extra=chat_info
-                )
-                # Encrypt the original text
-                encrypted_text = self.cipher.encrypt(text.encode())
-                response = {
-                    "count": len(unique_pii_entities),
-                    "masked_data": json.dumps(anonymized_text.text),
-                    "encrypted_data": encrypted_text.decode(),
-                    "pii_entities": list(unique_pii_entities)
-                }
+# Invoke the anonymize function with the text,
+# analyzer results (potentially coming from presidio-analyzer)
+# and an 'encrypt' operator to get an encrypted anonymization output:
+anonymize_result = engine.anonymize(
+    text="My name is James Bond",
+    analyzer_results=[
+        RecognizerResult(entity_type="PERSON", start=11, end=21, score=0.8),
+    ],
+    operators={"PERSON": OperatorConfig("encrypt", {"key": crypto_key})},
+)
 
-            return {"status": "Success", "response": response, "error_code": ""}
+anonymize_result
 
-        except Exception as e:
-            logger.error("Error in PII Detector Function")
-            return {
-                "status": "Error",
-                "response": str(e),
-            }
+# Fetch the anonymized text from the result.
+anonymized_text = anonymize_result.text
 
-    def unmask(self, encrypted_text):
-        try:
-            # Decrypt the text
-            decrypted_text = self.cipher.decrypt(encrypted_text.encode()).decode()
-            return {"status": "Success", "response": decrypted_text, "error_code": ""}
-        except Exception as e:
-            logger.error("Error in Unmask Function")
-            return {
-                "status": "Error",
-                "response": str(e),
-            }
+# Fetch the anonynized entities from the result.
+anonymized_entities = anonymize_result.items
 
-    def analyze_text(self, text):
-        analysis_results = []
-        for rule in self.rules:
-            regex_pattern = Pattern(
-                name=rule["name"], regex=rule["regex"], score=rule["score"]
-            )
-            regex_recognizer = PatternRecognizer(
-                supported_entity=rule["name"], patterns=[regex_pattern]
-            )
-            regex_result = regex_recognizer.analyze(
-                text=text, entities=[rule["name"]]
-            )
-            analysis_results.extend(regex_result)
-        return analysis_results
 
-    def filter_results(self, analysis_results):
-        return [
-            result
-            for result in analysis_results
-            if result.entity_type not in self.exclusions
-            and (result.entity_type in self.inclusions or not self.inclusions)
-        ]
+# Initialize the engine:
+engine = DeanonymizeEngine()
 
-# Generate a key for encryption
-encryption_key = Fernet.generate_key()
+# Invoke the deanonymize function with the text, anonymizer results
+# and a 'decrypt' operator to get the original text as output.
+deanonymized_result = engine.deanonymize(
+    text=anonymized_text,
+    entities=anonymized_entities,
+    operators={"DEFAULT": OperatorConfig("decrypt", {"key": crypto_key})},
+)
 
-# Usage
-pii_detector = PIIDetector(RULES_FILE_PATH, encryption_key)
-masked_result = pii_detector.mask("""My credit card number is 4095-2609-9393-4932 and my crypto wallet id is 16Yeky6GMjeNkAiNcBY7ZhrLoMSgg1BoyZ.
-        On September 18 I visited microsoft.com and sent an email to test@presidio.site,  from the IP 192.168.0.1.
-        My phone number: (212) 555-1234.
-        This is a valid International Bank Account Number: IL150120690000003111111.
-        Kate's social security number is 078-05-1126.  Her driver license? it is 1234567A.""", chat_info={"user": "example"})
-print(masked_result)
+deanonymized_result
 
-# Unmask the text
-if "encrypted_data" in masked_result["response"]:
-    unmasked_result = pii_detector.unmask(masked_result["response"]["encrypted_data"])
-    print(unmasked_result)
+
+# Alternatively, call the Decrypt operator directly:
+
+# Fetch the encrypted entitiy value from the previous stage
+encrypted_entity_value = anonymize_result.items[0].text
+
+# Restore the original entity value
+Decrypt().operate(text=encrypted_entity_value, params={"key": crypto_key})
+
+
+
+
+
+  guardrails:
+    pii_detection:
+      enabled: true
+      sensitivity: low
+      pii_types:
+        - email
+        - phone_number
+        - address
+        - ssn
+ 
