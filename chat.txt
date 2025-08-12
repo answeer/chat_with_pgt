@@ -1,75 +1,10 @@
-# test_ocr_api.py
-import requests
-import json
-import sys
-import os
-
-def test_ocr_api(image_path, api_url="http://localhost:5000/ocr"):
-    """
-    测试OCR API服务
-    
-    参数:
-    image_path: 要处理的图片路径
-    api_url: OCR API的URL (默认为 http://localhost:5000/ocr)
-    """
-    try:
-        print(f"测试OCR API: {api_url}")
-        print(f"处理图片: {image_path}")
-        
-        # 检查文件是否存在
-        if not os.path.isfile(image_path):
-            print(f"错误: 文件不存在 - {image_path}")
-            return
-        
-        # 发送请求到OCR API
-        with open(image_path, 'rb') as image_file:
-            files = {'image': image_file}
-            response = requests.post(api_url, files=files)
-            
-            # 检查响应状态
-            if response.status_code != 200:
-                print(f"请求失败! 状态码: {response.status_code}")
-                print(f"响应内容: {response.text}")
-                return
-            
-            # 解析JSON响应
-            result = response.json()
-            
-            if result.get('success'):
-                print("\nOCR处理成功!")
-                print(f"识别到 {len(result['results'])} 个文本区域")
-                
-                # 打印前10个结果
-                print("\n前10个识别结果:")
-                for i, item in enumerate(result['results'][:10]):
-                    print(f"{i+1}. 文本: '{item['text']}'")
-                    print(f"   置信度: {item['confidence']:.4f}")
-                    bbox = item['bbox']
-                    print(f"   位置: x={bbox['x']:.1f}, y={bbox['y']:.1f}, "
-                          f"宽={bbox['width']:.1f}, 高={bbox['height']:.1f}")
-                
-                # 保存完整结果到JSON文件
-                output_file = os.path.splitext(image_path)[0] + "_ocr.json"
-                with open(output_file, 'w', encoding='utf-8') as f:
-                    json.dump(result, f, indent=2, ensure_ascii=False)
-                print(f"\n完整结果已保存到: {output_file}")
-            else:
-                print("\nOCR处理失败!")
-                print(f"错误信息: {result.get('error', '未知错误')}")
-    
-    except Exception as e:
-        print(f"测试过程中发生错误: {str(e)}")
-
-if __name__ == "__main__":
-    # 解析命令行参数
-    if len(sys.argv) < 2:
-        print("用法: python test_ocr_api.py <图片路径> [API地址]")
-        print("示例: python test_ocr_api.py invoice.jpg")
-        print("示例: python test_ocr_api.py receipt.png http://ocr-service:5000/ocr")
-        sys.exit(1)
-    
-    image_path = sys.argv[1]
-    api_url = sys.argv[2] if len(sys.argv) > 2 else "http://localhost:5000/ocr"
-    
-    # 运行测试
-    test_ocr_api(image_path, api_url)
+  guardrails:
+    pii_detection:
+      enabled: true
+      sensitivity: low
+      pii_types:
+        - email
+        - phone_number
+        - address
+        - ssn
+         ...
