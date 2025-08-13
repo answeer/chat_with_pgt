@@ -1,36 +1,33 @@
-from fastapi import FastAPI, File, UploadFile
-from fastapi.responses import JSONResponse
-from paddleocr import PaddleOCR
-from rapidfuzz import fuzz
-import numpy as np
 import io
-from PIL import Image
+import numpy as np
 import cv2
+from PIL import Image
+from flask import Flask, request, jsonify
+from flask_cors import CORS
+from paddleocr import PaddleOCR
 
-app = FastAPI(title="Light OCR with Blocks")
+app = Flask(__name__)
+CORS(app)
 
-# 轻量中文/英文通用模型；根据需要切换 lang，或加载多语
-ocr = PaddleOCR(use_angle_cls=True, lang='ch', det_db_score_mode='fast')  # 轻一些
+# 轻量化配置：中文/英文常见场景
+ocr = PaddleOCR(use_angle_cls=True, lang='ch', det_db_score_mode='fast')
 
 def normalize_text(s: str) -> str:
     if not s:
         return ""
-    # 空白压缩 + 大小写统一 + 常见标点统一
     s = "".join(ch for ch in s.strip())
     s = s.replace("\u3000"," ").replace("\xa0"," ")
     return s.lower()
 
 def lines_to_blocks(lines, y_gap=10, x_shift=80):
     """
-    简易“行→块”聚合算法：
-    - 先按 top-left 的 y 排序（阅读顺序）
-    - 相邻行的中心 y 距离小于 y_gap，且 x 左边缘偏移不大（x_shift）→ 归为同一块
-    - 你也可以改成 KMeans/DBSCAN，但这个足够稳且快
+    将相邻且排版接近的行聚合为“块”(block)，便于匹配多行实体（如长地址）。
+    y_gap: 行中心 y 距离阈值（像素）
+    x_shift: 左边缘允许的偏移（像素）
     """
     if not lines:
         return []
 
-    # 为每行计算基准点
     def line_key(l):
         poly = np.array(l["polygon"], dtype=np.float32)
         x = float(np.min(poly[:,0]))
@@ -62,14 +59,11 @@ def lines_to_blocks(lines, y_gap=10, x_shift=80):
     if current:
         blocks.append(current)
 
-    # 组装块
     block_objs = []
     for bid, group in enumerate(blocks):
-        # 阅读顺序内再按 x 排
         group_sorted = sorted(group, key=lambda l: np.min(np.array(l["polygon"])[:,0]))
         text = " ".join([l["text"] for l in group_sorted])
         norm_text = normalize_text(text)
-        # 外接矩形
         all_pts = np.concatenate([np.array(l["polygon"]) for l in group_sorted], axis=0)
         x1, y1 = np.min(all_pts[:,0]), np.min(all_pts[:,1])
         x2, y2 = np.max(all_pts[:,0]), np.max(all_pts[:,1])
@@ -77,22 +71,19 @@ def lines_to_blocks(lines, y_gap=10, x_shift=80):
             "block_id": bid,
             "text": text,
             "norm_text": norm_text,
-            "lines": group_sorted,  # 保留每行 polygon/text/conf
+            "lines": group_sorted,
             "display_box": [float(x1), float(y1), float(x2), float(y2)],
         })
     return block_objs
 
 def ocr_image(pil_img):
-    # PaddleOCR 直接接收路径；这里用临时 ndarray
     img = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
     result = ocr.ocr(img, cls=True)
     lines = []
-    # 兼容不同返回结构
     for idx in range(len(result)):
         res = result[idx]
         for line in res:
-            (poly, (txt, conf)) = line
-            # poly: [[x1,y1],...,[x4,y4]]
+            poly, (txt, conf) = line
             lines.append({
                 "text": txt,
                 "confidence": float(conf),
@@ -100,32 +91,39 @@ def ocr_image(pil_img):
             })
     return lines
 
-@app.post("/ocr")
-async def ocr_endpoint(image: UploadFile = File(...)):
+@app.route("/ocr", methods=["POST"])
+def ocr_endpoint():
     try:
-        raw = await image.read()
+        if "image" not in request.files:
+            return jsonify({"error": "missing file field 'image'"}), 400
+        f = request.files["image"]
+        raw = f.read()
         pil = Image.open(io.BytesIO(raw)).convert("RGB")
         width, height = pil.size
+
         lines = ocr_image(pil)
 
-        # 规范化为相对坐标（0~1）方便前端无关缩放绘制
+        # 相对坐标，前端不受缩放影响
         for l in lines:
             l["polygon_norm"] = [[x/width, y/height] for (x,y) in l["polygon"]]
 
         blocks = lines_to_blocks(lines)
-
-        # 同步给块一个相对外接矩形
         for b in blocks:
             x1,y1,x2,y2 = b["display_box"]
             b["display_box_norm"] = [x1/width, y1/height, x2/width, y2/height]
 
-        return JSONResponse({
+        return jsonify({
             "width": width, "height": height,
             "lines": lines,
             "blocks": blocks
         })
     except Exception as e:
-        return JSONResponse({"error": str(e)}, status_code=500)
+        return jsonify({"error": str(e)}), 500
+
+if __name__ == "__main__":
+    # 开发环境直接跑；部署建议用 gunicorn/uwsgi
+    app.run(host="0.0.0.0", port=8001)
+
 
 
 
