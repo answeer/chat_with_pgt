@@ -1,312 +1,279 @@
-import yaml
-from presidio_analyzer import AnalyzerEngine, RecognizerResult
-from presidio_anonymizer import AnonymizerEngine, DeanonymizeEngine, OperatorConfig
-from presidio_anonymizer.entities import OperatorResult, EngineResult
-from presidio_anonymizer.operators import Operator, OperatorType
-from typing import Dict, List, Optional
-from pprint import pprint
-import secrets
-import string
-import os
+from fastapi import FastAPI, File, UploadFile
+from fastapi.responses import JSONResponse
+from paddleocr import PaddleOCR
+from rapidfuzz import fuzz
+import numpy as np
+import io
+from PIL import Image
+import cv2
 
-class InstanceCounterAnonymizer(Operator):
+app = FastAPI(title="Light OCR with Blocks")
+
+# 轻量中文/英文通用模型；根据需要切换 lang，或加载多语
+ocr = PaddleOCR(use_angle_cls=True, lang='ch', det_db_score_mode='fast')  # 轻一些
+
+def normalize_text(s: str) -> str:
+    if not s:
+        return ""
+    # 空白压缩 + 大小写统一 + 常见标点统一
+    s = "".join(ch for ch in s.strip())
+    s = s.replace("\u3000"," ").replace("\xa0"," ")
+    return s.lower()
+
+def lines_to_blocks(lines, y_gap=10, x_shift=80):
     """
-    Anonymizer that replaces PII entities with incremental counters
-    Format: <ENTITY_TYPE_INDEX>
+    简易“行→块”聚合算法：
+    - 先按 top-left 的 y 排序（阅读顺序）
+    - 相邻行的中心 y 距离小于 y_gap，且 x 左边缘偏移不大（x_shift）→ 归为同一块
+    - 你也可以改成 KMeans/DBSCAN，但这个足够稳且快
     """
-    REPLACING_FORMAT = "<{entity_type}_{index}>"
+    if not lines:
+        return []
 
-    def operate(self, text: str, params: Dict = None) -> str:
-        """Replace original text with entity counter format"""
-        entity_type = params["entity_type"]
-        entity_mapping = params["entity_mapping"]
-        
-        # Initialize mapping for new entity types
-        if entity_type not in entity_mapping:
-            entity_mapping[entity_type] = {}
-        
-        # Return existing mapping if available
-        if text in entity_mapping[entity_type]:
-            return entity_mapping[entity_type][text]
-        
-        # Create new counter-based replacement
-        new_index = len(entity_mapping[entity_type])
-        new_text = self.REPLACING_FORMAT.format(
-            entity_type=entity_type, 
-            index=new_index
-        )
-        entity_mapping[entity_type][text] = new_text
-        return new_text
+    # 为每行计算基准点
+    def line_key(l):
+        poly = np.array(l["polygon"], dtype=np.float32)
+        x = float(np.min(poly[:,0]))
+        y = float(np.min(poly[:,1]))
+        return (y, x)
 
-    def validate(self, params: Dict = None) -> None:
-        """Validate required parameters"""
-        if "entity_mapping" not in params:
-            raise ValueError("Missing `entity_mapping` parameter")
-        if "entity_type" not in params:
-            raise ValueError("Missing `entity_type` parameter")
+    lines_sorted = sorted(lines, key=line_key)
+    blocks = []
+    current = [lines_sorted[0]]
 
-    def operator_name(self) -> str:
-        return "entity_counter"
+    def line_feat(l):
+        poly = np.array(l["polygon"], dtype=np.float32)
+        x_left = float(np.min(poly[:,0]))
+        y_top  = float(np.min(poly[:,1]))
+        y_center = float(np.mean(poly[:,1]))
+        return x_left, y_top, y_center
 
-    def operator_type(self) -> OperatorType:
-        return OperatorType.Anonymize
+    prev_x, prev_y, prev_yc = line_feat(lines_sorted[0])
 
-class InstanceCounterDeanonymizer(Operator):
-    """Deanonymizer that restores original values from entity counters"""
-    
-    def operate(self, text: str, params: Dict = None) -> str:
-        """Restore original text from entity counter format"""
-        entity_type = params["entity_type"]
-        entity_mapping = params["entity_mapping"]
-        
-        # Validate entity type exists in mapping
-        if entity_type not in entity_mapping:
-            raise ValueError(f"Entity type {entity_type} not found")
-            
-        # Find original value for the masked text
-        for original, masked in entity_mapping[entity_type].items():
-            if masked == text:
-                return original
-                
-        raise ValueError(f"Masked value {text} not found for {entity_type}")
-
-    def validate(self, params: Dict = None) -> None:
-        """Validate required parameters"""
-        if "entity_mapping" not in params:
-            raise ValueError("Missing `entity_mapping` parameter")
-        if "entity_type" not in params:
-            raise ValueError("Missing `entity_type` parameter")
-
-    def operator_name(self) -> str:
-        return "entity_counter_deanonymizer"
-
-    def operator_type(self) -> OperatorType:
-        return OperatorType.Deanonymize
-
-class PIIHandler:
-    """
-    PII (Personally Identifiable Information) Handling System
-    Provides masking and unmasking capabilities based on configuration
-    
-    Features:
-    - Reads configuration from YAML file
-    - Auto-generates cryptographic keys
-    - Customizable PII detection sensitivity
-    - Entity-based counter anonymization
-    """
-    
-    def __init__(self, config_path: str = None, config_dict: Dict = None):
-        """
-        Initialize PII Handler
-        
-        Args:
-            config_path: Path to YAML configuration file
-            config_dict: Configuration dictionary (alternative to file path)
-        
-        Raises:
-            ValueError: If neither config_path nor config_dict is provided
-            FileNotFoundError: If config file doesn't exist
-        """
-        # Load configuration
-        if config_path:
-            self.config = self._load_config_from_file(config_path)
-        elif config_dict:
-            self.config = config_dict
+    for l in lines_sorted[1:]:
+        x, y, yc = line_feat(l)
+        if abs(yc - prev_yc) <= y_gap and abs(x - prev_x) <= x_shift:
+            current.append(l)
         else:
-            raise ValueError("Must provide either config_path or config_dict")
-        
-        # Extract PII detection configuration
-        self.pii_config = self.config.get("guardrails", {}).get("pii_detection", {})
-        
-        # Generate secure cryptographic key
-        self.crypto_key = self._generate_crypto_key() 
-        
-        # Initialize Presidio engines
-        self.analyzer = AnalyzerEngine()
-        self.anonymizer = AnonymizerEngine()
-        self.deanonymizer = DeanonymizeEngine()
-        
-        # Register custom operators
-        self.anonymizer.add_anonymizer(InstanceCounterAnonymizer)
-        self.deanonymizer.add_deanonymizer(InstanceCounterDeanonymizer)
-        
-        # Entity mapping storage (reset per mask operation)
-        self.entity_mapping = {}
-    
-    def _load_config_from_file(self, config_path: str) -> Dict:
-        """
-        Load YAML configuration from file
-        
-        Args:
-            config_path: Path to configuration file
-            
-        Returns:
-            Parsed configuration dictionary
-            
-        Raises:
-            FileNotFoundError: If file doesn't exist
-        """
-        if not os.path.exists(config_path):
-            raise FileNotFoundError(f"Config file not found: {config_path}")
-        
-        with open(config_path, 'r') as f:
-            return yaml.safe_load(f)
-    
-    def _generate_crypto_key(self, length: int = 32) -> str:
-        """
-        Generate secure random cryptographic key
-        
-        Args:
-            length: Key length in characters (default: 32)
-        
-        Returns:
-            Randomly generated key string
-        """
-        alphabet = string.ascii_letters + string.digits + string.punctuation
-        return ''.join(secrets.choice(alphabet) for _ in range(length))
-    
-    def mask(self, text: str) -> Dict:
-        """
-        Mask PII entities in text based on configuration
-        
-        Args:
-            text: Input text containing potential PII
-            
-        Returns:
-            Dictionary containing:
-            - masked_text: Text with PII replaced
-            - entity_mapping: Mapping of original to masked values
-            - crypto_key: Generated cryptographic key
-        """
-        # Return original text if PII handling is disabled
-        if not self.pii_config.get("enabled", False):
-            return {
-                "masked_text": text,
-                "entity_mapping": {},
-                "crypto_key": self.crypto_key
-            }
-        
-        # Get configured PII types
-        entities = self.pii_config.get("pii_types", [])
-        
-        # Map sensitivity levels to detection thresholds
-        sensitivity = self.pii_config.get("sensitivity", "medium").lower()
-        threshold_map = {
-            "low": 0.5,
-            "medium": 0.7,
-            "high": 0.9
-        }
-        threshold = threshold_map.get(sensitivity, 0.7)
-        
-        # Detect PII entities in text
-        analyzer_results = self.analyzer.analyze(
-            text=text,
-            language="en",
-            entities=entities,
-            score_threshold=threshold
-        )
-        
-        # Reset mapping for new operation
-        self.entity_mapping = {}
-        
-        # Anonymize detected PII entities
-        anonymized_result = self.anonymizer.anonymize(
-            text,
-            analyzer_results,
-            operators={
-                "DEFAULT": OperatorConfig(
-                    "entity_counter",
-                    {"entity_mapping": self.entity_mapping}
-                )
-            }
-        )
-        
-        return {
-            "masked_text": anonymized_result.text,
-            "entity_mapping": self.entity_mapping,
-            "crypto_key": self.crypto_key
-        }
-    
-    def unmask(self, masked_text: str) -> str:
-        """
-        Restore original text from masked version
-        
-        Args:
-            masked_text: Text with masked PII entities
-            
-        Returns:
-            Original text with PII restored
-        """
-        # Return as-is if PII handling is disabled
-        if not self.pii_config.get("enabled", False):
-            return masked_text
-        
-        # Create placeholder detection results for deanonymization
-        items = [
-            OperatorResult(
-                start=0,
-                end=0,
-                entity_type=entity_type,
-                operator="entity_counter"
-            )
-            for entity_type in self.entity_mapping.keys()
-        ]
-        
-        # Restore original values
-        deanonymized_result = self.deanonymizer.deanonymize(
-            masked_text,
-            items,
-            operators={
-                "DEFAULT": OperatorConfig(
-                    "entity_counter_deanonymizer",
-                    {"entity_mapping": self.entity_mapping}
-                )
-            }
-        )
-        
-        return deanonymized_result.text
+            blocks.append(current)
+            current = [l]
+        prev_x, prev_y, prev_yc = x, y, yc
 
-# Example usage
-if __name__ == "__main__":
-    # Sample YAML configuration
-    config_content = """
-guardrails:
-    pii_detection:
-      enabled: true
-      sensitivity: low
-      pii_types:
-        - PERSON
-        - LOCATION
-    """
-    
-    # Create temporary config file
-    with open("config.yaml", "w") as f:
-        f.write(config_content)
-    
+    if current:
+        blocks.append(current)
+
+    # 组装块
+    block_objs = []
+    for bid, group in enumerate(blocks):
+        # 阅读顺序内再按 x 排
+        group_sorted = sorted(group, key=lambda l: np.min(np.array(l["polygon"])[:,0]))
+        text = " ".join([l["text"] for l in group_sorted])
+        norm_text = normalize_text(text)
+        # 外接矩形
+        all_pts = np.concatenate([np.array(l["polygon"]) for l in group_sorted], axis=0)
+        x1, y1 = np.min(all_pts[:,0]), np.min(all_pts[:,1])
+        x2, y2 = np.max(all_pts[:,0]), np.max(all_pts[:,1])
+        block_objs.append({
+            "block_id": bid,
+            "text": text,
+            "norm_text": norm_text,
+            "lines": group_sorted,  # 保留每行 polygon/text/conf
+            "display_box": [float(x1), float(y1), float(x2), float(y2)],
+        })
+    return block_objs
+
+def ocr_image(pil_img):
+    # PaddleOCR 直接接收路径；这里用临时 ndarray
+    img = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
+    result = ocr.ocr(img, cls=True)
+    lines = []
+    # 兼容不同返回结构
+    for idx in range(len(result)):
+        res = result[idx]
+        for line in res:
+            (poly, (txt, conf)) = line
+            # poly: [[x1,y1],...,[x4,y4]]
+            lines.append({
+                "text": txt,
+                "confidence": float(conf),
+                "polygon": [[float(p[0]), float(p[1])] for p in poly]
+            })
+    return lines
+
+@app.post("/ocr")
+async def ocr_endpoint(image: UploadFile = File(...)):
     try:
-        # Initialize handler with config file
-        handler = PIIHandler(config_path="config.yaml")
-        
-        sample_text = (
-            "Peter gave his book to Heidi which later gave it to Nicole. "
-            "Peter lives in London and Nicole lives in Tashkent."
-        )
-        
-        # Mask sensitive information
-        masked_data = handler.mask(sample_text)
-        print("Masked Text:")
-        pprint(masked_data["masked_text"])
-        print("\nEntity Mapping:")
-        pprint(masked_data["entity_mapping"])
-        print("\nCrypto Key:")
-        print(masked_data["crypto_key"])
-        
-        # Unmask to restore original
-        unmasked_text = handler.unmask(masked_data["masked_text"])
-        print("\nUnmasked Text:")
-        pprint(unmasked_text)
-        
-    finally:
-        # Clean up temporary file
-        if os.path.exists("config.yaml"):
-            os.remove("config.yaml")
+        raw = await image.read()
+        pil = Image.open(io.BytesIO(raw)).convert("RGB")
+        width, height = pil.size
+        lines = ocr_image(pil)
+
+        # 规范化为相对坐标（0~1）方便前端无关缩放绘制
+        for l in lines:
+            l["polygon_norm"] = [[x/width, y/height] for (x,y) in l["polygon"]]
+
+        blocks = lines_to_blocks(lines)
+
+        # 同步给块一个相对外接矩形
+        for b in blocks:
+            x1,y1,x2,y2 = b["display_box"]
+            b["display_box_norm"] = [x1/width, y1/height, x2/width, y2/height]
+
+        return JSONResponse({
+            "width": width, "height": height,
+            "lines": lines,
+            "blocks": blocks
+        })
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+
+import requests
+from rapidfuzz import fuzz, process as rf_process
+import unicodedata
+
+class DocumentProcessor:
+    def __init__(self, model="miniCPM"):
+        self.model = model
+        self.vlm_url = settings.VLM_API_URL
+        self.ocr_url = settings.OCR_API_URL  # 新增
+
+    # ... 你原有的函数省略 ...
+
+    def process_document(self, image_path: str) -> dict:
+        try:
+            start = time.time()
+            doc_type = self.classify_document(image_path)
+            extraction_results = self.extract_with_vlm(image_path, doc_type)
+            final_results = self.clean_json_output(extraction_results['results'])
+
+            # ① 调用 OCR 服务，拿到坐标
+            ocr_payload = self.call_ocr_api(image_path)
+            # ② 将实体值匹配回 OCR 块/行，得到坐标用于前端展示
+            entity_positions = self.map_entities_to_positions(final_results, ocr_payload)
+
+            return {
+                "success": True,
+                "processing_time": round(time.time() - start, 2),
+                "doc_type": doc_type,
+                "results": final_results,
+                "ocr": {
+                    "image_size": {"width": ocr_payload["width"], "height": ocr_payload["height"]},
+                    "entity_positions": entity_positions  # 前端可直接用来画框
+                }
+            }
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def call_ocr_api(self, image_path: str) -> dict:
+        files = {'image': open(image_path, 'rb')}
+        r = requests.post(self.ocr_url, files=files, timeout=30)
+        r.raise_for_status()
+        return r.json()
+
+    # —— 文本规范化 & 匹配 —— #
+    @staticmethod
+    def _normalize(s: str) -> str:
+        if not s:
+            return ""
+        # NFKC 统一全半角；去空白；小写
+        s = unicodedata.normalize("NFKC", s)
+        s = s.strip().lower()
+        # 去除所有空白字符进行“宽松匹配”
+        s = "".join(ch for ch in s if not ch.isspace())
+        return s
+
+    def map_entities_to_positions(self, entities: dict, ocr_payload: dict) -> dict:
+        """
+        entities: { entity_name: value, ... }
+        返回：{ entity_name: { lines:[{polygon_norm,...}], display_box_norm:[x1,y1,x2,y2], confidence: float, reading_order:[int,...] } }
+        """
+        blocks = ocr_payload.get("blocks", [])
+        results = {}
+
+        # 预备：对每个块，建立 “块级规范化字符串” 以及 “行级索引映射”
+        # 行级索引映射：把块text拼接时记录每行在拼接文本中的起止，用于命中后还原到哪些行。
+        for entity_name, entity_value in entities.items():
+            target = self._normalize(str(entity_value))
+            if not target:
+                results[entity_name] = None
+                continue
+
+            best = None
+            for b in blocks:
+                block_text = b.get("text", "")
+                lines = b.get("lines", [])
+                # 拼接文本时记录行跨度
+                concat = ""
+                spans = []
+                for ln in lines:
+                    start = len(concat)
+                    t = ln["text"]
+                    concat += t + " "
+                    end = len(concat)
+                    spans.append((start, end, ln))  # (start, end, 行对象)
+
+                concat_norm = self._normalize(concat)
+
+                # 1) 精确子串匹配（在去空白的 concat_norm 中）
+                idx = concat_norm.find(target)
+                score = 0
+                hit_lines = []
+                if idx != -1:
+                    # 将“规范化索引”粗略映射回原串区间：
+                    # 用比例近似（简单且够用）；需要更精确可保留去空白前后的字符映射表。
+                    ratio = len(concat) / max(1, len(concat_norm))
+                    est_start = int(idx * ratio)
+                    est_end   = int((idx + len(target)) * ratio)
+
+                    # 命中的行集合
+                    for (s, e, ln) in spans:
+                        if not (est_end <= s or est_start >= e):  # 有重叠即算命中
+                            hit_lines.append(ln)
+                    score = 100  # 精确命中
+                else:
+                    # 2) 宽松相似度（适配轻微差异）
+                    score = fuzz.partial_ratio(target, concat_norm)
+                    # 用“最长相似子串”的粗定位：简单做法—相似度高则默认整块行作为候选
+                    # 你也可以用 rapidfuzz.process.extractOne 拿子串起止，这里先保持轻量策略
+                    if score >= 85:
+                        hit_lines = lines[:]
+
+                if hit_lines and (best is None or score > best["score"]):
+                    # 聚合 display_box
+                    all_pts = []
+                    confs = []
+                    ro = []
+                    for idx_ln, ln in enumerate(lines):
+                        if ln in hit_lines:
+                            ro.append(idx_ln)
+                            confs.append(ln.get("confidence", 0.0))
+                            for p in ln.get("polygon_norm") or []:
+                                # polygon_norm 已是相对坐标
+                                all_pts.append(p)
+                    if all_pts:
+                        xs = [p[0] for p in all_pts]
+                        ys = [p[1] for p in all_pts]
+                        display_box_norm = [min(xs), min(ys), max(xs), max(ys)]
+                    else:
+                        display_box_norm = b.get("display_box_norm")
+
+                    avg_conf = float(np.mean(confs)) if confs else 0.0
+                    best = {
+                        "block_id": b["block_id"],
+                        "lines": [{
+                            "text": ln["text"],
+                            "confidence": ln.get("confidence", 0.0),
+                            "polygon_norm": ln.get("polygon_norm"),
+                            "polygon": ln.get("polygon")
+                        } for ln in hit_lines],
+                        "display_box_norm": display_box_norm,
+                        "confidence": avg_conf,
+                        "reading_order": sorted(ro),
+                        "score": score
+                    }
+
+            results[entity_name] = best
+
+        return results
