@@ -35,3 +35,24 @@ def ocr_api():
 
 if __name__ == '__main__':
     app.run(debug=True)
+
+
+# test_ocr_api.py
+
+import requests
+
+# 设置请求的API URL
+url = "http://127.0.0.1:5000/ocr"
+
+# 读取图像文件
+image_path = 'test_image.jpg'  # 修改为你测试的图片路径
+files = {'image': open(image_path, 'rb')}
+
+# 发送POST请求
+response = requests.post(url, files=files)
+
+# 打印API响应
+if response.status_code == 200:
+    print("OCR识别结果:", response.json())
+else:
+    print("错误:", response.text)
