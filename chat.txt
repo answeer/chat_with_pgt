@@ -1,63 +1,44 @@
-from presidio_analyzer import AnalyzerEngine, RecognizerResult
-from presidio_anonymizer import AnonymizerEngine, DeanonymizeEngine, OperatorConfig
-from presidio_anonymizer.entities import OperatorResult, EngineResult
-from presidio_anonymizer.operators import Operator, OperatorType
-from presidio_analyzer.recognizer_registry import RecognizerRegistryProvider
-from typing import Dict, List, Optional
-from pprint import pprint
 import secrets
 import string
 import os
 import yaml
 import json
+from pprint import pprint
+from typing import Dict, Optional
+from presidio_analyzer import AnalyzerEngine, RecognizerRegistryProvider
+from presidio_anonymizer import AnonymizerEngine, DeanonymizeEngine, OperatorConfig
+from presidio_anonymizer.operators import Operator, OperatorType
 
 class InstanceCounterAnonymizer(Operator):
     """
-    Anonymizer which replaces the entity value
-    with an instance counter per entity.
+    Anonymizer that replaces the entity value with an instance counter per entity.
     """
 
     REPLACING_FORMAT = "<{entity_type}_{index}>"
 
     def operate(self, text: str, params: Dict = None) -> str:
         """Anonymize the input text."""
-
         entity_type: str = params["entity_type"]
+        entity_mapping: Dict[str, Dict] = params["entity_mapping"]
 
-        # entity_mapping is a dict of dicts containing mappings per entity type
-        entity_mapping: Dict[Dict:str] = params["entity_mapping"]
-
-        entity_mapping_for_type = entity_mapping.get(entity_type)
-        if not entity_mapping_for_type:
-            new_text = self.REPLACING_FORMAT.format(
-                entity_type=entity_type, index=0
-            )
-            entity_mapping[entity_type] = {}
-
-        else:
-            if text in entity_mapping_for_type:
-                return entity_mapping_for_type[text]
-
-            previous_index = self._get_last_index(entity_mapping_for_type)
-            new_text = self.REPLACING_FORMAT.format(
-                entity_type=entity_type, index=previous_index + 1
-            )
-
-        entity_mapping[entity_type][text] = new_text
+        entity_mapping_for_type = entity_mapping.setdefault(entity_type, {})
+        
+        # Check if the text has been anonymized previously
+        if text in entity_mapping_for_type:
+            return entity_mapping_for_type[text]
+        
+        # Generate a new replacement text
+        index = len(entity_mapping_for_type)
+        new_text = self.REPLACING_FORMAT.format(entity_type=entity_type, index=index)
+        
+        # Store the mapping
+        entity_mapping_for_type[text] = new_text
         return new_text
-
-    @staticmethod
-    def _get_last_index(entity_mapping_for_type: Dict) -> int:
-        """Get the last index for a given entity type."""
-        return len(entity_mapping_for_type)
 
     def validate(self, params: Dict = None) -> None:
         """Validate operator parameters."""
-
-        if "entity_mapping" not in params:
-            raise ValueError("An input Dict called `entity_mapping` is required.")
-        if "entity_type" not in params:
-            raise ValueError("An entity_type param is required.")
+        if "entity_mapping" not in params or "entity_type" not in params:
+            raise ValueError("Both 'entity_mapping' and 'entity_type' are required.")
 
     def operator_name(self) -> str:
         return "entity_counter"
@@ -67,39 +48,29 @@ class InstanceCounterAnonymizer(Operator):
 
 class InstanceCounterDeanonymizer(Operator):
     """
-    Deanonymizer which replaces the unique identifier 
-    with the original text.
+    Deanonymizer that replaces the unique identifier with the original text.
     """
 
     def operate(self, text: str, params: Dict = None) -> str:
-        """Anonymize the input text."""
-
+        """Reverse the anonymization process."""
         entity_type: str = params["entity_type"]
+        entity_mapping: Dict[str, Dict] = params["entity_mapping"]
 
-        # entity_mapping is a dict of dicts containing mappings per entity type
-        entity_mapping: Dict[Dict:str] = params["entity_mapping"]
+        entity_mapping_for_type = entity_mapping.get(entity_type)
+        if not entity_mapping_for_type or text not in entity_mapping_for_type.values():
+            raise ValueError(f"Text '{text}' not found for entity type '{entity_type}'.")
 
-        if entity_type not in entity_mapping:
-            raise ValueError(f"Entity type {entity_type} not found in entity mapping!")
-        if text not in entity_mapping[entity_type].values():
-            raise ValueError(f"Text {text} not found in entity mapping for entity type {entity_type}!")
-
-        return self._find_key_by_value(entity_mapping[entity_type], text)
+        return self._find_key_by_value(entity_mapping_for_type, text)
 
     @staticmethod
     def _find_key_by_value(entity_mapping, value):
-        for key, val in entity_mapping.items():
-            if val == value:
-                return key
-        return None
-    
+        """Find the key for a given value in the mapping."""
+        return next((key for key, val in entity_mapping.items() if val == value), None)
+
     def validate(self, params: Dict = None) -> None:
         """Validate operator parameters."""
-
-        if "entity_mapping" not in params:
-            raise ValueError("An input Dict called `entity_mapping` is required.")
-        if "entity_type" not in params:
-            raise ValueError("An entity_type param is required.")
+        if "entity_mapping" not in params or "entity_type" not in params:
+            raise ValueError("Both 'entity_mapping' and 'entity_type' are required.")
 
     def operator_name(self) -> str:
         return "entity_counter_deanonymizer"
@@ -109,168 +80,129 @@ class InstanceCounterDeanonymizer(Operator):
 
 class PIIHandler:
     """
-    PII (Personally Identifiable Information) Handling System
-    Provides masking and unmasking capabilities based on configuration
-    
-    Features:
-    - Reads configuration from YAML file
-    - Auto-generates cryptographic keys
-    - Customizable PII detection sensitivity
-    - Entity-based counter anonymization
+    PII (Personally Identifiable Information) Handling System.
+    Provides masking and unmasking capabilities based on configuration.
     """
-    
-    def __init__(self, config_path: str = None, exclusion_json_path: str = None, consumer_id: str = None, threshold_score: float = 0.7):
+
+    def __init__(self, config_path: Optional[str] = None, exclusion_json_path: Optional[str] = None, consumer_id: str = None, threshold_score: float = 0.7):
         """
-        Initialize PII Handler
+        Initialize PII Handler.
         
         Args:
-            config_path: Path to YAML configuration file
-            config_dict: Configuration dictionary (alternative to file path)
-        
-        Raises:
-            ValueError: If neither config_path nor config_dict is provided
-            FileNotFoundError: If config file doesn't exist
+            config_path: Path to the YAML configuration file.
+            exclusion_json_path: Path to the exclusion JSON file.
+            consumer_id: Consumer ID for exclusion configuration.
+            threshold_score: Score threshold for PII detection.
         """
-        # Load configuration
-        if config_path:
-            self.config = self._load_config_from_file(config_path)
-        
-        # Extract PII detection configuration
+        self.config = self._load_config_from_file(config_path) if config_path else {}
         self.consumer_id = consumer_id
         self.threshold_score = threshold_score
-        # Generate secure cryptographic key
-        self.crypto_key = self._generate_crypto_key() 
+        self.crypto_key = self._generate_crypto_key()
+        
+        # Initialize the Presidio components
         registry = RecognizerRegistryProvider(conf_file=config_path).create_recognizer_registry()
-        with open(exclusion_json_path, 'r') as file:
-            self.pii_exclusion_json = json.load(file)
         self.analyzer = AnalyzerEngine(registry=registry, log_decision_process=True, supported_languages=registry.supported_languages)
-        # Initialize Presidio engines
-        # self.analyzer = AnalyzerEngine()
         self.anonymizer = AnonymizerEngine()
         self.deanonymizer = DeanonymizeEngine()
-        
+
+        # Load exclusion JSON
+        self.pii_exclusion_json = self._load_json(exclusion_json_path) if exclusion_json_path else {}
+
         # Register custom operators
         self.anonymizer.add_anonymizer(InstanceCounterAnonymizer)
         self.deanonymizer.add_deanonymizer(InstanceCounterDeanonymizer)
-        
+
         # Entity mapping storage (reset per mask operation)
         self.entity_mapping = {}
-    
+
     def _load_config_from_file(self, config_path: str) -> Dict:
-        """
-        Load YAML configuration from file
-        
-        Args:
-            config_path: Path to configuration file
-            
-        Returns:
-            Parsed configuration dictionary
-            
-        Raises:
-            FileNotFoundError: If file doesn't exist
-        """
+        """Load YAML configuration from file."""
         if not os.path.exists(config_path):
             raise FileNotFoundError(f"Config file not found: {config_path}")
-        
         with open(config_path, 'r') as f:
             return yaml.safe_load(f)
-    
+
+    def _load_json(self, json_path: str) -> Dict:
+        """Load JSON data from file."""
+        if not os.path.exists(json_path):
+            raise FileNotFoundError(f"Exclusion JSON file not found: {json_path}")
+        with open(json_path, 'r') as f:
+            return json.load(f)
+
     def _generate_crypto_key(self, length: int = 32) -> str:
-        """
-        Generate secure random cryptographic key
-        
-        Args:
-            length: Key length in characters (default: 32)
-        
-        Returns:
-            Randomly generated key string
-        """
+        """Generate a secure random cryptographic key."""
         alphabet = string.ascii_letters + string.digits + string.punctuation
         return ''.join(secrets.choice(alphabet) for _ in range(length))
-    
+
     def mask(self, text: str) -> Dict:
         """
-        Mask PII entities in text based on configuration
+        Mask PII entities in text based on configuration.
         
         Args:
-            text: Input text containing potential PII
-            
+            text: Input text containing potential PII.
+        
         Returns:
             Dictionary containing:
-            - masked_text: Text with PII replaced
-            - entity_mapping: Mapping of original to masked values
-            - crypto_key: Generated cryptographic key
+            - anonymized_result: Text with PII replaced.
+            - entity_mapping: Mapping of original to masked values.
+            - crypto_key: Generated cryptographic key.
         """
-        # Return original text if PII handling is disabled
-
-        
         # Detect PII entities in text
-        analyzer_results = self.analyzer.analyze(
-            text=text,
-            language="en",
-            score_threshold=self.threshold_score
-        )
-        excluded_entities = self.pii_exclusion_json[self.consumer_id]
-        result_pii_excluded = [result for result in analyzer_results if result.entity_type not in excluded_entities]
+        analyzer_results = self.analyzer.analyze(text=text, language="en", score_threshold=self.threshold_score)
+
+        # Filter out excluded entities
+        excluded_entities = self.pii_exclusion_json.get(self.consumer_id, [])
+        results_filtered = [result for result in analyzer_results if result.entity_type not in excluded_entities]
 
         # Reset mapping for new operation
         self.entity_mapping = {}
-        
+
         # Anonymize detected PII entities
         anonymized_result = self.anonymizer.anonymize(
             text,
-            analyzer_results,
+            results_filtered,
             operators={
-                "DEFAULT": OperatorConfig(
-                    "entity_counter",
-                    {"entity_mapping": self.entity_mapping}
-                )
+                "DEFAULT": OperatorConfig("entity_counter", {"entity_mapping": self.entity_mapping})
             }
         )
-        
+
         return {
             "anonymized_result": anonymized_result,
             "entity_mapping": self.entity_mapping,
             "crypto_key": self.crypto_key
         }
-    
+
     def unmask(self, anonymized_result):
         """
-        Restore original text from masked version
+        Restore original text from masked version.
         
         Args:
-            masked_text: Text with masked PII entities
-            
-        Returns:
-            Original text with PII restored
-        """
+            anonymized_result: Text with masked PII entities.
         
+        Returns:
+            Original text with PII restored.
+        """
         # Restore original values
         deanonymized_result = self.deanonymizer.deanonymize(
             anonymized_result.text,
             anonymized_result.items,
             operators={
-                "DEFAULT": OperatorConfig(
-                    "entity_counter_deanonymizer",
-                    {"entity_mapping": self.entity_mapping}
-                )
+                "DEFAULT": OperatorConfig("entity_counter_deanonymizer", {"entity_mapping": self.entity_mapping})
             }
         )
-        
         return deanonymized_result.text
 
-# 使用示例
+# Example usage
 if __name__ == "__main__":
-    
-    handler = PIIHandler(config_path="guardrails_demo\pii_rules.yaml", exclusion_json_path="guardrails_demo\pii_exclusion.json", consumer_id = 'con_1' ,threshold_score=0.7)
+    handler = PIIHandler(config_path="guardrails_demo/pii_rules.yaml", exclusion_json_path="guardrails_demo/pii_exclusion.json", consumer_id='con_1', threshold_score=0.7)
     
     text = """My credit card number is 4095-2609-9393-4932 and my crypto wallet id is 16Yeky6GMjeNkAiNcBY7ZhrLoMSgg1BoyZ.
-        On September 18 I visited microsoft.com and sent an email to test@presidio.site,  from the IP 192.168.0.1.
+        On September 18 I visited microsoft.com and sent an email to test@presidio.site, from the IP 192.168.0.1.
         My phone number: (212) 555-1234.
         This is a valid International Bank Account Number: IL150120690000003111111.
-        Kate's social security number is 078-05-1126.  Her driver license? it is 1234567A."""
+        Kate's social security number is 078-05-1126. Her driver license? it is 1234567A."""
     
-    # mask
+    # Mask the text
     results = handler.mask(text)
     print("Masked Text:")
     pprint(results["anonymized_result"].text)
@@ -278,8 +210,8 @@ if __name__ == "__main__":
     pprint(results["entity_mapping"])
     print("\nCrypto Key:")
     print(results["crypto_key"])
-    
-    # unmask
+
+    # Unmask the text
     unmasked_text = handler.unmask(results["anonymized_result"])
     print("\nUnmasked Text:")
     pprint(unmasked_text)
