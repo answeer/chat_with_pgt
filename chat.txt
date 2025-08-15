@@ -1,123 +1,31 @@
-import os
-import json
-from presidio_analyzer import AnalyzerEngine
-from presidio_analyzer.nlp_engine import NlpEngineProvider
-from presidio_analyzer.recognizer_registry import RecognizerRegistryProvider
-from presidio_anonymizer import AnonymizerEngine, DeanonymizeEngine, OperatorConfig
-from anonymizer import InstanceCounterAnonymizer
-from deanonymizer import InstanceCounterDeanonymizer
+import sys, json, threading
+from functools import lru_cache
+from pyspark.sql import functions as F, types as T
 
-class PIIDetector:
-    """
-    PII (Personally Identifiable Information) Detector System.
-    Provides masking and unmasking capabilities based on configuration.
-    """
+from .pii_detector import PIIDetector  # 同目录相对导入
 
-    def __init__(self, config_path="pii_rules.yaml", exclusion_json_path="pii_exclusion.json",nlp_engine_conf="nlp_engine_conf.yaml", consumer_id='con_1', threshold_score=0.7):
-        """
-        Initialize PII Handler.
-        
-        Args:
-            config_path: Path to the YAML configuration file.
-            exclusion_json_path: Path to the exclusion JSON file.
-            nlp_engine_conf: Path to nlp engine config file.
-            consumer_id: Consumer ID for exclusion configuration.
-            threshold_score: Score threshold for PII detection.
-        """
-        self.pii_exclusion_json = self._load_json(exclusion_json_path) if exclusion_json_path else {}
-        self.consumer_id = consumer_id
-        self.threshold_score = threshold_score
-        
-        # Initialize the Presidio components
-        registry = RecognizerRegistryProvider(conf_file=config_path).create_recognizer_registry()
-        nlp_engine = NlpEngineProvider(conf_file=nlp_engine_conf).create_engine()
-        self.analyzer = AnalyzerEngine(nlp_engine=nlp_engine, registry=registry, supported_languages=registry.supported_languages)
-        self.anonymizer = AnonymizerEngine()
-        self.deanonymizer = DeanonymizeEngine()
+PII_RULES_YAML = "/dbfs/FileStore/pii/pii_rules.yaml"
+PII_EXCLUSION_JSON = "/dbfs/FileStore/pii/pii_exclusion.json"
+NLP_ENGINE_CONF = "/dbfs/FileStore/pii/nlp_engine_conf.yaml"
 
-        # Register custom operators
-        self.anonymizer.add_anonymizer(InstanceCounterAnonymizer)
-        self.deanonymizer.add_deanonymizer(InstanceCounterDeanonymizer)
+_init_lock = threading.Lock()
 
-        # Entity mapping storage (reset per mask operation)
-        self.entity_mapping = {}
-
-    def _load_json(self, json_path):
-        """Load JSON data from file."""
-        if not os.path.exists(json_path):
-            raise FileNotFoundError(f"Exclusion JSON file not found: {json_path}")
-        with open(json_path, 'r') as f:
-            return json.load(f)
-
-    def mask(self, text):
-        """
-        Mask PII entities in text based on configuration.
-        
-        Args:
-            text: Input text containing potential PII.
-        
-        Returns:
-            Dictionary containing:
-            - anonymized_result: Text with PII replaced.
-            - entity_mapping: Mapping of original to masked values.
-            - crypto_key: Generated cryptographic key.
-        """
-        # Detect PII entities in text
-        analyzer_results = self.analyzer.analyze(text=text, language="en", score_threshold=self.threshold_score)
-
-        # Filter out excluded entities
-        excluded_entities = self.pii_exclusion_json.get(self.consumer_id, [])
-        results_filtered = [result for result in analyzer_results if result.entity_type not in excluded_entities]
-
-        # Reset mapping for new operation
-        self.entity_mapping = {}
-
-        # Anonymize detected PII entities
-        anonymized_result = self.anonymizer.anonymize(
-            text,
-            results_filtered,
-            operators={
-                "DEFAULT": OperatorConfig("entity_counter", {"entity_mapping": self.entity_mapping})
-            }
+@lru_cache(maxsize=1)
+def _get_detector():
+    with _init_lock:
+        return PIIDetector(
+            config_path=PII_RULES_YAML,
+            exclusion_json_path=PII_EXCLUSION_JSON,
+            nlp_engine_conf=NLP_ENGINE_CONF,
+            consumer_id="con_1",
+            threshold_score=0.7
         )
 
-        return {
-            "anonymized_result": anonymized_result,
-            "entity_mapping": self.entity_mapping,
-        }
+def _mask_only(text: str) -> str:
+    if text is None:
+        return None
+    handler = _get_detector()
+    res = handler.mask(text)
+    return res["anonymized_result"].text
 
-    def unmask(self, anonymized_result):
-        """
-        Restore original text from masked version.
-        
-        Args:
-            anonymized_result: Text with masked PII entities.
-        
-        Returns:
-            Original text with PII restored.
-        """
-        # Restore original values
-        deanonymized_result = self.deanonymizer.deanonymize(
-            anonymized_result.text,
-            anonymized_result.items,
-            operators={
-                "DEFAULT": OperatorConfig("entity_counter_deanonymizer", {"entity_mapping": self.entity_mapping})
-            }
-        )
-        return deanonymized_result.text
-
-# Example usage
-if __name__ == "__main__":
-    handler = PIIDetector()
-    
-    text = """Mr. James Bond and his email is james.bond@gmail.com and reachable on +1-7804749899, stays in Bangalore and was admitted to Apollo Hospital, Chennai on Dec 25,2024."""
-    
-    # Mask the text
-    results = handler.mask(text)
-    print("Masked Text:")
-    print(results["anonymized_result"].text)
-
-    # Unmask the text
-    unmasked_text = handler.unmask(results["anonymized_result"])
-    print("\nUnmasked Text:")
-    print(unmasked_text)
+redact_text_udf = F.udf(_mask_only, T.StringType())
